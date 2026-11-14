@@ -1,7 +1,7 @@
 //! Applies and persists the two window modes (thin bar and large).
 
 use crate::window_state::{
-    bar_top_from_window, clamp_thin_width, is_reachable, plan_panel, thin_height_fix, thin_size, window_top_open,
+    clamp_thin_width, is_reachable, plan_panel, thin_height_fix, thin_size, window_top_open,
     x_to_fit_right_edge, Geometry, Mode, PanelSide, WindowState, THIN_HEIGHT, THIN_MIN_WIDTH,
 };
 use std::path::PathBuf;
@@ -21,6 +21,10 @@ struct OpenPanel {
     height_px: u32,
     /// The same, in logical pixels.
     height: f64,
+    /// Where the bar was when the panel opened (physical pixels), and how wide: closing puts it back exactly there.
+    bar_x: i32,
+    bar_y: i32,
+    bar_width_px: u32,
 }
 
 pub struct WindowStore {
@@ -114,23 +118,21 @@ impl WindowStore {
         // The height stays locked, now at the taller size.
         let _ = window.set_max_size(Some(LogicalSize::new(screen_logical_width(window).max(THIN_MIN_WIDTH), total)));
         let _ = window.set_min_size(Some(LogicalSize::new(THIN_MIN_WIDTH, total)));
-        *self.panel.lock().unwrap() = Some(OpenPanel { side: plan.side, height_px, height });
+        *self.panel.lock().unwrap() = Some(OpenPanel { side: plan.side, height_px, height, bar_x: position.x, bar_y: position.y, bar_width_px: size.width });
         let _ = window.set_size(LogicalSize::new(width, total));
         let _ = window.set_position(PhysicalPosition::new(position.x, window_top_open(position.y, plan.side, height_px)));
         Some((plan.side, height))
     }
 
-    /// Closes the queue panel: the window goes back to the bar's own size, with the bar where it
-    /// is now (wherever the window was dragged to while the panel was open).
+    /// Closes the queue panel: the window goes back to the bar's own size and to exactly the
+    /// spot the bar was in when the panel opened, even if the window was moved meanwhile.
     pub fn close_panel(&self, window: &WebviewWindow) {
         let Some(open) = self.panel.lock().unwrap().take() else { return };
         let scale = window.scale_factor().unwrap_or(1.0);
-        let (Ok(position), Ok(size)) = (window.outer_position(), window.inner_size()) else { return };
-        let width = size.width as f64 / scale;
         let _ = window.set_min_size(Some(LogicalSize::new(THIN_MIN_WIDTH, THIN_HEIGHT)));
         let _ = window.set_max_size(Some(LogicalSize::new(screen_logical_width(window).max(THIN_MIN_WIDTH), THIN_HEIGHT)));
-        let _ = window.set_size(LogicalSize::new(width, THIN_HEIGHT));
-        let _ = window.set_position(PhysicalPosition::new(position.x, bar_top_from_window(position.y, open.side, open.height_px)));
+        let _ = window.set_size(LogicalSize::new(open.bar_width_px as f64 / scale, THIN_HEIGHT));
+        let _ = window.set_position(PhysicalPosition::new(open.bar_x, open.bar_y));
         self.track(window);
     }
 

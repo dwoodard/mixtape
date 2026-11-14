@@ -170,14 +170,6 @@ pub fn window_top_open(bar_top: i32, side: PanelSide, panel_height: u32) -> i32 
     }
 }
 
-/// The bar's top edge, given the window's (wherever it was dragged to while the panel was open).
-pub fn bar_top_from_window(window_top: i32, side: PanelSide, panel_height: u32) -> i32 {
-    match side {
-        PanelSide::Down => window_top,
-        PanelSide::Up => window_top + panel_height as i32,
-    }
-}
-
 /// True if enough of the window's top-left area is inside one of the monitors
 /// (given as geometries) that the user can still grab and move it. Guards
 /// against restoring onto a display that is no longer connected.
@@ -398,13 +390,9 @@ mod tests {
     }
 
     #[test]
-    fn opening_up_keeps_the_bar_in_place_and_closing_finds_it_again() {
+    fn opening_up_keeps_the_bar_in_place() {
         assert_eq!(window_top_open(850, PanelSide::Up, 300), 550);
         assert_eq!(window_top_open(850, PanelSide::Down, 300), 850);
-        assert_eq!(bar_top_from_window(550, PanelSide::Up, 300), 850);
-        assert_eq!(bar_top_from_window(850, PanelSide::Down, 300), 850);
-        // Dragged 40 down while open: the bar is 40 further down when it closes.
-        assert_eq!(bar_top_from_window(590, PanelSide::Up, 300), 890);
     }
 }
 
