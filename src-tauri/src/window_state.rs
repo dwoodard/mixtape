@@ -95,6 +95,23 @@ pub fn thin_width(saved: Option<&Geometry>, scale_factor: f64, max: f64) -> f64 
     }
 }
 
+/// The thin bar's logical size to restore: the saved width, within range, at the fixed
+/// height. Any saved height (an older version, or a drag before the lock existed) is ignored.
+pub fn thin_size(saved: Option<&Geometry>, scale_factor: f64, max: f64) -> (f64, f64) {
+    (thin_width(saved, scale_factor, max), THIN_HEIGHT)
+}
+
+/// If the thin bar's height (physical pixels) is not the fixed one, the logical size to set
+/// it back to, with the width kept. `None` when it is right (a pixel of rounding is allowed).
+pub fn thin_height_fix(width_px: u32, height_px: u32, scale_factor: f64) -> Option<(f64, f64)> {
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 { scale_factor } else { 1.0 };
+    let wanted = (THIN_HEIGHT * scale).round() as i64;
+    if (height_px as i64 - wanted).abs() <= 1 {
+        return None;
+    }
+    Some((width_px as f64 / scale, THIN_HEIGHT))
+}
+
 /// Where the left edge goes so a bar `width` pixels wide ends no further right than
 /// the monitor (`left` to `right`): unchanged if it already fits, otherwise shifted left.
 pub fn x_to_fit_right_edge(x: i32, width: u32, left: i32, right: i32) -> i32 {
@@ -245,6 +262,24 @@ mod tests {
         assert_eq!(x_to_fit_right_edge(1200, 1000, 0, 1728), 728, "right edge lands on the screen edge");
         assert_eq!(x_to_fit_right_edge(500, 1728, 0, 1728), 0, "full width starts at the left edge");
         assert_eq!(x_to_fit_right_edge(500, 2000, 0, 1728), 0, "never past the left edge");
+    }
+
+    #[test]
+    fn a_saved_taller_thin_bar_comes_back_at_the_fixed_height_with_its_width() {
+        let (width, height) = thin_size(Some(&geo(28, 1942, 1400, 200)), 2.0, 1728.0);
+        assert_eq!(height, THIN_HEIGHT, "the saved height is ignored");
+        assert_eq!(width, 700.0, "the saved width is kept");
+        let (_, height_at_1x) = thin_size(Some(&geo(0, 0, 900, 200)), 1.0, 1728.0);
+        assert_eq!(height_at_1x, THIN_HEIGHT);
+    }
+
+    #[test]
+    fn a_thin_bar_at_the_wrong_height_is_set_back_and_a_right_one_is_left_alone() {
+        assert_eq!(thin_height_fix(960, 48, 2.0), None);
+        assert_eq!(thin_height_fix(960, 49, 2.0), None, "a pixel of rounding is fine");
+        assert_eq!(thin_height_fix(1400, 400, 2.0), Some((700.0, THIN_HEIGHT)));
+        assert_eq!(thin_height_fix(500, 200, 1.0), Some((500.0, THIN_HEIGHT)));
+        assert_eq!(thin_height_fix(500, 1, 1.0), Some((500.0, THIN_HEIGHT)), "too short too");
     }
 }
 

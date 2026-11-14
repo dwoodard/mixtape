@@ -801,7 +801,13 @@ pub fn run() {
             };
             let store = window.state::<WindowStore>();
             match event {
-                WindowEvent::Moved(_) | WindowEvent::Resized(_) => store.track(&webview),
+                WindowEvent::Moved(_) => store.track(&webview),
+                // A resize that changed the thin bar's height is undone; the undo's own event is the one saved.
+                WindowEvent::Resized(_) => {
+                    if !store.keep_thin_height(&webview) {
+                        store.track(&webview);
+                    }
+                }
                 WindowEvent::CloseRequested { .. } => {
                     store.track(&webview);
                     store.save();

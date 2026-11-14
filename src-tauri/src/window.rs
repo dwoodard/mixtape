@@ -1,7 +1,7 @@
 //! Applies and persists the two window modes (thin bar and large).
 
 use crate::window_state::{
-    clamp_thin_width, is_reachable, thin_width, x_to_fit_right_edge, Geometry, Mode, WindowState, THIN_HEIGHT,
+    clamp_thin_width, is_reachable, thin_height_fix, thin_size, x_to_fit_right_edge, Geometry, Mode, WindowState, THIN_HEIGHT,
     THIN_MIN_WIDTH,
 };
 use std::path::PathBuf;
@@ -45,6 +45,22 @@ impl WindowStore {
             let mut state = self.state.lock().unwrap();
             let mode = state.mode;
             state.set_geometry(mode, geometry);
+        }
+    }
+
+    /// In thin mode, puts the bar back to its fixed height if anything (an edge drag, Zoom,
+    /// window tiling) changed it. Returns true if it had to.
+    pub fn keep_thin_height(&self, window: &WebviewWindow) -> bool {
+        if !*self.ready.lock().unwrap() || self.mode() != Mode::Thin {
+            return false;
+        }
+        let Ok(size) = window.inner_size() else { return false };
+        match thin_height_fix(size.width, size.height, window.scale_factor().unwrap_or(1.0)) {
+            Some((width, height)) => {
+                let _ = window.set_size(LogicalSize::new(width, height));
+                true
+            }
+            None => false,
         }
     }
 
@@ -117,8 +133,8 @@ fn apply(window: &WebviewWindow, mode: Mode, saved: Option<Geometry>) {
     match (mode, reachable) {
         // The thin bar's height is fixed; its saved width is restored (older saves load too).
         (Mode::Thin, reachable) => {
-            let width = thin_width(saved.as_ref(), window.scale_factor().unwrap_or(1.0), screen_logical_width(window));
-            let _ = window.set_size(LogicalSize::new(width, THIN_HEIGHT));
+            let (width, height) = thin_size(saved.as_ref(), window.scale_factor().unwrap_or(1.0), screen_logical_width(window));
+            let _ = window.set_size(LogicalSize::new(width, height));
             match reachable {
                 Some(g) => {
                     let _ = window.set_position(PhysicalPosition::new(g.x, g.y));
