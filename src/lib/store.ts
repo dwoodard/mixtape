@@ -18,6 +18,8 @@ export function createStore(api: Api) {
   const queue = ref<Track[]>([]);
   const library = ref<Track[]>([]);
   const folder = ref<string | null>(null);
+  /** Folder saved in config.json, or null when none is set. */
+  const configuredFolder = ref<string | null>(null);
   const scanning = ref(false);
   const scanError = ref<string | null>(null);
   const mode = ref<WindowMode>("large");
@@ -35,22 +37,33 @@ export function createStore(api: Api) {
     player.value = snapshot.state;
     queue.value = snapshot.queue;
     mode.value = await api.windowMode();
+    configuredFolder.value = await api.musicFolder();
     return () => unlisten.forEach((fn) => fn());
   }
 
-  async function openFolder() {
-    const path = await api.pickFolder();
-    if (!path) return;
+  async function scan(path: string, load: () => Promise<Track[]>) {
     scanning.value = true;
     scanError.value = null;
     try {
-      library.value = await api.scanFolder(path);
+      library.value = await load();
       folder.value = path;
     } catch (e) {
       scanError.value = String(e);
     } finally {
       scanning.value = false;
     }
+  }
+
+  async function openFolder() {
+    const path = await api.pickFolder();
+    if (!path) return;
+    await scan(path, () => api.scanFolder(path));
+  }
+
+  /** Imports the music folder saved in config.json. */
+  async function importLibrary() {
+    if (!configuredFolder.value) return;
+    await scan(configuredFolder.value, () => api.importLibrary());
   }
 
   async function toggleMode() {
@@ -62,11 +75,13 @@ export function createStore(api: Api) {
     queue,
     library,
     folder,
+    configuredFolder,
     scanning,
     scanError,
     mode,
     init,
     openFolder,
+    importLibrary,
     toggleMode,
     /** Replaces the queue with `tracks` and starts at `index`. */
     playTracks: (tracks: Track[], index: number) => api.playTracks(tracks, index),

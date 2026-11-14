@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod config;
 pub mod library;
 pub mod media;
 pub mod player;
@@ -8,6 +9,7 @@ pub mod window;
 pub mod window_state;
 
 use audio::RodioBackend;
+use config::Config;
 use media::{MediaCommand, MediaSession};
 use player::{Player, PlayerEvent, PlayerState};
 use serde::Serialize;
@@ -33,15 +35,33 @@ struct PlayerSnapshot {
     queue: Vec<Track>,
 }
 
-#[tauri::command]
-async fn scan_folder(path: String) -> Result<Vec<Track>, String> {
-    let root = PathBuf::from(path);
+async fn scan(root: PathBuf) -> Result<Vec<Track>, String> {
     if !root.is_dir() {
-        return Err(format!("{} is not a folder", root.display()));
+        return Err(format!("{} is not available. Is the drive mounted?", root.display()));
     }
     tauri::async_runtime::spawn_blocking(move || library::scan_folder(&root))
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn scan_folder(path: String) -> Result<Vec<Track>, String> {
+    scan(PathBuf::from(path)).await
+}
+
+/// Scans the music folder saved in the config file.
+#[tauri::command]
+async fn import_library(config: State<'_, Config>) -> Result<Vec<Track>, String> {
+    let root = config
+        .music_folder
+        .clone()
+        .ok_or("No musicFolder set in config.json")?;
+    scan(root).await
+}
+
+#[tauri::command]
+fn music_folder(config: State<Config>) -> Option<String> {
+    config.music_folder.as_ref().map(|p| p.display().to_string())
 }
 
 #[tauri::command]
@@ -169,6 +189,11 @@ fn setup_player(app: &tauri::App) {
     app.manage(PlayerHandle(player));
 }
 
+fn setup_config(app: &tauri::App) -> tauri::Result<()> {
+    app.manage(Config::load(&app.path().app_config_dir()?.join("config.json")));
+    Ok(())
+}
+
 fn setup_window(app: &tauri::App) -> tauri::Result<()> {
     // Managed before restoring so window events fired by the restore can find it.
     app.manage(WindowStore::load(app.path().app_config_dir()?.join("window-state.json")));
@@ -184,6 +209,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             setup_player(app);
+            setup_config(app)?;
             setup_window(app)?;
             Ok(())
         })
@@ -203,6 +229,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             scan_folder,
+            import_library,
+            music_folder,
             player_snapshot,
             play_tracks,
             enqueue,

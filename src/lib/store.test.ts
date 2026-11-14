@@ -17,6 +17,8 @@ function fakeApi(overrides: Partial<Api> = {}) {
     windowMode: vi.fn(async () => "large" as WindowMode),
     pickFolder: vi.fn(async () => "/music"),
     scanFolder: vi.fn(async () => [makeTrack()]),
+    musicFolder: vi.fn(async () => "/nas/music" as string | null),
+    importLibrary: vi.fn(async () => [makeTrack()]),
     playTracks: vi.fn(async () => {}),
     enqueue: vi.fn(async () => {}),
     playIndex: vi.fn(async () => {}),
@@ -115,6 +117,42 @@ describe("openFolder", () => {
 
     expect(store.scanError.value).toBe("boom");
     expect(store.library.value).toHaveLength(1);
+    expect(store.scanning.value).toBe(false);
+  });
+});
+
+describe("importLibrary", () => {
+  it("imports the configured folder after init", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.init();
+
+    await store.importLibrary();
+
+    expect(store.configuredFolder.value).toBe("/nas/music");
+    expect(api.importLibrary).toHaveBeenCalled();
+    expect(store.library.value).toHaveLength(1);
+    expect(store.folder.value).toBe("/nas/music");
+  });
+
+  it("does nothing when no folder is configured", async () => {
+    const { api } = fakeApi({ musicFolder: vi.fn(async () => null) });
+    const store = createStore(api);
+    await store.init();
+
+    await store.importLibrary();
+
+    expect(api.importLibrary).not.toHaveBeenCalled();
+  });
+
+  it("reports the error when the import fails", async () => {
+    const { api } = fakeApi({ importLibrary: vi.fn(async () => Promise.reject("not mounted")) });
+    const store = createStore(api);
+    await store.init();
+
+    await store.importLibrary();
+
+    expect(store.scanError.value).toBe("not mounted");
     expect(store.scanning.value).toBe(false);
   });
 });

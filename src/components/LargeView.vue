@@ -57,6 +57,14 @@ function sortBy(key: SortKey) {
     <main>
       <section class="library" aria-label="Library">
         <div class="toolbar">
+          <button
+            v-if="store.configuredFolder.value"
+            :disabled="store.scanning.value"
+            :title="store.configuredFolder.value"
+            @click="store.importLibrary()"
+          >
+            Import library
+          </button>
           <button :disabled="store.scanning.value" @click="store.openFolder()">
             {{ store.scanning.value ? "Scanning…" : "Open folder…" }}
           </button>

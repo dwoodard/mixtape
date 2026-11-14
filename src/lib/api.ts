@@ -11,6 +11,8 @@ export interface Api {
   windowMode(): Promise<WindowMode>;
   pickFolder(): Promise<string | null>;
   scanFolder(path: string): Promise<Track[]>;
+  musicFolder(): Promise<string | null>;
+  importLibrary(): Promise<Track[]>;
   playTracks(tracks: Track[], start: number): Promise<void>;
   enqueue(tracks: Track[]): Promise<void>;
   playIndex(index: number): Promise<void>;
@@ -37,6 +39,8 @@ export const tauriApi: Api = {
     return typeof picked === "string" ? picked : null;
   },
   scanFolder: (path) => invoke("scan_folder", { path }),
+  musicFolder: () => invoke("music_folder"),
+  importLibrary: () => invoke("import_library"),
   playTracks: (tracks, start) => invoke("play_tracks", { tracks, start }),
   enqueue: (tracks) => invoke("enqueue", { tracks }),
   playIndex: (index) => invoke("play_index", { index }),
