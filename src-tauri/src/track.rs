@@ -163,6 +163,20 @@ mod tests {
     }
 
     #[test]
+    fn reads_tags_and_duration_from_every_supported_format() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        for ext in ["mp3", "flac", "m4a", "ogg"] {
+            let track = read_track(&dir.join(format!("tone.{ext}")))
+                .unwrap_or_else(|| panic!("{ext} should be readable"));
+            assert_eq!(track.title, "Fixture", "{ext}");
+            assert_eq!(track.artist, "FixtureArtist", "{ext}");
+            assert_eq!(track.album, "FixtureAlbum", "{ext}");
+            assert_eq!(track.track_number, Some(3), "{ext}");
+            assert!((800..=1300).contains(&track.duration_ms), "{ext}: {}", track.duration_ms);
+        }
+    }
+
+    #[test]
     fn unreadable_file_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("broken.mp3");

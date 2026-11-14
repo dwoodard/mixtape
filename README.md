@@ -1,7 +1,27 @@
-# Tauri + Vue + TypeScript
+# Mixtape
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+A Winamp-style music player for macOS with Picard-style tagging planned. Tauri 2, Vue 3, TypeScript, Rust.
 
-## Recommended IDE Setup
+## Develop
 
-- [VS Code](https://code.visualstudio.com/) + [Vue - Official](https://marketplace.visualstudio.com/items?itemName=Vue.volar) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+npm install
+npm run tauri dev
+```
+
+## Test
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml          # Rust
+cargo test --manifest-path src-tauri/Cargo.toml -- --ignored  # also plays a tone on the real audio device
+npm test                                                  # Vitest
+```
+
+## Layout
+
+- `src-tauri/src/track.rs`, `library.rs`: tag reading (lofty) and folder scanning
+- `src-tauri/src/queue.rs`, `player.rs`: queue and playback state machine
+- `src-tauri/src/audio.rs`: rodio output on its own thread
+- `src-tauri/src/media.rs`: macOS media keys and Now Playing
+- `src-tauri/src/window.rs`, `window_state.rs`: thin/large window modes, persisted
+- `src/`: Vue UI (`lib/store.ts` holds UI state)

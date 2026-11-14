@@ -188,6 +188,21 @@ mod tests {
     }
 
     #[test]
+    fn decoder_accepts_every_supported_format_and_can_seek() {
+        use rodio::Source;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        for ext in ["mp3", "flac", "m4a", "ogg"] {
+            let file = File::open(dir.join(format!("tone.{ext}"))).unwrap();
+            let mut decoder = Decoder::try_from(file)
+                .unwrap_or_else(|e| panic!("{ext} should decode: {e}"));
+            assert!(decoder.next().is_some(), "{ext} yields samples");
+            decoder
+                .try_seek(Duration::from_millis(500))
+                .unwrap_or_else(|e| panic!("{ext} should seek: {e}"));
+        }
+    }
+
+    #[test]
     fn load_reports_missing_and_undecodable_files() {
         let dir = tempfile::tempdir().unwrap();
         let bad = dir.path().join("bad.mp3");
