@@ -4,7 +4,9 @@ pub mod config;
 pub mod library;
 pub mod media;
 pub mod player;
+pub mod playlists;
 pub mod queue;
+pub mod session;
 pub mod track;
 pub mod window;
 pub mod window_state;
@@ -14,6 +16,9 @@ use cache::{CacheDir, LibraryCache};
 use config::Config;
 use media::{MediaCommand, MediaSession};
 use player::{Player, PlayerEvent, PlayerState};
+use playlists::{PlaylistStore, PlaylistSummary};
+use queue::Repeat;
+use session::{SessionStore, SessionWriter};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +29,9 @@ use window::WindowStore;
 use window_state::Mode;
 
 struct PlayerHandle(Arc<Mutex<Player>>);
+
+/// Lets the exit handler write the session before the process ends.
+struct SessionFlush(Arc<SessionWriter>);
 
 impl PlayerHandle {
     fn with<R>(&self, f: impl FnOnce(&mut Player) -> R) -> R {
@@ -186,6 +194,53 @@ fn play_index(player: State<PlayerHandle>, index: usize) {
 }
 
 #[tauri::command]
+fn enqueue_next(player: State<PlayerHandle>, tracks: Vec<Track>) {
+    player.with(|p| p.enqueue_next(tracks));
+}
+
+#[tauri::command]
+fn stop_playback(player: State<PlayerHandle>) {
+    player.with(|p| p.stop());
+}
+
+#[tauri::command]
+fn set_shuffle(player: State<PlayerHandle>, on: bool) {
+    player.with(|p| p.set_shuffle(on));
+}
+
+#[tauri::command]
+fn set_repeat(player: State<PlayerHandle>, repeat: Repeat) {
+    player.with(|p| p.set_repeat(repeat));
+}
+
+#[tauri::command]
+fn list_playlists(store: State<PlaylistStore>) -> Vec<PlaylistSummary> {
+    store.list()
+}
+
+#[tauri::command]
+fn load_playlist(store: State<PlaylistStore>, id: String) -> Result<Vec<Track>, String> {
+    store
+        .get(&id)
+        .map(|p| p.tracks)
+        .ok_or_else(|| "That playlist no longer exists.".to_string())
+}
+
+#[tauri::command]
+fn save_playlist(
+    store: State<PlaylistStore>,
+    name: String,
+    tracks: Vec<Track>,
+) -> Result<PlaylistSummary, String> {
+    store.save(&name, tracks)
+}
+
+#[tauri::command]
+fn delete_playlist(store: State<PlaylistStore>, id: String) -> Result<(), String> {
+    store.delete(&id)
+}
+
+#[tauri::command]
 fn toggle_playback(player: State<PlayerHandle>) {
     player.with(|p| p.toggle());
 }
@@ -258,24 +313,37 @@ fn setup_player(app: &tauri::App) {
         apply_media_command(&media_handle.state::<PlayerHandle>(), command);
     }));
 
+    let data_dir = app.path().app_data_dir().expect("app data dir");
+    let session_store = SessionStore::new(data_dir.join("session"));
+    let restore = session_store.load();
+    let session = Arc::new(SessionWriter::spawn(session_store));
+    app.manage(SessionFlush(session.clone()));
+
     let emit_handle = handle.clone();
     let emit = move |event: PlayerEvent| match event {
         PlayerEvent::State(state) => {
             media.update_state(state.clone());
+            session.state_changed(&state);
             let _ = emit_handle.emit("player-state", state);
         }
         PlayerEvent::Queue(queue) => {
+            session.queue_changed(queue.clone());
             let _ = emit_handle.emit("player-queue", queue);
         }
         PlayerEvent::Position(ms) => {
             media.update_position(ms);
+            session.position_changed(ms);
             let _ = emit_handle.emit("player-position", ms);
         }
     };
 
     let (backend_tx, backend_rx) = mpsc::channel();
     let backend = RodioBackend::spawn(backend_tx);
-    let player = Arc::new(Mutex::new(Player::new(Box::new(backend), Box::new(emit))));
+    let mut new_player = Player::new(Box::new(backend), Box::new(emit));
+    if let Some(saved) = restore {
+        new_player.restore(saved);
+    }
+    let player = Arc::new(Mutex::new(new_player));
 
     let events_player = player.clone();
     std::thread::Builder::new()
@@ -311,6 +379,7 @@ pub fn run() {
         .setup(|app| {
             setup_player(app);
             app.manage(ScanControl::default());
+            app.manage(PlaylistStore::new(app.path().app_data_dir()?.join("playlists.json")));
             app.manage(CacheDir(app.path().app_cache_dir()?.join("library")));
             setup_config(app)?;
             setup_window(app)?;
@@ -339,6 +408,14 @@ pub fn run() {
             player_snapshot,
             play_tracks,
             enqueue,
+            enqueue_next,
+            stop_playback,
+            set_shuffle,
+            set_repeat,
+            list_playlists,
+            load_playlist,
+            save_playlist,
+            delete_playlist,
             play_index,
             toggle_playback,
             next_track,
@@ -355,6 +432,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let RunEvent::Exit = event {
+                app.state::<SessionFlush>().0.flush();
                 app.state::<WindowStore>().save();
             }
         });
