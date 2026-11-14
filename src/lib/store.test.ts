@@ -22,6 +22,9 @@ function fakeApi(overrides: Partial<Api> = {}) {
     importLibrary: vi.fn(async () => [makeTrack()]),
     cancelScan: vi.fn(async () => {}),
     cachedLibrary: vi.fn(async () => null),
+    removeFromLibrary: vi.fn(async () => {}),
+    removedCount: vi.fn(async () => 0),
+    restoreRemoved: vi.fn(async () => {}),
     enqueueNext: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     setShuffle: vi.fn(async () => {}),
@@ -446,5 +449,61 @@ describe("startup", () => {
     expect(store.mode.value).toBe("thin");
     expect(quiet).toHaveBeenCalledTimes(2);
     quiet.mockRestore();
+  });
+});
+
+describe("removing from the library", () => {
+  const a = makeTrack({ path: "/m/a.mp3", title: "A" });
+  const b = makeTrack({ path: "/m/b.mp3", title: "B" });
+  const c = makeTrack({ path: "/m/c.mp3", title: "C" });
+
+  async function loaded(overrides: Partial<Api> = {}) {
+    const fake = fakeApi({
+      cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: [a, b, c], scannedAtMs: 1 })),
+      ...overrides,
+    });
+    const store = createStore(fake.api);
+    await store.init();
+    return { ...fake, store };
+  }
+
+  it("removes the chosen songs from the library and updates the removed count", async () => {
+    const { api, store } = await loaded({ removedCount: vi.fn(async () => 2) });
+
+    await store.removeFromLibrary([a, c]);
+
+    expect(api.removeFromLibrary).toHaveBeenCalledWith(["/m/a.mp3", "/m/c.mp3"]);
+    expect(store.library.value.map((t) => t.title)).toEqual(["B"]);
+    expect(store.removedCount.value).toBe(2);
+  });
+
+  it("keeps the library intact and reports the error when removing fails", async () => {
+    const { store } = await loaded({ removeFromLibrary: vi.fn(async () => Promise.reject("disk full")) });
+
+    await store.removeFromLibrary([a]);
+
+    expect(store.library.value).toHaveLength(3);
+    expect(store.libraryError.value).toBe("disk full");
+  });
+
+  it("does nothing for an empty selection", async () => {
+    const { api, store } = await loaded();
+    await store.removeFromLibrary([]);
+    expect(api.removeFromLibrary).not.toHaveBeenCalled();
+  });
+
+  it("loads the removed count at startup", async () => {
+    const { store } = await loaded({ removedCount: vi.fn(async () => 5) });
+    expect(store.removedCount.value).toBe(5);
+  });
+
+  it("restoring forgets the removals and rescans the folder", async () => {
+    const { api, store } = await loaded({ removedCount: vi.fn(async () => 3) });
+
+    await store.restoreRemoved();
+
+    expect(api.restoreRemoved).toHaveBeenCalled();
+    expect(api.scanFolder).toHaveBeenCalledWith("/m");
+    expect(store.removedCount.value).toBe(0);
   });
 });

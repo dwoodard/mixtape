@@ -37,7 +37,7 @@ function stepAlbum(direction: -1 | 1) {
         <span class="ellipsis">{{ open.artist }}{{ open.year ? ` · ${open.year}` : "" }} · {{ formatTime(open.durationMs) }} · ← → for other albums</span>
       </div>
     </div>
-    <TrackPane :tracks="open.tracks" :sideways-playback="false" @sideways="stepAlbum" />
+    <TrackPane :tracks="open.tracks" :sideways-playback="false" removable @sideways="stepAlbum" />
   </div>
   <AlbumGrid v-else :albums="albums" :initial-key="lastKey" @open="(a) => ((openKey = a.key), (lastKey = a.key))" />
 </template>

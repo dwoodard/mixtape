@@ -1,7 +1,7 @@
 use crate::track::{is_audio_file, read_track, Track};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use walkdir::WalkDir;
@@ -39,23 +39,27 @@ pub struct CachedTrack {
 /// Previously read tracks by path.
 pub type Known = HashMap<String, CachedTrack>;
 
+/// Paths the user removed from the library. Scans leave them out.
+pub type Removed = HashSet<String>;
+
 /// Recursively scans `root` for audio files and reads their tags.
 /// Files that cannot be parsed are skipped. The result is ordered by
 /// album artist/artist, album, disc, track, then path.
 pub fn scan_folder(root: &Path) -> Vec<Track> {
-    scan_folder_with(root, &AtomicBool::new(false), &Known::new(), |_| {})
+    scan_folder_with(root, &AtomicBool::new(false), &Known::new(), &Removed::new(), |_| {})
         .map(|cached| cached.into_iter().map(|c| c.track).collect())
         .unwrap_or_default()
 }
 
 /// Like [`scan_folder`], but reports progress, stops early when `cancel` is
 /// set (returning `None`), and skips reading tags for files whose path,
-/// modified time and size match an entry in `known`. Unreadable directories
-/// are skipped.
+/// modified time and size match an entry in `known`. Paths in `removed` are
+/// left out. Unreadable directories are skipped.
 pub fn scan_folder_with(
     root: &Path,
     cancel: &AtomicBool,
     known: &Known,
+    removed: &Removed,
     on_progress: impl Fn(ScanProgress) + Sync,
 ) -> Option<Vec<CachedTrack>> {
     let mut files = Vec::new();
@@ -63,7 +67,10 @@ pub fn scan_folder_with(
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
-        if entry.file_type().is_file() && is_audio_file(entry.path()) {
+        if entry.file_type().is_file()
+            && is_audio_file(entry.path())
+            && !removed.contains(entry.path().to_string_lossy().as_ref())
+        {
             let (modified_ms, size) = entry
                 .metadata()
                 .map(|m| (modified_ms(&m), m.len()))
@@ -184,7 +191,7 @@ mod tests {
         }
         let seen = Mutex::new(Vec::new());
 
-        let tracks = scan_folder_with(dir.path(), &AtomicBool::new(false), &Known::new(), |p| {
+        let tracks = scan_folder_with(dir.path(), &AtomicBool::new(false), &Known::new(), &Removed::new(), |p| {
             seen.lock().unwrap().push(p)
         })
         .unwrap();
@@ -202,7 +209,7 @@ mod tests {
     fn cancelled_scan_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         write_wav(&dir.path().join("a.wav"), 0.1);
-        assert!(scan_folder_with(dir.path(), &AtomicBool::new(true), &Known::new(), |_| {}).is_none());
+        assert!(scan_folder_with(dir.path(), &AtomicBool::new(true), &Known::new(), &Removed::new(), |_| {}).is_none());
     }
 
     #[test]
@@ -213,7 +220,7 @@ mod tests {
         }
         let cancel = AtomicBool::new(false);
 
-        let result = scan_folder_with(dir.path(), &cancel, &Known::new(), |p| {
+        let result = scan_folder_with(dir.path(), &cancel, &Known::new(), &Removed::new(), |p| {
             if p.phase == ScanPhase::Reading && p.done >= 25 {
                 cancel.store(true, Ordering::Relaxed);
             }
@@ -227,7 +234,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         tagged_wav(&dir.path().join("keep.wav"), "Keep", "A", 1);
         tagged_wav(&dir.path().join("edit.wav"), "Old", "A", 2);
-        let first = scan_folder_with(dir.path(), &AtomicBool::new(false), &Known::new(), |_| {}).unwrap();
+        let first = scan_folder_with(dir.path(), &AtomicBool::new(false), &Known::new(), &Removed::new(), |_| {}).unwrap();
         let mut known: Known = first.into_iter().map(|c| (c.track.path.clone(), c)).collect();
 
         // Poison the cached copy of the unchanged file: if it is reused, the
@@ -238,7 +245,7 @@ mod tests {
         std::fs::write(dir.path().join("added.wav"), b"").unwrap();
         write_wav(&dir.path().join("added.wav"), 0.5);
 
-        let second = scan_folder_with(dir.path(), &AtomicBool::new(false), &known, |_| {}).unwrap();
+        let second = scan_folder_with(dir.path(), &AtomicBool::new(false), &known, &Removed::new(), |_| {}).unwrap();
 
         let by_name = |n: &str| second.iter().find(|c| c.track.path.ends_with(n)).unwrap();
         assert_eq!(by_name("keep.wav").track.title, "FROM CACHE");
@@ -247,15 +254,30 @@ mod tests {
     }
 
     #[test]
+    fn removed_paths_are_left_out_without_being_read() {
+        let dir = tempfile::tempdir().unwrap();
+        write_wav(&dir.path().join("keep.wav"), 0.2);
+        write_wav(&dir.path().join("drop.wav"), 0.2);
+        let removed: Removed =
+            [dir.path().join("drop.wav").to_string_lossy().into_owned()].into_iter().collect();
+
+        let tracks = scan_folder_with(dir.path(), &AtomicBool::new(false), &Known::new(), &removed, |_| {})
+            .unwrap();
+
+        assert_eq!(tracks.len(), 1);
+        assert!(tracks[0].track.path.ends_with("keep.wav"));
+    }
+
+    #[test]
     fn deleted_files_drop_out_of_the_result() {
         let dir = tempfile::tempdir().unwrap();
         write_wav(&dir.path().join("a.wav"), 0.2);
         write_wav(&dir.path().join("b.wav"), 0.2);
-        let first = scan_folder_with(dir.path(), &AtomicBool::new(false), &Known::new(), |_| {}).unwrap();
+        let first = scan_folder_with(dir.path(), &AtomicBool::new(false), &Known::new(), &Removed::new(), |_| {}).unwrap();
         let known: Known = first.into_iter().map(|c| (c.track.path.clone(), c)).collect();
         std::fs::remove_file(dir.path().join("b.wav")).unwrap();
 
-        let second = scan_folder_with(dir.path(), &AtomicBool::new(false), &known, |_| {}).unwrap();
+        let second = scan_folder_with(dir.path(), &AtomicBool::new(false), &known, &Removed::new(), |_| {}).unwrap();
 
         assert_eq!(second.len(), 1);
         assert!(second[0].track.path.ends_with("a.wav"));

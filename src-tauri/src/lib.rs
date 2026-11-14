@@ -94,7 +94,8 @@ async fn scan(
         }
         let previous = cache.load(&root);
         let known = previous.as_ref().map(|c| c.known()).unwrap_or_default();
-        let scanned = library::scan_folder_with(&root, &cancel, &known, |p| {
+        let removed = cache.removed(&root);
+        let mut scanned = library::scan_folder_with(&root, &cancel, &known, &removed, |p| {
             let _ = app.emit("scan-progress", p);
         })
         .ok_or_else(|| SCAN_CANCELLED.to_string())?;
@@ -107,6 +108,10 @@ async fn scan(
                 root.display()
             ));
         }
+
+        // Something may have been removed while the scan ran.
+        let removed = cache.removed(&root);
+        scanned.retain(|c| !removed.contains(&c.track.path));
 
         let tracks = scanned.iter().map(|c| c.track.clone()).collect();
         if let Err(e) = cache.save(&LibraryCache::new(&root, scanned)) {
@@ -145,6 +150,33 @@ async fn cached_library(
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Removes tracks from the library (the files stay on disk).
+#[tauri::command]
+async fn remove_from_library(cache: State<'_, CacheDir>, paths: Vec<String>) -> Result<(), String> {
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = cache.last_root().ok_or("No library is loaded.")?;
+        cache.remove_tracks(&root, &paths).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// How many tracks are currently removed from the loaded library.
+#[tauri::command]
+fn removed_count(cache: State<CacheDir>) -> usize {
+    cache.last_root().map_or(0, |root| cache.removed(&root).len())
+}
+
+/// Forgets removals. The next refresh brings those files back.
+#[tauri::command]
+fn restore_removed(cache: State<CacheDir>) -> Result<(), String> {
+    match cache.last_root() {
+        Some(root) => cache.clear_removed(&root).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
 }
 
 #[tauri::command]
@@ -435,6 +467,9 @@ pub fn run() {
             scan_folder,
             import_library,
             cached_library,
+            remove_from_library,
+            removed_count,
+            restore_removed,
             cancel_scan,
             music_folder,
             player_snapshot,

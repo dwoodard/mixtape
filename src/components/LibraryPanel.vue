@@ -61,6 +61,13 @@ const scanLabel = computed(() => {
         Refresh
       </button>
       <button v-if="store.scanning.value" @click="store.cancelScan()">Cancel</button>
+      <button
+        v-if="store.removedCount.value > 0 && !store.scanning.value"
+        title="Bring back the songs you removed (rescans the folder)"
+        @click="store.restoreRemoved()"
+      >
+        Restore removed ({{ store.removedCount.value }})
+      </button>
       <input
         v-model="query"
         class="field filter"
@@ -82,7 +89,7 @@ const scanLabel = computed(() => {
     <p v-else-if="store.library.value.length === 0" class="hint">
       {{ store.scanning.value ? scanLabel : "Open a folder to load your music." }}
     </p>
-    <TrackPane v-else-if="libraryView === 'tracks'" :tracks="filtered" />
+    <TrackPane v-else-if="libraryView === 'tracks'" :tracks="filtered" removable />
     <AlbumsView v-else-if="libraryView === 'albums'" :tracks="filtered" />
     <ArtistsView v-else :tracks="filtered" />
   </section>

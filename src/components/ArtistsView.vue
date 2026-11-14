@@ -24,7 +24,7 @@ const artistTracks = computed(() => (active.value ? tracksForArtist(props.tracks
       </li>
       <li v-if="artists.length === 0" class="empty">No artists.</li>
     </ul>
-    <TrackPane v-if="active" :tracks="artistTracks" />
+    <TrackPane v-if="active" :tracks="artistTracks" removable />
     <p v-else class="hint">Choose an artist to see their tracks, album by album.</p>
   </div>
 </template>

@@ -1,7 +1,7 @@
 //! On-disk library cache: the last scan of each library folder, so the app
 //! can show the library at launch without reading any tags.
 
-use crate::library::{CachedTrack, Known};
+use crate::library::{CachedTrack, Known, Removed};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,14 +31,14 @@ impl LibraryCache {
     }
 }
 
-/// Stable (across Rust versions) file name for a library root.
-fn file_name(root: &Path) -> String {
+/// Stable (across Rust versions) hash of a library root, for file names.
+fn root_hash(root: &Path) -> String {
     let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a
     for byte in root.to_string_lossy().bytes() {
         hash ^= byte as u64;
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    format!("library-{hash:016x}.json")
+    format!("{hash:016x}")
 }
 
 #[derive(Clone)]
@@ -46,7 +46,11 @@ pub struct CacheDir(pub PathBuf);
 
 impl CacheDir {
     fn cache_path(&self, root: &Path) -> PathBuf {
-        self.0.join(file_name(root))
+        self.0.join(format!("library-{}.json", root_hash(root)))
+    }
+
+    fn removed_path(&self, root: &Path) -> PathBuf {
+        self.0.join(format!("removed-{}.json", root_hash(root)))
     }
 
     fn last_root_path(&self) -> PathBuf {
@@ -69,6 +73,44 @@ impl CacheDir {
         std::fs::write(&tmp, serde_json::to_vec(cache).map_err(std::io::Error::other)?)?;
         std::fs::rename(&tmp, &path)?;
         std::fs::write(self.last_root_path(), &cache.root)
+    }
+
+    /// Paths the user removed from this library, which scans leave out.
+    pub fn removed(&self, root: &Path) -> Removed {
+        std::fs::read_to_string(self.removed_path(root))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
+            .map(|paths| paths.into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    fn save_removed(&self, root: &Path, removed: &Removed) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.0)?;
+        let mut sorted: Vec<&String> = removed.iter().collect();
+        sorted.sort();
+        std::fs::write(self.removed_path(root), serde_json::to_vec(&sorted).map_err(std::io::Error::other)?)
+    }
+
+    /// Removes tracks from the library: remembers them so later scans skip
+    /// them, and drops them from the saved library right away. Files on disk
+    /// are not touched.
+    pub fn remove_tracks(&self, root: &Path, paths: &[String]) -> std::io::Result<()> {
+        let mut removed = self.removed(root);
+        removed.extend(paths.iter().cloned());
+        self.save_removed(root, &removed)?;
+        if let Some(mut cache) = self.load(root) {
+            cache.tracks.retain(|c| !removed.contains(&c.track.path));
+            self.save(&cache)?;
+        }
+        Ok(())
+    }
+
+    /// Forgets all removals. The next scan brings those files back.
+    pub fn clear_removed(&self, root: &Path) -> std::io::Result<()> {
+        match std::fs::remove_file(self.removed_path(root)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
     }
 
     pub fn last_root(&self) -> Option<PathBuf> {
@@ -123,6 +165,41 @@ mod tests {
         old.version = 0;
         std::fs::write(store.cache_path(root), serde_json::to_vec(&old).unwrap()).unwrap();
         assert!(store.load(root).is_none());
+    }
+
+    #[test]
+    fn removing_tracks_drops_them_from_the_saved_library_and_remembers_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheDir(dir.path().to_path_buf());
+        let root = Path::new("/lib");
+        store.save(&LibraryCache::new(root, vec![cached("a"), cached("b"), cached("c")])).unwrap();
+
+        store.remove_tracks(root, &["/music/b.mp3".into()]).unwrap();
+        store.remove_tracks(root, &["/music/c.mp3".into()]).unwrap();
+
+        let titles: Vec<_> = store.load(root).unwrap().tracks.into_iter().map(|c| c.track.title).collect();
+        assert_eq!(titles, vec!["a"]);
+        assert_eq!(store.removed(root).len(), 2);
+    }
+
+    #[test]
+    fn removals_work_before_any_cache_exists_and_are_per_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheDir(dir.path().to_path_buf());
+        store.remove_tracks(Path::new("/a"), &["/music/x.mp3".into()]).unwrap();
+        assert!(store.removed(Path::new("/a")).contains("/music/x.mp3"));
+        assert!(store.removed(Path::new("/b")).is_empty());
+    }
+
+    #[test]
+    fn clearing_removals_restores_them_and_is_safe_when_there_are_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheDir(dir.path().to_path_buf());
+        let root = Path::new("/a");
+        store.clear_removed(root).unwrap();
+        store.remove_tracks(root, &["/music/x.mp3".into()]).unwrap();
+        store.clear_removed(root).unwrap();
+        assert!(store.removed(root).is_empty());
     }
 
     #[test]

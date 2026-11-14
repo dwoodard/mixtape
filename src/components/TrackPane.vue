@@ -15,8 +15,9 @@ import type { Track } from "../lib/types";
 import TrackTable from "./TrackTable.vue";
 
 /** A list of tracks with sorting, multi-select, and play / play next / queue actions. */
-const props = withDefaults(defineProps<{ tracks: Track[]; sidewaysPlayback?: boolean }>(), {
+const props = withDefaults(defineProps<{ tracks: Track[]; sidewaysPlayback?: boolean; removable?: boolean }>(), {
   sidewaysPlayback: true,
+  removable: false,
 });
 /** Left (-1) or right (1) was pressed and `sidewaysPlayback` is off, so the parent decides what it means. */
 const emit = defineEmits<{ sideways: [direction: -1 | 1] }>();
@@ -25,6 +26,7 @@ const sortKey = ref<SortKey>("default");
 const sortDirection = ref<SortDirection>("asc");
 const selection = ref<Selection>(emptySelection());
 const root = ref<HTMLElement | null>(null);
+const confirmingRemove = ref(false);
 
 const rows = computed(() => sortTracks(props.tracks, sortKey.value, sortDirection.value));
 const order = computed(() => rows.value.map((t) => t.path));
@@ -39,6 +41,14 @@ const label = computed(() =>
 onMounted(() => nextTick(() => root.value?.focus({ preventScroll: true })));
 
 watch(order, (paths) => (selection.value = pruneSelection(selection.value, paths)));
+// Changing the selection cancels a pending removal, so it never applies to different songs.
+watch(selection, () => (confirmingRemove.value = false));
+
+async function removeChosen() {
+  const songs = chosen.value;
+  confirmingRemove.value = false;
+  await store.removeFromLibrary(songs);
+}
 
 function sortBy(key: SortKey) {
   if (sortKey.value === key) {
@@ -78,8 +88,12 @@ function onKey(event: KeyboardEvent) {
     else store.prev();
   } else if (event.key === "Enter" && target.value.length > 0) {
     store.playTracks(target.value, 0);
+  } else if ((event.key === "Delete" || event.key === "Backspace") && props.removable && chosen.value.length > 0) {
+    event.preventDefault();
+    confirmingRemove.value = true;
   } else if (event.key === "Escape") {
-    selection.value = emptySelection();
+    if (confirmingRemove.value) confirmingRemove.value = false;
+    else selection.value = emptySelection();
   }
 }
 </script>
@@ -91,7 +105,24 @@ function onKey(event: KeyboardEvent) {
       <button :disabled="target.length === 0" @click="store.playTracks(target, 0)">Play</button>
       <button :disabled="target.length === 0" @click="store.enqueueNext(target)">Play next</button>
       <button :disabled="target.length === 0" @click="store.enqueue(target)">Add to queue</button>
+      <button
+        v-if="removable"
+        :disabled="chosen.length === 0"
+        title="Select songs first. Their files are not deleted."
+        @click="confirmingRemove = true"
+      >
+        Remove…
+      </button>
     </div>
+    <div v-if="confirmingRemove" class="confirm" role="alertdialog" aria-label="Confirm removal">
+      <span>
+        Remove {{ chosen.length }} {{ chosen.length === 1 ? "song" : "songs" }} from the library?
+        The files stay on disk.
+      </span>
+      <button class="danger" @click="removeChosen()">Remove</button>
+      <button @click="confirmingRemove = false">Cancel</button>
+    </div>
+    <p v-if="store.libraryError.value" class="error" role="alert">{{ store.libraryError.value }}</p>
     <TrackTable
       :tracks="rows"
       :current-path="store.player.value.currentTrack?.path ?? null"
@@ -110,4 +141,8 @@ function onKey(event: KeyboardEvent) {
 .pane { display: flex; flex-direction: column; flex: 1; min-height: 0; outline-offset: -2px; }
 .actions { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .what { margin-right: auto; color: var(--muted); font-size: 12px; }
+.confirm { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel-3); border-bottom: 1px solid var(--line); font-size: 12px; }
+.confirm span { margin-right: auto; }
+.danger { background: #8a2f36; border-color: #8a2f36; color: #fff; }
+.error { margin: 0; padding: 6px 12px; background: #4a2328; color: #ffb4b4; font-size: 12px; }
 </style>

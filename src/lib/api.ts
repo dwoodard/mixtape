@@ -15,6 +15,9 @@ export interface Api {
   importLibrary(): Promise<Track[]>;
   cancelScan(): Promise<void>;
   cachedLibrary(): Promise<CachedLibrary | null>;
+  removeFromLibrary(paths: string[]): Promise<void>;
+  removedCount(): Promise<number>;
+  restoreRemoved(): Promise<void>;
   playTracks(tracks: Track[], start: number): Promise<void>;
   enqueue(tracks: Track[]): Promise<void>;
   enqueueNext(tracks: Track[]): Promise<void>;
@@ -54,6 +57,9 @@ export const tauriApi: Api = {
   importLibrary: () => invoke("import_library"),
   cancelScan: () => invoke("cancel_scan"),
   cachedLibrary: () => invoke("cached_library"),
+  removeFromLibrary: (paths) => invoke("remove_from_library", { paths }),
+  removedCount: () => invoke("removed_count"),
+  restoreRemoved: () => invoke("restore_removed"),
   playTracks: (tracks, start) => invoke("play_tracks", { tracks, start }),
   enqueue: (tracks) => invoke("enqueue", { tracks }),
   enqueueNext: (tracks) => invoke("enqueue_next", { tracks }),

@@ -29,6 +29,9 @@ export function createStore(api: Api) {
   const scannedAt = ref<number | null>(null);
   const scanning = ref(false);
   const scanError = ref<string | null>(null);
+  /** Songs hidden from the library by the user (their files are untouched). */
+  const removedCount = ref(0);
+  const libraryError = ref<string | null>(null);
   const scanProgress = ref<ScanProgress | null>(null);
   const playlists = ref<PlaylistSummary[]>([]);
   /** Why the last playlist action failed, if it did. */
@@ -60,6 +63,7 @@ export function createStore(api: Api) {
     await Promise.all([
       api.musicFolder().then((f) => (configuredFolder.value = f)),
       api.listPlaylists().then((p) => (playlists.value = p)),
+      api.removedCount().then((n) => (removedCount.value = n)),
       api.cachedLibrary().then((cached) => {
         // Show the saved library right away; a refresh is up to the user.
         if (cached && library.value.length === 0) {
@@ -140,6 +144,34 @@ export function createStore(api: Api) {
     }
   }
 
+  /** Takes songs out of the library. Their files stay on disk and are not re-added by a refresh. */
+  async function removeFromLibrary(tracks: Track[]) {
+    if (tracks.length === 0) return;
+    libraryError.value = null;
+    try {
+      await api.removeFromLibrary(tracks.map((t) => t.path));
+    } catch (e) {
+      libraryError.value = String(e);
+      return;
+    }
+    const gone = new Set(tracks.map((t) => t.path));
+    library.value = library.value.filter((t) => !gone.has(t.path));
+    removedCount.value = await api.removedCount();
+  }
+
+  /** Forgets every removal and rescans so those songs come back. */
+  async function restoreRemoved() {
+    libraryError.value = null;
+    try {
+      await api.restoreRemoved();
+    } catch (e) {
+      libraryError.value = String(e);
+      return;
+    }
+    removedCount.value = 0;
+    await refresh();
+  }
+
   async function cancelScan() {
     await api.cancelScan();
   }
@@ -167,6 +199,8 @@ export function createStore(api: Api) {
     folder,
     configuredFolder,
     scannedAt,
+    removedCount,
+    libraryError,
     playlists,
     playlistError,
     scanning,
@@ -177,6 +211,8 @@ export function createStore(api: Api) {
     openFolder,
     importLibrary,
     refresh,
+    removeFromLibrary,
+    restoreRemoved,
     refreshPlaylists,
     saveQueueAsPlaylist,
     deletePlaylist,
