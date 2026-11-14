@@ -3,6 +3,7 @@ pub mod cache;
 pub mod cleanup;
 pub mod config;
 pub mod cover;
+pub mod importer;
 pub mod library;
 pub mod media;
 pub mod player;
