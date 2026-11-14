@@ -2109,6 +2109,7 @@ dependencies = [
 name = "mixtape"
 version = "0.1.0"
 dependencies = [
+ "fastrand",
  "lofty",
  "rayon",
  "rodio",

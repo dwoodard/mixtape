@@ -1,4 +1,4 @@
-use crate::queue::Queue;
+use crate::queue::{Queue, Repeat};
 use crate::track::Track;
 use serde::Serialize;
 
@@ -42,7 +42,20 @@ pub struct PlayerState {
     pub position_ms: u64,
     pub duration_ms: u64,
     pub volume: f32,
+    pub shuffle: bool,
+    pub repeat: Repeat,
     pub error: Option<String>,
+}
+
+/// What is needed to bring the player back as it was at the last quit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Restore {
+    pub tracks: Vec<Track>,
+    pub index: Option<usize>,
+    pub position_ms: u64,
+    pub volume: f32,
+    pub shuffle: bool,
+    pub repeat: Repeat,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +73,8 @@ pub struct Player {
     status: Status,
     position_ms: u64,
     volume: f32,
+    /// A restored position that applies when the track at that index starts.
+    pending_seek: Option<(usize, u64)>,
     token: u64,
     error: Option<String>,
     backend: Box<dyn Backend>,
@@ -73,6 +88,7 @@ impl Player {
             status: Status::Stopped,
             position_ms: 0,
             volume: 1.0,
+            pending_seek: None,
             token: 0,
             error: None,
             backend,
@@ -91,6 +107,8 @@ impl Player {
             position_ms: self.position_ms,
             duration_ms: track.map_or(0, |t| t.duration_ms),
             volume: self.volume,
+            shuffle: self.queue.shuffle(),
+            repeat: self.queue.repeat(),
             error: self.error.clone(),
         }
     }
@@ -103,6 +121,7 @@ impl Player {
 
     /// Replaces the queue and starts playing at `start`.
     pub fn play_tracks(&mut self, tracks: Vec<Track>, start: usize) {
+        self.pending_seek = None;
         self.queue.set(tracks, start);
         self.emit_queue();
         self.start_current();
@@ -123,7 +142,48 @@ impl Player {
         }
     }
 
+    /// Inserts tracks right after the current one ("play next").
+    pub fn enqueue_next(&mut self, tracks: Vec<Track>) {
+        if tracks.is_empty() {
+            return;
+        }
+        let had_current = self.queue.current_index().is_some();
+        self.queue.insert_next(tracks);
+        self.emit_queue();
+        if !had_current {
+            self.queue.jump(0);
+        }
+        self.emit_state();
+    }
+
+    pub fn set_shuffle(&mut self, on: bool) {
+        self.queue.set_shuffle(on);
+        self.emit_state();
+    }
+
+    pub fn set_repeat(&mut self, repeat: Repeat) {
+        self.queue.set_repeat(repeat);
+        self.emit_state();
+    }
+
+    /// Loads a saved session without starting playback. Pressing play resumes
+    /// the track at the saved position.
+    pub fn restore(&mut self, saved: Restore) {
+        self.queue.set(saved.tracks, saved.index.unwrap_or(0));
+        self.queue.set_shuffle(saved.shuffle);
+        self.queue.set_repeat(saved.repeat);
+        self.volume = saved.volume.clamp(0.0, 1.0);
+        self.backend.set_volume(self.volume);
+        let index = self.queue.current_index();
+        let duration = self.queue.current().map_or(0, |t| t.duration_ms);
+        self.position_ms = saved.position_ms.min(duration);
+        self.pending_seek = index.filter(|_| self.position_ms > 0).map(|i| (i, self.position_ms));
+        self.emit_queue();
+        self.emit_state();
+    }
+
     pub fn play_index(&mut self, index: usize) {
+        self.pending_seek = None;
         if self.queue.jump(index).is_some() {
             self.start_current();
         }
@@ -171,7 +231,8 @@ impl Player {
     }
 
     pub fn next(&mut self) {
-        if self.queue.next().is_some() {
+        self.pending_seek = None;
+        if self.queue.next(false).is_some() {
             self.start_current();
         }
     }
@@ -180,6 +241,7 @@ impl Player {
         if self.status != Status::Stopped && self.position_ms > RESTART_THRESHOLD_MS {
             self.seek(0);
         } else if self.queue.prev().is_some() {
+            self.pending_seek = None;
             self.start_current();
         } else if self.status != Status::Stopped {
             self.seek(0);
@@ -246,7 +308,8 @@ impl Player {
                 if token != self.token || self.status == Status::Stopped {
                     return;
                 }
-                if self.queue.next().is_some() {
+                self.pending_seek = None;
+                if self.queue.next(true).is_some() {
                     self.start_current();
                 } else {
                     self.stop_playback();
@@ -262,6 +325,9 @@ impl Player {
     /// skipped; the last error is reported in the state.
     fn start_current(&mut self) {
         self.error = None;
+        // Bounds skipping so a queue of unplayable files cannot loop forever
+        // under repeat-all or shuffle.
+        let mut attempts = self.queue.tracks().len().max(1);
         loop {
             let Some(path) = self.queue.current().map(|t| t.path.clone()) else {
                 self.stop_playback();
@@ -272,11 +338,18 @@ impl Player {
                 Ok(()) => {
                     self.status = Status::Playing;
                     self.position_ms = 0;
+                    if let Some((index, ms)) = self.pending_seek.take() {
+                        if Some(index) == self.queue.current_index() {
+                            self.backend.seek(ms);
+                            self.position_ms = ms;
+                        }
+                    }
                     break;
                 }
                 Err(message) => {
                     self.error = Some(format!("{path}: {message}"));
-                    if self.queue.next().is_none() {
+                    attempts -= 1;
+                    if attempts == 0 || self.queue.next(false).is_none() {
                         self.stop_playback();
                         break;
                     }
@@ -638,5 +711,132 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, PlayerEvent::State(s) if s.status == Status::Playing)));
+    }
+
+    #[test]
+    fn repeat_one_replays_the_same_track_when_it_ends() {
+        let mut h = Harness::new();
+        h.load_abc(1);
+        h.player.set_repeat(Repeat::One);
+        let token = h.token();
+
+        h.player.handle_backend_event(BackendEvent::Ended { token });
+
+        assert_eq!(h.player.state().current_index, Some(1));
+        assert_eq!(h.player.state().status, Status::Playing);
+        assert_eq!(h.loads().iter().filter(|p| *p == "/music/b.mp3").count(), 2);
+    }
+
+    #[test]
+    fn repeat_all_wraps_to_the_first_track_when_the_last_ends() {
+        let mut h = Harness::new();
+        h.load_abc(2);
+        h.player.set_repeat(Repeat::All);
+        let token = h.token();
+
+        h.player.handle_backend_event(BackendEvent::Ended { token });
+
+        assert_eq!(h.player.state().current_index, Some(0));
+        assert_eq!(h.player.state().status, Status::Playing);
+    }
+
+    #[test]
+    fn shuffle_and_repeat_show_up_in_state() {
+        let mut h = Harness::new();
+        h.player.set_shuffle(true);
+        h.player.set_repeat(Repeat::All);
+        let state = h.player.state();
+        assert!(state.shuffle);
+        assert_eq!(state.repeat, Repeat::All);
+    }
+
+    #[test]
+    fn repeat_all_with_only_unplayable_tracks_stops_instead_of_looping() {
+        let mut h = Harness::new();
+        for n in ["a", "b", "c"] {
+            h.fake.fail_paths.lock().unwrap().push(format!("/music/{n}.mp3"));
+        }
+        h.player.set_repeat(Repeat::All);
+        h.load_abc(0);
+        assert_eq!(h.player.state().status, Status::Stopped);
+        assert!(h.player.state().error.is_some());
+    }
+
+    #[test]
+    fn play_next_inserts_after_the_current_track() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        h.player.enqueue_next(vec![test_track("x")]);
+
+        let titles: Vec<_> = h.player.queue_tracks().iter().map(|t| t.title.clone()).collect();
+        assert_eq!(titles, vec!["a", "x", "b", "c"]);
+        assert_eq!(h.player.state().current_index, Some(0));
+        h.player.next();
+        assert_eq!(h.player.state().current_track.unwrap().title, "x");
+    }
+
+    fn saved(index: Option<usize>, position_ms: u64) -> Restore {
+        Restore {
+            tracks: vec![test_track("a"), test_track("b"), test_track("c")],
+            index,
+            position_ms,
+            volume: 0.4,
+            shuffle: true,
+            repeat: Repeat::All,
+        }
+    }
+
+    #[test]
+    fn restore_brings_back_queue_settings_without_playing() {
+        let mut h = Harness::new();
+        h.player.restore(saved(Some(1), 42_000));
+
+        let state = h.player.state();
+        assert_eq!(state.status, Status::Stopped);
+        assert_eq!(state.current_index, Some(1));
+        assert_eq!(state.position_ms, 42_000);
+        assert_eq!(state.volume, 0.4);
+        assert!(state.shuffle);
+        assert_eq!(state.repeat, Repeat::All);
+        assert_eq!(h.player.queue_tracks().len(), 3);
+        assert!(h.loads().is_empty());
+    }
+
+    #[test]
+    fn play_after_restore_resumes_at_the_saved_position() {
+        let mut h = Harness::new();
+        h.player.restore(saved(Some(1), 42_000));
+
+        h.player.toggle();
+
+        assert_eq!(h.loads(), vec!["/music/b.mp3"]);
+        assert!(h.calls().contains(&Call::Seek(42_000)));
+        assert_eq!(h.player.state().position_ms, 42_000);
+        assert_eq!(h.player.state().status, Status::Playing);
+    }
+
+    #[test]
+    fn choosing_another_track_after_restore_starts_it_from_the_beginning() {
+        let mut h = Harness::new();
+        h.player.restore(saved(Some(1), 42_000));
+
+        h.player.play_index(2);
+
+        assert_eq!(h.loads(), vec!["/music/c.mp3"]);
+        assert!(!h.calls().contains(&Call::Seek(42_000)));
+        assert_eq!(h.player.state().position_ms, 0);
+    }
+
+    #[test]
+    fn restore_clamps_position_and_handles_an_empty_queue() {
+        let mut h = Harness::new();
+        h.player.restore(saved(Some(0), 9_999_999));
+        assert_eq!(h.player.state().position_ms, 180_000);
+
+        let mut empty = saved(None, 5);
+        empty.tracks.clear();
+        h.player.restore(empty);
+        assert_eq!(h.player.state().current_index, None);
+        assert_eq!(h.player.state().position_ms, 0);
     }
 }
