@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { menuHandlesKey } from "../lib/menuKeys";
 import { clampMenuPosition } from "../lib/ui";
 
 export interface MenuItem {
@@ -24,6 +25,8 @@ function buttons(): HTMLButtonElement[] {
 }
 
 function onKey(event: KeyboardEvent) {
+  // The list behind the menu must not also act on these keys (Esc clearing its selection, and so on).
+  if (menuHandlesKey(event.key)) event.stopPropagation();
   if (event.key === "Escape") {
     event.preventDefault();
     emit("close");

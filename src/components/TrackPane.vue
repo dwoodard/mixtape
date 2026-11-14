@@ -171,6 +171,8 @@ function onRowClick(index: number, event: MouseEvent) {
 }
 
 function onKey(event: KeyboardEvent) {
+  // While a menu is open its keys belong to the menu, not to the list behind it.
+  if (menu.value || choice.value) return;
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     // The arrows move the selection, not the scroll bar.
     event.preventDefault();
