@@ -90,15 +90,16 @@ const toggleReject = (id: string) => {
 </template>
 
 <style scoped>
-.pc { position: fixed; right: 8px; bottom: 8px; z-index: 200; font-size: 12px; }
-.trigger { opacity: 0.55; font-size: 11px; padding: 2px 8px; background: #111; border-color: #444; }
+.pc { position: fixed; top: 11px; right: 18px; z-index: 200; font-size: 12px; }
+/* Sits in the player panel's title bar (right side, beside the mode switch), out of the layout flow. */
+.trigger { opacity: 0.6; font-size: 11px; padding: 0 9px; line-height: 18px; background: #111; border-color: #444; border-radius: 6px; }
 .trigger:hover { opacity: 1; }
-.ghost { opacity: 0.25; width: 14px; height: 14px; padding: 0; line-height: 1; border-radius: 50%; font-size: 10px; }
-.panel-pc { width: 350px; max-height: 82vh; overflow: auto; padding: 10px; background: #0d0d10; color: #f2f2f2; border: 1px solid #6b6b78; border-radius: 10px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7); display: flex; flex-direction: column; gap: 6px; }
+.ghost { opacity: 0.3; width: 14px; height: 14px; padding: 0; line-height: 1; border-radius: 50%; font-size: 10px; }
+.panel-pc { position: absolute; top: 26px; right: 0; width: 350px; max-height: calc(100vh - 64px); overflow: auto; padding: 10px; background: #0d0d10; color: #f2f2f2; border: 1px solid #6b6b78; border-radius: 10px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7); display: flex; flex-direction: column; gap: 6px; }
 header { display: flex; justify-content: space-between; align-items: center; }
 .x { width: 22px; height: 22px; padding: 0; }
-.tabs { display: flex; gap: 4px; }
-.tabs button { flex: 1; background: #1a1a20; border-color: #3a3a44; font-size: 11px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs button { flex: 1 1 45%; background: #1a1a20; border-color: #3a3a44; font-size: 11px; }
 .tabs button.on { border-color: #6ec1ff; background: #14283a; }
 p { margin: 0; }
 .q { color: #b9b9c4; line-height: 1.35; }

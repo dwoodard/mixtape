@@ -38,6 +38,39 @@ export const ITEMS: Record<string, ItemDef> = {
       { id: "3", name: "Destination tree", blurb: "Artist then Album, as they'll land in the library, plus filters for what needs attention" },
     ],
   },
+  "tag-review": {
+    title: "Tag review",
+    appliesWhen: { item: "discovery-import", option: "C" },
+    question:
+      "How should the inspector present proposed tags so the user can quickly trust, fix, or choose between them (Picard-style)?",
+    options: [
+      { id: "baseline", name: "Plain fields", blurb: "Six editable fields (what C shows today)" },
+      { id: "1", name: "Per-field sources", blurb: "Each field says where its value came from, and offers the alternatives from other sources" },
+      { id: "2", name: "Pick a release", blurb: "Candidate releases as cards; choosing one fills album, year and track together" },
+      { id: "3", name: "Compare", blurb: "Two columns: what the video told us vs. what will be written, with accept per field and Accept all" },
+    ],
+  },
+  "commit-flow": {
+    title: "Adding to library",
+    appliesWhen: { item: "discovery-import", option: "C" },
+    question: "How should songs move from the inbox into the library: one at a time, in a reviewed batch, automatically, or through a review queue?",
+    options: [
+      { id: "baseline", name: "Add per song", blurb: "Add to library on each item, plus Add selected / Add all ready (today)" },
+      { id: "1", name: "Commit tray", blurb: "Stage songs into a tray, review the files and tags that will be written, then commit them in one confirmed step" },
+      { id: "2", name: "Auto-add + undo", blurb: "Confident, complete matches add themselves above a threshold you set; everything auto-added can be undone" },
+      { id: "3", name: "Review queue", blurb: "Walk through only the songs that need a look, one at a time, with keyboard Accept / Skip" },
+    ],
+  },
+  "sources-pane": {
+    title: "Sources pane",
+    appliesWhen: { item: "discovery-import", option: "C" },
+    question: "How should links go in: separate boxes per service, one smart box, or a pick-before-you-fetch checklist for playlists?",
+    options: [
+      { id: "baseline", name: "Box per service", blurb: "YouTube, Spotify and ffmpeg each have their own box (today)" },
+      { id: "1", name: "One smart box", blurb: "Paste anything; it recognizes the service, keeps recent links, and shows format as chips" },
+      { id: "2", name: "Pick before fetch", blurb: "A pasted playlist opens as a checklist first, so nothing downloads until you choose" },
+    ],
+  },
 };
 
 interface ItemState {
@@ -60,21 +93,25 @@ export const proto = reactive({
     // importing, not browsing the library).
     "discovery-import": {
       selected: initial("discovery-import", "C"),
-      status: "exploring",
+      status: "locked",
       refinement: "C is the closest but need more ideas on how we organize this",
       reason: "",
       rejected: ["baseline"],
     },
+    // Locked by the user: the flat table, plus "start pulling in ID3 tags as we can".
     "inbox-organization": {
-      selected: initial("inbox-organization", "1"),
-      status: "exploring",
-      refinement: "",
+      selected: initial("inbox-organization", "baseline"),
+      status: "locked",
+      refinement: "we want to start pulling in id3 tags for the songs as we can",
       reason: "",
       rejected: [],
     },
+    "tag-review": { selected: initial("tag-review", "1"), status: "exploring", refinement: "", reason: "", rejected: [] },
+    "commit-flow": { selected: initial("commit-flow", "1"), status: "exploring", refinement: "", reason: "", rejected: [] },
+    "sources-pane": { selected: initial("sources-pane", "baseline"), status: "exploring", refinement: "", reason: "", rejected: [] },
   } as Record<string, ItemState>,
   /** The item the controls are editing and the arrow keys cycle. */
-  active: "inbox-organization",
+  active: "tag-review",
   clean: false,
   open: false,
   resetKey: 0,
@@ -104,9 +141,12 @@ export const decision = computed(() => ({
           ...(s.rejected.length ? { rejected: s.rejected } : {}),
           ...(id === "discovery-import"
             ? {
+                decided: [
+                  "YouTube fetching is for content the user owns or is licensed to use: one-time notice, no workarounds for protected videos",
+                  "When YouTube has a date, the year tag comes from it (release_date first, else upload_date, flagged)",
+                ],
                 unresolved: [
                   "Where imported files are kept before they are added (a staging folder?)",
-                  "Is YouTube fetching only for content the user owns or is licensed to use?",
                   "Spotify needs a developer client ID for login; is that acceptable?",
                 ],
               }

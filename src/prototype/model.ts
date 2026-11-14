@@ -124,6 +124,16 @@ export interface ImportBatch {
   source: Source;
 }
 
+/** A release the (fake) lookup thinks this recording is on. ILLUSTRATIVE demo data, not real MusicBrainz results. */
+export interface Candidate {
+  id: number;
+  album: string;
+  year: string;
+  track: string;
+  kind: "Album" | "Single" | "Compilation" | "Live";
+  score: number;
+}
+
 export interface ImportItem {
   id: number;
   batchId: number;
@@ -140,6 +150,11 @@ export interface ImportItem {
   videoTitle: string;
   /** Plain-language notes on where tag values came from (and how far to trust them). */
   notes: string[];
+  candidates: Candidate[];
+  /** The candidate whose album/year/track were applied, if any. */
+  chosen: number | null;
+  /** Set when the auto-add rule added it (so it can be undone). */
+  autoAdded: boolean;
 }
 
 export type Format = "mp3 320k" | "m4a (aac)" | "flac";
@@ -181,6 +196,19 @@ export function fakeSpotifyTracks(id: string): SpotifyTrack[] {
 
 const norm = (s: string) => s.trim().toLowerCase();
 
+/** Makes a few plausible releases for a recording: the best guess plus lesser ones. */
+function makeCandidates(p: Proposal, year: string, base: number): Candidate[] {
+  const y = Number(year) || 2010;
+  const real = p.album
+    ? { album: p.album, year: p.year || String(y), track: p.track || "1", kind: "Album" as const }
+    : { album: `${p.title} (single)`, year: String(y), track: "1", kind: "Single" as const };
+  return [
+    { id: base + 1, ...real, score: 0.9 },
+    { id: base + 2, album: "Greatest Hits Collection", year: String(y + 3), track: "7", kind: "Compilation", score: 0.6 },
+    { id: base + 3, album: `Live Session: ${p.artist || "Various"}`, year: String(y + 1), track: "4", kind: "Live", score: 0.4 },
+  ];
+}
+
 /** An item the user should look at before adding: unsure match, missing tags, or already owned. */
 export function needsAttention(item: ImportItem): boolean {
   const p = item.proposal;
@@ -200,6 +228,12 @@ export function createImports(getLibrary: () => Track[]) {
   const batches = ref<ImportBatch[]>([]);
   const format = ref<Format>("mp3 320k");
   const notice = ref<string | null>(null);
+  /** Commit-flow options: auto-add rule, commit tray, and pick-before-fetch. */
+  const autoAdd = ref(false);
+  const autoThreshold = ref(0.7);
+  const tray = ref<number[]>([]);
+  const pickFirst = ref(false);
+  const pending = ref<{ label: string; tracks: { title: string; artist: string; checked: boolean; url: string; seed: string }[] } | null>(null);
   const spotify = ref<{ source: Source; id: string; tracks: SpotifyTrack[] } | null>(null);
 
   function advance(item: ImportItem) {
@@ -212,6 +246,11 @@ export function createImports(getLibrary: () => Track[]) {
           item.stage = "ready";
           item.progress = 100;
           clearInterval(timer);
+          // Auto-add rule (only while that option is on): confident, complete, not already owned.
+          if (autoAdd.value && item.confidence >= autoThreshold.value && !needsAttention(item)) {
+            item.stage = "added";
+            item.autoAdded = true;
+          }
         }
       }
     }, 280);
@@ -246,7 +285,11 @@ export function createImports(getLibrary: () => Track[]) {
       duplicateOf: owned ? owned.path : null,
       videoTitle: given?.videoTitle ?? "",
       notes: given?.notes ?? [],
+      candidates: [],
+      chosen: null,
+      autoAdded: false,
     };
+    item.candidates = makeCandidates(item.proposal, item.proposal.year, item.id * 10);
     items.value.push(item);
     advance(items.value[items.value.length - 1]);
     return item;
@@ -276,8 +319,19 @@ export function createImports(getLibrary: () => Track[]) {
       enqueue(source, raw, id, 0, newBatch(hint || `YouTube video ${id}`, source), given);
     }
     else if (source === "youtube-playlist") {
-      const batch = newBatch(`YouTube playlist ${id.slice(0, 8)}…`, source);
-      [0, 1, 2, 3].forEach((i) => enqueue("youtube-video", raw, id, i, batch));
+      if (pickFirst.value) {
+        // Choose before fetching: show the playlist's entries as a checklist.
+        pending.value = {
+          label: `YouTube playlist ${id.slice(0, 8)}…`,
+          tracks: [0, 1, 2, 3].map((i) => {
+            const p = fakeProposal(id, i).proposal;
+            return { title: p.title, artist: p.artist, checked: true, url: raw, seed: id + i };
+          }),
+        };
+      } else {
+        const batch = newBatch(`YouTube playlist ${id.slice(0, 8)}…`, source);
+        [0, 1, 2, 3].forEach((i) => enqueue("youtube-video", raw, id, i, batch));
+      }
     }
     else if (source === "spotify-track") spotify.value = { source, id, tracks: fakeSpotifyTracks(id).slice(0, 1) };
     else spotify.value = { source, id, tracks: fakeSpotifyTracks(id) };
@@ -293,6 +347,39 @@ export function createImports(getLibrary: () => Track[]) {
       .forEach((t, i) => enqueue("youtube-video", `https://youtu.be/${t.title}`, t.title + t.artist, i, batch));
   }
 
+  /** Fetch only the ticked entries of a pending playlist. */
+  function fetchPending() {
+    if (!pending.value) return;
+    const batch = newBatch(pending.value.label, "youtube-playlist");
+    pending.value.tracks.forEach((t, i) => t.checked && enqueue("youtube-video", t.url, t.seed, i, batch));
+    pending.value = null;
+  }
+
+  /** Choose a release: applies its album, year and track to the tags. */
+  function chooseCandidate(item: ImportItem, c: Candidate) {
+    item.chosen = c.id;
+    item.proposal.album = c.album;
+    item.proposal.year = c.year;
+    item.proposal.track = c.track;
+    item.confidence = Math.max(item.confidence, c.score >= 0.9 ? 0.9 : item.confidence);
+  }
+
+  /** Tray: stage items, then commit them together. */
+  const stage = (item: ImportItem) => item.stage === "ready" && !tray.value.includes(item.id) && tray.value.push(item.id);
+  const unstage = (item: ImportItem) => (tray.value = tray.value.filter((i) => i !== item.id));
+  const staged = computed(() => items.value.filter((i) => tray.value.includes(i.id) && i.stage === "ready"));
+  function commitTray() {
+    staged.value.forEach((i) => (i.stage = "added"));
+    tray.value = [];
+  }
+  const undoAuto = (item: ImportItem) => {
+    if (item.autoAdded) {
+      item.stage = "ready";
+      item.autoAdded = false;
+    }
+  };
+  const autoAddedList = computed(() => items.value.filter((i) => i.autoAdded && i.stage === "added"));
+
   const missing = computed(() =>
     spotify.value ? spotify.value.tracks.filter((t) => !findOwned(getLibrary(), t.title, t.artist)) : [],
   );
@@ -306,6 +393,8 @@ export function createImports(getLibrary: () => Track[]) {
   const remove = (item: ImportItem) => (items.value = items.value.filter((i) => i !== item));
   const reset = () => {
     items.value = [];
+    tray.value = [];
+    pending.value = null;
     batches.value = [];
     spotify.value = null;
     notice.value = null;
@@ -326,7 +415,7 @@ export function createImports(getLibrary: () => Track[]) {
       getLibrary().some((t) => (norm(t.artist) === norm(artist) || norm(t.albumArtist) === norm(artist)) && norm(t.album) === norm(album)),
   };
 
-  return { items, batches, library, format, notice, spotify, missing, ready, added, addLink, fetchMissing, addToLibrary, addAllReady, remove, reset, destination };
+  return { items, batches, library, format, autoAdd, autoThreshold, tray, staged, stage, unstage, commitTray, undoAuto, autoAddedList, pickFirst, pending, fetchPending, chooseCandidate, notice, spotify, missing, ready, added, addLink, fetchMissing, addToLibrary, addAllReady, remove, reset, destination };
 }
 
 export type Imports = ReturnType<typeof createImports>;

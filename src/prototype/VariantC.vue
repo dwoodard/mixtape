@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // PROTOTYPE (discovery-import) option C: "Workbench". Sources | inbox table | tag inspector.
-import { computed, ref } from "vue";
+import { computed, ref, watchEffect } from "vue";
 import { store } from "../lib/store";
 import { EXAMPLE, FORMATS, SOURCE_LABEL, findOwned, type Format, type ImportItem, type Imports } from "./model";
 import InboxBatches from "./InboxBatches.vue";
@@ -9,7 +9,9 @@ import InboxFlat from "./InboxFlat.vue";
 import InboxTree from "./InboxTree.vue";
 import StageChip from "./StageChip.vue";
 import { selected } from "./state";
-import TagFields from "./TagFields.vue";
+import CommitFlow from "./CommitFlow.vue";
+import SourcesSmart from "./SourcesSmart.vue";
+import TagReview from "./TagReview.vue";
 
 const props = defineProps<{ im: Imports }>();
 const yt = ref("");
@@ -24,6 +26,11 @@ const submit = (which: "yt" | "sp") => {
 };
 const current = computed<ImportItem | null>(() => props.im.items.value.find((i) => i.id === focus.value) ?? null);
 const readyPicked = computed(() => props.im.items.value.filter((i) => picked.value.has(i.id) && i.stage === "ready"));
+// The options for adding and fetching change how the pretend pipeline behaves.
+watchEffect(() => {
+  props.im.pickFirst.value = selected("sources-pane") === "2";
+  props.im.autoAdd.value = selected("commit-flow") === "2";
+});
 const toggle = (id: number) => (picked.value.has(id) ? picked.value.delete(id) : picked.value.add(id));
 </script>
 
@@ -31,6 +38,8 @@ const toggle = (id: number) => (picked.value.has(id) ? picked.value.delete(id) :
   <main class="c">
     <aside class="panel rail">
       <h2 class="panel-title">Sources</h2>
+      <SourcesSmart v-if="selected('sources-pane') === '1'" :im="im" />
+      <template v-else>
       <div class="src">
         <h3>YouTube</h3>
         <form @submit.prevent="submit('yt')"><input v-model="yt" class="field" placeholder="video or playlist link" /><button :disabled="!yt.trim()">Add</button></form>
@@ -54,12 +63,22 @@ const toggle = (id: number) => (picked.value.has(id) ? picked.value.delete(id) :
         <select class="field" v-model="im.format.value"><option v-for="f in FORMATS" :key="f" :value="(f as Format)">{{ f }}</option></select>
         <p class="muted">Applied to every new item.</p>
       </div>
+        <div v-if="im.pending.value" class="src pend">
+          <h3>Pick what to fetch</h3>
+          <p class="muted">{{ im.pending.value.label }}</p>
+          <label v-for="t in im.pending.value.tracks" :key="t.seed" class="pick"><input type="checkbox" v-model="t.checked" /> {{ t.artist }} – {{ t.title }}</label>
+          <div class="row">
+            <button :disabled="!im.pending.value.tracks.some((t) => t.checked)" @click="im.fetchPending()">Fetch {{ im.pending.value.tracks.filter((t) => t.checked).length }} selected</button>
+            <button @click="im.pending.value = null">Cancel</button>
+          </div>
+        </div>
+      </template>
       <p v-if="error" class="err" role="alert">{{ error }}</p>
     </aside>
 
     <section class="panel inbox">
       <h2 class="panel-title">Inbox <small>{{ im.items.value.length }}</small></h2>
-      <div class="bulk">
+      <div v-if="selected('commit-flow') === 'baseline'" class="bulk">
         <button :disabled="readyPicked.length === 0" @click="readyPicked.forEach(im.addToLibrary)">Add {{ readyPicked.length || "" }} selected</button>
         <button :disabled="im.ready.value.length === 0" @click="im.addAllReady()">Add all ready ({{ im.ready.value.length }})</button>
       </div>
@@ -69,6 +88,7 @@ const toggle = (id: number) => (picked.value.has(id) ? picked.value.delete(id) :
         <InboxTree v-else-if="selected('inbox-organization') === '3'" :im="im" :focus="focus" :picked="picked" @focus="(id) => (focus = id)" @toggle="toggle" />
         <InboxFlat v-else :im="im" :focus="focus" :picked="picked" @focus="(id) => (focus = id)" @toggle="toggle" />
       </div>
+      <CommitFlow :im="im" :focus="focus" @focus="(id) => (focus = id)" />
     </section>
 
     <aside class="panel insp">
@@ -79,11 +99,12 @@ const toggle = (id: number) => (picked.value.has(id) ? picked.value.delete(id) :
         <p class="muted">{{ current.from }}</p>
         <p v-if="current.videoTitle" class="muted">Video: {{ current.videoTitle }}</p>
         <ul v-if="current.notes.length" class="notes"><li v-for="n in current.notes" :key="n">{{ n }}</li></ul>
-        <TagFields :item="current" dense />
+        <TagReview :item="current" :im="im" />
         <p v-if="current.duplicateOf" class="dup">Already in your library:<br /><code>{{ current.duplicateOf }}</code></p>
         <p class="muted">Will be added as<br /><code>{{ im.destination(current) }}</code></p>
         <div class="row">
-          <button :disabled="current.stage !== 'ready'" @click="im.addToLibrary(current)">{{ current.duplicateOf ? "Add anyway" : "Add to library" }}</button>
+          <button v-if="selected('commit-flow') === '1'" :disabled="current.stage !== 'ready' || im.tray.value.includes(current.id)" @click="im.stage(current)">{{ im.tray.value.includes(current.id) ? "Staged ✓" : "Stage for commit" }}</button>
+          <button v-else :disabled="current.stage !== 'ready'" @click="im.addToLibrary(current)">{{ current.duplicateOf ? "Add anyway" : "Add to library" }}</button>
           <button @click="im.remove(current), (focus = null)">Remove</button>
         </div>
       </div>
@@ -114,6 +135,7 @@ tbody tr { cursor: default; } tbody tr:hover { background: var(--panel-2); }
 tr.focus { background: var(--accent); color: #fff; } tr.focus .muted { color: rgba(255, 255, 255, 0.8); }
 .hi { color: #8fd7a0; } .lo { color: #f0c674; }
 .empty { text-align: center; color: var(--muted); padding: 20px; }
+.pend { gap: 3px; } .pick { font-size: 12px; display: flex; gap: 6px; align-items: center; }
 .pad { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .dup { color: #ffb4b4; font-size: 12px; margin: 0; }
 code { font-size: 11px; user-select: text; -webkit-user-select: text; word-break: break-all; }
