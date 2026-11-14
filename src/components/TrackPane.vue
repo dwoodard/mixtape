@@ -65,6 +65,11 @@ function onKey(event: KeyboardEvent) {
   } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
     event.preventDefault();
     selection.value = selectAll(order.value);
+  } else if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+    // Left and right step back and forth through the music that is playing.
+    event.preventDefault();
+    if (event.key === "ArrowRight") store.next();
+    else store.prev();
   } else if (event.key === "Enter" && target.value.length > 0) {
     store.playTracks(target.value, 0);
   } else if (event.key === "Escape") {

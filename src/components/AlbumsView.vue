@@ -11,6 +11,8 @@ const props = defineProps<{ tracks: Track[] }>();
 
 const albums = computed(() => groupAlbums(props.tracks));
 const openKey = ref<string | null>(null);
+// Remembered so going back lands on the album you came from.
+const lastKey = ref<string | null>(null);
 // Look the album up again by key so the detail follows filter and rescan changes.
 const open = computed<Album | null>(() => albums.value.find((a) => a.key === openKey.value) ?? null);
 watch(open, (album) => {
@@ -30,7 +32,7 @@ watch(open, (album) => {
     </div>
     <TrackPane :tracks="open.tracks" />
   </div>
-  <AlbumGrid v-else :albums="albums" @open="(a) => (openKey = a.key)" />
+  <AlbumGrid v-else :albums="albums" :initial-key="lastKey" @open="(a) => ((openKey = a.key), (lastKey = a.key))" />
 </template>
 
 <style scoped>
