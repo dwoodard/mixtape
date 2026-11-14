@@ -108,3 +108,6 @@ const appModeChoice = persistedChoice<AppMode>("mixtape.appMode", "player", ["pl
 /** Which workspace the large window shows: playing music, or discovering and fixing it. */
 export const appMode = appModeChoice.choice;
 export const setAppMode = appModeChoice.set;
+
+/** Paths of the library songs whose tags are being edited in the dialog (empty: closed). */
+export const tagEditPaths = ref<string[]>([]);

@@ -12,6 +12,7 @@ import {
 } from "../lib/selection";
 import { sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
+import { tagEditPaths } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import TrackTable from "./TrackTable.vue";
 
@@ -21,7 +22,7 @@ const props = withDefaults(
   { sidewaysPlayback: true, removable: false, autofocus: true },
 );
 /** Left (-1) or right (1) was pressed and `sidewaysPlayback` is off, so the parent decides what it means. */
-const emit = defineEmits<{ sideways: [direction: -1 | 1]; select: [tracks: Track[]] }>();
+const emit = defineEmits<{ sideways: [direction: -1 | 1] }>();
 
 const sortKey = ref<SortKey>("default");
 const sortDirection = ref<SortDirection>("asc");
@@ -42,9 +43,6 @@ const label = computed(() =>
 // Opening a view hands it the keyboard, so the arrows work without clicking a row first.
 onMounted(() => props.autofocus && nextTick(() => root.value?.focus({ preventScroll: true })));
 defineExpose({ focus: () => root.value?.focus({ preventScroll: true }) });
-
-// Lets a parent (the tag editor) work on whatever is selected.
-watch(chosen, (tracks) => emit("select", tracks), { immediate: true });
 
 watch(order, (paths) => (selection.value = pruneSelection(selection.value, paths)));
 // Changing the selection cancels a pending removal, so it never applies to different songs.
@@ -80,7 +78,8 @@ const menuItems = computed<MenuItem[]>(() => {
     { label: "Play", action: () => store.playTracks(songs, 0) },
     { label: "Play next", action: () => store.enqueueNext(songs) },
     { label: "Add to queue", action: () => store.enqueue(songs) },
-    { label: "Reveal in Finder", action: () => store.revealInFinder(songs), separated: true },
+    { label: "Edit tags…", action: () => (tagEditPaths.value = songs.map((t) => t.path)), separated: true },
+    { label: "Reveal in Finder", action: () => store.revealInFinder(songs) },
   ];
   if (props.removable) {
     items.push({
@@ -139,6 +138,13 @@ function onKey(event: KeyboardEvent) {
       <button :disabled="target.length === 0" @click="store.playTracks(target, 0)">Play</button>
       <button :disabled="target.length === 0" @click="store.enqueueNext(target)">Play next</button>
       <button :disabled="target.length === 0" @click="store.enqueue(target)">Add to queue</button>
+      <button
+        :disabled="chosen.length === 0"
+        title="Edit the tags of the selected songs"
+        @click="tagEditPaths = chosen.map((t) => t.path)"
+      >
+        Edit tags…
+      </button>
       <button
         :disabled="chosen.length === 0"
         title="Show the selected files in Finder"

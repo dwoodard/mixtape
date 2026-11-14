@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { TagEditPayload } from "./tagEdit";
+import type { ImportEvent, ImportItem, TagsPatch, ToolStatus } from "./types";
 import type { CachedLibrary, CleanupReport, DuplicatePair, PlayerSnapshot, PlayerState, PlaylistSummary, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
 
 type Unlisten = () => void;
@@ -20,6 +21,14 @@ export interface Api {
   revealInFinder(paths: string[]): Promise<void>;
   trashDuplicates(pairs: DuplicatePair[]): Promise<CleanupReport>;
   writeTags(paths: string[], edit: TagEditPayload): Promise<TagWriteResult[]>;
+  importTools(): Promise<ToolStatus>;
+  importList(): Promise<ImportItem[]>;
+  importAddLink(text: string, format: string): Promise<void>;
+  importSetTags(id: number, patch: TagsPatch): Promise<ImportItem>;
+  importAdd(id: number): Promise<Track>;
+  importUndo(id: number): Promise<string>;
+  importRemove(id: number): Promise<void>;
+  onImportEvent(cb: (event: ImportEvent) => void): Promise<Unlisten>;
   removedCount(): Promise<number>;
   restoreRemoved(): Promise<void>;
   playTracks(tracks: Track[], start: number): Promise<void>;
@@ -66,6 +75,14 @@ export const tauriApi: Api = {
   revealInFinder: (paths) => invoke("reveal_in_finder", { paths }),
   trashDuplicates: (pairs) => invoke("trash_duplicates", { pairs }),
   writeTags: (paths, edit) => invoke("write_tags", { paths, edit }),
+  importTools: () => invoke("import_tools"),
+  importList: () => invoke("import_list"),
+  importAddLink: (text, format) => invoke("import_add_link", { text, format }),
+  importSetTags: (id, patch) => invoke("import_set_tags", { id, patch }),
+  importAdd: (id) => invoke("import_add", { id }),
+  importUndo: (id) => invoke("import_undo", { id }),
+  importRemove: (id) => invoke("import_remove", { id }),
+  onImportEvent: (cb) => listen<ImportEvent>("import-event", (e) => cb(e.payload)),
   removedCount: () => invoke("removed_count"),
   restoreRemoved: () => invoke("restore_removed"),
   playTracks: (tracks, start) => invoke("play_tracks", { tracks, start }),

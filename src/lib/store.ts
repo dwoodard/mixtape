@@ -1,6 +1,8 @@
 import { computed, ref } from "vue";
 import { tauriApi, type Api } from "./api";
 import type { TagEditPayload } from "./tagEdit";
+import { insertSorted } from "./librarySort";
+import { createImports } from "./imports";
 import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
 import { persistedSet, type FlagStorage } from "./ui";
 import type { CleanupReport, DuplicatePair, PlayerState, TagWriteResult, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
@@ -268,6 +270,16 @@ export function createStore(api: Api, storage?: FlagStorage) {
     }
   }
 
+  /** A song that was just added to the library on disk (by an import): shows it in scan order. */
+  function addToLibrary(track: Track) {
+    library.value = insertSorted(library.value, track);
+  }
+
+  /** A song whose file was removed (an undone import): drops it from the list. */
+  function dropFromLibrary(path: string) {
+    library.value = library.value.filter((t) => t.path !== path);
+  }
+
   /** Shows the songs' files in Finder. */
   async function revealInFinder(tracks: Pick<Track, "path">[]) {
     if (tracks.length === 0) return;
@@ -338,6 +350,8 @@ export function createStore(api: Api, storage?: FlagStorage) {
     importLibrary,
     refresh,
     removeFromLibrary,
+    addToLibrary,
+    dropFromLibrary,
     writeTags,
     tagResults,
     writingTags,
@@ -381,3 +395,9 @@ export function createStore(api: Api, storage?: FlagStorage) {
 export type Store = ReturnType<typeof createStore>;
 
 export const store = createStore(tauriApi);
+
+export const imports = createImports(tauriApi, {
+  library: () => store.library.value,
+  onAdded: store.addToLibrary,
+  onRemoved: store.dropFromLibrary,
+});

@@ -2,13 +2,18 @@
 import { onMounted, onUnmounted } from "vue";
 import LargeView from "./components/LargeView.vue";
 import ThinBar from "./components/ThinBar.vue";
-import { store } from "./lib/store";
+import { imports, store } from "./lib/store";
 
 let cleanup: (() => void) | undefined;
+let cleanupImports: (() => void) | undefined;
 onMounted(async () => {
   cleanup = await store.init();
+  cleanupImports = await imports.init();
 });
-onUnmounted(() => cleanup?.());
+onUnmounted(() => {
+  cleanup?.();
+  cleanupImports?.();
+});
 </script>
 
 <template>

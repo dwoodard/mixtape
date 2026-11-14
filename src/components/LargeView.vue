@@ -2,11 +2,12 @@
 import { computed } from "vue";
 import { describePlaybackError } from "../lib/format";
 import { store } from "../lib/store";
-import { appMode } from "../lib/ui";
+import { appMode, tagEditPaths } from "../lib/ui";
 import DiscoveryView from "./DiscoveryView.vue";
 import LibraryPanel from "./LibraryPanel.vue";
 import PlayerDeck from "./PlayerDeck.vue";
 import QueueList from "./QueueList.vue";
+import TagEditDialog from "./TagEditDialog.vue";
 import TagPanel from "./TagPanel.vue";
 
 const problem = computed(() => {
@@ -42,6 +43,7 @@ const problem = computed(() => {
         <TagPanel :track="store.player.value.currentTrack" />
       </aside>
     </main>
+    <TagEditDialog v-if="tagEditPaths.length > 0" />
   </div>
 </template>
 

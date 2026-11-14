@@ -355,7 +355,7 @@ pub fn add_to_library(staged: &Path, proposal: &Proposal, root: &Path) -> Result
 
     // 1. Tag a local working copy next to the staged file.
     let work = staged.with_file_name(format!(".{}.tagging.{ext}", staged.file_stem().and_then(|s| s.to_str()).unwrap_or("song")));
-    std::fs::copy(staged, &work).map_err(|e| format!("Couldn't copy the fetched file: {e}"))?;
+    crate::fsutil::copy_data(staged, &work).map_err(|e| format!("Couldn't copy the fetched file: {e}"))?;
     let cleanup = |p: &Path| {
         let _ = std::fs::remove_file(p);
     };
@@ -368,7 +368,7 @@ pub fn add_to_library(staged: &Path, proposal: &Proposal, root: &Path) -> Result
     let result = (|| -> Result<(), String> {
         std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
         let temp = dir.join(format!(".{}.mixtape-tmp.{ext}", dest.file_stem().and_then(|s| s.to_str()).unwrap_or("song")));
-        std::fs::copy(&work, &temp).map_err(|e| format!("Couldn't copy into the library: {e}"))?;
+        crate::fsutil::copy_data(&work, &temp).map_err(|e| format!("Couldn't copy into the library: {e}"))?;
         let ok = std::fs::metadata(&temp).and_then(|a| std::fs::metadata(&work).map(|b| a.len() == b.len())).unwrap_or(false);
         if !ok {
             let _ = std::fs::remove_file(&temp);
@@ -729,6 +729,32 @@ mod tests {
 
     fn walk(dir: &Path) -> Vec<PathBuf> {
         walkdir::WalkDir::new(dir).into_iter().filter_map(Result::ok).map(|e| e.into_path()).collect()
+    }
+
+    /// Adds and undoes a song in a real folder given by `MIXTAPE_TEST_LIBRARY`
+    /// (for example a scratch folder on a network share) to prove copying
+    /// there works. Run with
+    /// `MIXTAPE_TEST_LIBRARY=/Volumes/x/scratch cargo test -- --ignored real_folder`.
+    #[test]
+    #[ignore]
+    fn real_folder_accepts_an_add_and_an_undo() {
+        let Some(root) = std::env::var_os("MIXTAPE_TEST_LIBRARY").map(PathBuf::from) else {
+            panic!("set MIXTAPE_TEST_LIBRARY to a scratch folder");
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        // A downloaded file carries a quarantine mark; the copy must cope with it.
+        let staged = staged(work.path());
+        let _ = std::process::Command::new("xattr").args(["-w", "com.apple.quarantine", "0081;00000000;Test;"]).arg(&staged).status();
+
+        let added = add_to_library(&staged, &proposal(), &root).expect("add into the real folder");
+        assert!(added.path.exists());
+        assert_eq!(read_track(&added.path).unwrap().title, "People Are Strange");
+
+        remove_added(&root, &added.path, added.size).expect("undo");
+        assert!(!added.path.exists());
+        assert!(!root.join("The Dead South").exists(), "emptied folders are removed");
+        let _ = std::fs::remove_dir(&root);
     }
 
     #[test]

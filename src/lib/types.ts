@@ -81,3 +81,50 @@ export interface TagWriteResult {
   track: Track | null;
   error: string | null;
 }
+
+export type ImportStage = "queued" | "probing" | "fetching" | "converting" | "ready" | "added" | "failed";
+
+export type ImportField = "title" | "artist" | "album" | "albumArtist" | "year" | "track" | "genre";
+
+export interface ImportProposal {
+  title: string;
+  artist: string;
+  album: string;
+  albumArtist: string;
+  year: string;
+  track: string;
+  genre: string;
+}
+
+export interface ImportItem {
+  id: number;
+  url: string;
+  stage: ImportStage;
+  /** 0 to 1 while fetching. */
+  progress: number;
+  error: string | null;
+  videoTitle: string;
+  channel: string;
+  durationSecs: number | null;
+  proposal: ImportProposal;
+  /** Field -> where its value came from, in words. */
+  sources: Record<string, string>;
+  /** Field -> other values worth offering. */
+  alternatives: Record<string, string[]>;
+  notes: string[];
+  /** 0 to 1: how sure we are of the artist and title. */
+  confidence: number;
+  format: string;
+  /** Where it will go, relative to the library folder. */
+  destination: string | null;
+  addedPath: string | null;
+}
+
+export type ImportEvent = { kind: "item"; value: ImportItem } | { kind: "removed"; value: number };
+
+export interface ToolStatus {
+  ytDlp: string | null;
+  ffmpeg: string | null;
+}
+
+export type TagsPatch = Partial<ImportProposal>;

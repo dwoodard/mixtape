@@ -253,7 +253,7 @@ mod tests {
         // poisoned title survives. Then change the other file on disk.
         known.get_mut(dir.path().join("keep.wav").to_str().unwrap()).unwrap().track.title =
             "FROM CACHE".into();
-        tagged_wav(&dir.path().join("edit.wav"), "New", "A", 2);
+        tagged_wav(&dir.path().join("edit.wav"), "Newer", "A", 2); // longer, so the size changes even if the clock does not
         std::fs::write(dir.path().join("added.wav"), b"").unwrap();
         write_wav(&dir.path().join("added.wav"), 0.5);
 
@@ -261,7 +261,7 @@ mod tests {
 
         let by_name = |n: &str| second.iter().find(|c| c.track.path.ends_with(n)).unwrap();
         assert_eq!(by_name("keep.wav").track.title, "FROM CACHE");
-        assert_eq!(by_name("edit.wav").track.artist, "New");
+        assert_eq!(by_name("edit.wav").track.artist, "Newer");
         assert_eq!(second.len(), 3);
     }
 
