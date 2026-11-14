@@ -626,6 +626,11 @@ fn remove_from_queue(player: State<PlayerHandle>, index: usize) {
 }
 
 #[tauri::command]
+fn remove_from_queue_down(player: State<PlayerHandle>, index: usize) {
+    player.with(|p| p.remove_from(index));
+}
+
+#[tauri::command]
 fn clear_queue(player: State<PlayerHandle>) {
     player.with(|p| p.clear());
 }
@@ -836,6 +841,7 @@ pub fn run() {
             seek,
             set_volume,
             remove_from_queue,
+            remove_from_queue_down,
             clear_queue,
             window_mode,
             toggle_window_mode,

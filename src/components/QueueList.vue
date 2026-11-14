@@ -28,6 +28,7 @@ const menuItems = computed<MenuItem[]>(() => {
     { label: "Move to top", action: () => store.moveQueueTrack(index, 0), disabled: index === 0 },
     { label: "Move to bottom", action: () => store.moveQueueTrack(index, last), disabled: index === last },
     { label: "Remove from queue", action: () => store.removeFromQueue(index), separated: true },
+    { label: "Remove from here down", action: () => store.removeFromQueueDown(index) },
   ];
 });
 

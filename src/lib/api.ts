@@ -52,6 +52,8 @@ export interface Api {
   seek(positionMs: number): Promise<void>;
   setVolume(volume: number): Promise<void>;
   removeFromQueue(index: number): Promise<void>;
+  /** Removes the queue row at `index` and every row below it. */
+  removeFromQueueDown(index: number): Promise<void>;
   clearQueue(): Promise<void>;
   toggleWindowMode(): Promise<WindowMode>;
   quit(): Promise<void>;
@@ -108,6 +110,7 @@ export const tauriApi: Api = {
   seek: (positionMs) => invoke("seek", { positionMs }),
   setVolume: (volume) => invoke("set_volume", { volume }),
   removeFromQueue: (index) => invoke("remove_from_queue", { index }),
+  removeFromQueueDown: (index) => invoke("remove_from_queue_down", { index }),
   clearQueue: () => invoke("clear_queue"),
   toggleWindowMode: () => invoke("toggle_window_mode"),
   quit: () => invoke("quit_app"),

@@ -214,6 +214,21 @@ impl Queue {
         }
     }
 
+    /// Removes the track at `index` and every track below it. Returns `true` if
+    /// the current track was among them: the cursor is then `None`, since no
+    /// track below the removed ones could take its place.
+    pub fn remove_from(&mut self, index: usize) -> bool {
+        if index >= self.tracks.len() {
+            return false;
+        }
+        self.tracks.truncate(index);
+        let removed_current = self.current.is_some_and(|c| c >= index);
+        if removed_current {
+            self.current = None;
+        }
+        removed_current
+    }
+
     /// Puts the tracks below the current one (all of them if nothing is current) in random order.
     fn shuffle_upcoming(&mut self) {
         let from = self.current.map_or(0, |c| c + 1).min(self.tracks.len());
@@ -604,4 +619,46 @@ mod tests {
         assert_ne!(below, after);
         assert_eq!(next_title(&mut q, false), Some(after));
     }
+
+    // --- remove from here down ---
+
+    #[test]
+    fn remove_from_drops_that_song_and_everything_below_and_keeps_the_cursor_above_it() {
+        let mut q = queue_of(&["a", "b", "c", "d", "e"], 1);
+        assert!(!q.remove_from(3));
+        assert_eq!(order(&q), "abc");
+        assert_eq!(title(&q), Some("b"));
+    }
+
+    #[test]
+    fn remove_from_that_includes_the_current_song_leaves_no_current_song() {
+        let mut q = queue_of(&["a", "b", "c", "d"], 2);
+        assert!(q.remove_from(1));
+        assert_eq!(order(&q), "a");
+        assert_eq!(q.current_index(), None);
+
+        let mut on_it = queue_of(&["a", "b", "c"], 1);
+        assert!(on_it.remove_from(1));
+        assert_eq!(order(&on_it), "a");
+        assert_eq!(on_it.current_index(), None);
+    }
+
+    #[test]
+    fn remove_from_the_top_empties_the_queue_and_a_bad_index_changes_nothing() {
+        let mut q = queue_of(&["a", "b"], 0);
+        assert!(!q.remove_from(5));
+        assert_eq!(order(&q), "ab");
+        assert!(q.remove_from(0));
+        assert!(q.tracks().is_empty());
+    }
+
+    #[test]
+    fn remove_from_follows_the_shuffled_order_on_screen() {
+        let mut q = twelve();
+        q.set_shuffle(true);
+        let shown = order(&q);
+        q.remove_from(6);
+        assert_eq!(order(&q), shown[..6]);
+    }
 }
+

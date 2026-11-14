@@ -328,6 +328,20 @@ impl Player {
         }
     }
 
+    /// Removes the song at `index` and every song below it. If the playing song is
+    /// among them, playback stops; otherwise it carries on untouched.
+    pub fn remove_from(&mut self, index: usize) {
+        if index >= self.queue.tracks().len() {
+            return;
+        }
+        let removed_current = self.queue.remove_from(index);
+        self.emit_queue();
+        if removed_current {
+            self.stop_playback();
+        }
+        self.emit_state();
+    }
+
     pub fn clear(&mut self) {
         self.queue.clear();
         self.stop_playback();
@@ -998,6 +1012,58 @@ mod tests {
         assert_eq!(h.player.state().current_index, Some(2));
         h.player.next();
         assert_eq!(playing(&h), "a");
+    }
+
+    #[test]
+    fn remove_from_below_the_playing_song_keeps_it_playing_and_sends_the_shorter_queue_once() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 2);
+        let queue_events = |h: &Harness| h.events.lock().unwrap().iter().filter(|e| matches!(e, PlayerEvent::Queue(_))).count();
+        let before = queue_events(&h);
+        let loads = h.loads().len();
+
+        h.player.remove_from(5);
+
+        assert_eq!(titles(&h), vec!["a", "b", "c", "d", "e"]);
+        assert_eq!(playing(&h), "c");
+        assert_eq!(h.player.state().status, Status::Playing);
+        assert_eq!(h.loads().len(), loads, "playback is not restarted");
+        assert_eq!(queue_events(&h), before + 1);
+    }
+
+    #[test]
+    fn remove_from_that_includes_the_playing_song_stops_playback_and_keeps_the_songs_above() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 6);
+
+        h.player.remove_from(4);
+
+        assert_eq!(titles(&h), vec!["a", "b", "c", "d"]);
+        assert_eq!(h.player.state().status, Status::Stopped);
+        assert_eq!(h.player.state().current_index, None);
+        assert!(h.player.state().current_track.is_none());
+    }
+
+    #[test]
+    fn remove_from_acts_on_the_shown_order_with_shuffle_on() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 0);
+        h.player.set_shuffle(true);
+        let shown = titles(&h);
+
+        h.player.remove_from(7);
+
+        assert_eq!(titles(&h), shown[..7].to_vec());
+        assert_eq!(h.player.state().current_index, Some(0));
+    }
+
+    #[test]
+    fn remove_from_with_a_bad_index_emits_nothing() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        let seen = h.events.lock().unwrap().len();
+        h.player.remove_from(9);
+        assert_eq!(h.events.lock().unwrap().len(), seen);
     }
 
     fn saved(index: Option<usize>, position_ms: u64) -> Restore {

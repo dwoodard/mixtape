@@ -57,6 +57,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     seek: vi.fn(async () => {}),
     setVolume: vi.fn(async () => {}),
     removeFromQueue: vi.fn(async () => {}),
+    removeFromQueueDown: vi.fn(async () => {}),
     clearQueue: vi.fn(async () => {}),
     toggleWindowMode: vi.fn(async () => "thin" as WindowMode),
     quit: vi.fn(async () => {}),
@@ -379,6 +380,17 @@ describe("play modes", () => {
     await store.stop();
     expect(api.enqueueNext).toHaveBeenCalledWith(tracks);
     expect(api.stop).toHaveBeenCalled();
+  });
+});
+
+describe("remove from here down", () => {
+  it("asks the backend to drop that queue row and everything below it, once", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.removeFromQueueDown(3);
+    expect(api.removeFromQueueDown).toHaveBeenCalledTimes(1);
+    expect(api.removeFromQueueDown).toHaveBeenCalledWith(3);
+    expect(api.removeFromQueue).not.toHaveBeenCalled();
   });
 });
 
