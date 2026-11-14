@@ -208,7 +208,7 @@ impl Player {
     /// Loads a saved session without starting playback. Pressing play resumes
     /// the track at the saved position.
     pub fn restore(&mut self, saved: Restore) {
-        self.queue.set(saved.tracks, saved.index.unwrap_or(0));
+        self.queue.restore(saved.tracks, saved.index);
         self.queue.mark_shuffle(saved.shuffle);
         self.queue.set_repeat(saved.repeat);
         self.volume = saved.volume.clamp(0.0, 1.0);
@@ -329,7 +329,8 @@ impl Player {
     }
 
     /// Removes the song at `index` and every song below it. If the playing song is
-    /// among them, playback stops; otherwise it carries on untouched.
+    /// among them, playback stops with the last song left as the current one (so Play
+    /// starts it); otherwise playback carries on untouched.
     pub fn remove_from(&mut self, index: usize) {
         if index >= self.queue.tracks().len() {
             return;
@@ -1040,8 +1041,8 @@ mod tests {
 
         assert_eq!(titles(&h), vec!["a", "b", "c", "d"]);
         assert_eq!(h.player.state().status, Status::Stopped);
-        assert_eq!(h.player.state().current_index, None);
-        assert!(h.player.state().current_track.is_none());
+        assert_eq!(h.player.state().current_index, Some(3), "the last song left is current, so Play has a target");
+        assert_eq!(playing(&h), "d");
     }
 
     #[test]
@@ -1131,5 +1132,25 @@ mod tests {
         assert_eq!(h.player.state().position_ms, 0);
     }
 
+    #[test]
+    fn restoring_a_queue_with_no_current_song_leaves_none_current() {
+        let mut h = Harness::new();
+        h.player.restore(saved(None, 0));
+        assert_eq!(h.player.state().current_index, None);
+        assert_eq!(h.player.queue_tracks().len(), 3);
+    }
+
     // --- QA (Maya) ---
+
+    #[test]
+    fn qa_play_works_after_remove_from_took_the_playing_song() {
+        let mut h = Harness::new();
+        h.load_abc(1); // b playing
+        h.player.remove_from(1); // removes b and c; queue is [a] with no current song
+        assert_eq!(h.player.state().status, Status::Stopped);
+
+        h.player.toggle(); // Maya presses play / space
+
+        assert_eq!(h.player.state().status, Status::Playing, "play did nothing: queue still holds a, but nothing is current");
+    }
 }

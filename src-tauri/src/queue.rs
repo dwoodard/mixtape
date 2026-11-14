@@ -215,8 +215,8 @@ impl Queue {
     }
 
     /// Removes the track at `index` and every track below it. Returns `true` if
-    /// the current track was among them: the cursor is then `None`, since no
-    /// track below the removed ones could take its place.
+    /// the current track was among them: the cursor then moves to the last track
+    /// left (or `None` if the queue is now empty), so Play has something to start.
     pub fn remove_from(&mut self, index: usize) -> bool {
         if index >= self.tracks.len() {
             return false;
@@ -224,9 +224,15 @@ impl Queue {
         self.tracks.truncate(index);
         let removed_current = self.current.is_some_and(|c| c >= index);
         if removed_current {
-            self.current = None;
+            self.current = index.checked_sub(1);
         }
         removed_current
+    }
+
+    /// Replaces the queue with a saved one. `current` is clamped; `None` means no current track.
+    pub fn restore(&mut self, tracks: Vec<Track>, current: Option<usize>) {
+        self.current = if tracks.is_empty() { None } else { current.map(|c| c.min(tracks.len() - 1)) };
+        self.tracks = tracks;
     }
 
     /// Puts the tracks below the current one (all of them if nothing is current) in random order.
@@ -631,16 +637,26 @@ mod tests {
     }
 
     #[test]
-    fn remove_from_that_includes_the_current_song_leaves_no_current_song() {
+    fn remove_from_that_includes_the_current_song_puts_the_cursor_on_the_last_song_left() {
         let mut q = queue_of(&["a", "b", "c", "d"], 2);
         assert!(q.remove_from(1));
         assert_eq!(order(&q), "a");
-        assert_eq!(q.current_index(), None);
+        assert_eq!(q.current_index(), Some(0));
 
-        let mut on_it = queue_of(&["a", "b", "c"], 1);
-        assert!(on_it.remove_from(1));
-        assert_eq!(order(&on_it), "a");
-        assert_eq!(on_it.current_index(), None);
+        let mut on_it = queue_of(&["a", "b", "c"], 2);
+        assert!(on_it.remove_from(2));
+        assert_eq!(title(&on_it), Some("b"));
+    }
+
+    #[test]
+    fn restoring_with_no_current_song_does_not_invent_one() {
+        let mut q = Queue::default();
+        q.restore(["a", "b"].iter().map(|n| test_track(n)).collect(), None);
+        assert_eq!(q.current_index(), None);
+        q.restore(["a", "b"].iter().map(|n| test_track(n)).collect(), Some(9));
+        assert_eq!(q.current_index(), Some(1), "a saved index past the end is clamped");
+        q.restore(vec![], Some(0));
+        assert_eq!(q.current_index(), None);
     }
 
     #[test]
@@ -650,6 +666,7 @@ mod tests {
         assert_eq!(order(&q), "ab");
         assert!(q.remove_from(0));
         assert!(q.tracks().is_empty());
+        assert_eq!(q.current_index(), None);
     }
 
     #[test]
