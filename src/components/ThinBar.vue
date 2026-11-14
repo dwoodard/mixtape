@@ -56,6 +56,16 @@ const upNext = computed(() => {
     <button v-if="parts.next" class="icon-btn" aria-label="Next" :title="tip('Next', 'next')" :disabled="empty" @click="store.next()">
       <svg viewBox="0 0 16 16"><path d="M11 2h2v12h-2zM2 2l8 6-8 6z" /></svg>
     </button>
+    <button
+      v-if="parts.queueButton"
+      class="icon-btn"
+      aria-label="Queue"
+      :aria-pressed="store.thinPanelOpen.value"
+      title="Queue"
+      @click="store.toggleThinPanel()"
+    >
+      <svg viewBox="0 0 16 16"><path d="M2 3h12v2H2zM2 7h12v2H2zM2 11h8v2H2z" /></svg>
+    </button>
     <!-- Without a title there is still somewhere to grab the bar and drag it. -->
     <span v-if="!parts.title" class="grow" data-tauri-drag-region @dblclick="store.toggleThinPanel()" />
     <div v-if="parts.title" class="lcd title ellipsis" data-tauri-drag-region :title="trackLabel(track)" @dblclick="store.toggleThinPanel()">{{ track?.title ?? "Nothing playing" }}</div>
@@ -75,7 +85,7 @@ const upNext = computed(() => {
       </button>
       <button v-if="parts.shuffle" :class="{ on: p.shuffle }" :aria-pressed="p.shuffle" :title="tip('Shuffle', 'shuffle')" @click="store.toggleShuffle()">Shuffle</button>
     </div>
-    <span v-if="parts.queue" class="meta queue ellipsis" data-tauri-drag-region :title="upNext">{{ upNext }}</span>
+    <span v-if="parts.queueSummary" class="meta queue ellipsis" data-tauri-drag-region :title="upNext">{{ upNext }}</span>
     <VolumeControl class="volume" :volume="p.volume" @change="store.setVolume" />
     <template v-if="parts.expandQuit">
       <button class="icon-btn" aria-label="Expand to large window" :title="tip('Expand', 'toggleMode')" @click="store.toggleMode()">
@@ -125,6 +135,7 @@ const upNext = computed(() => {
 /* Compact versions of the shared controls. */
 .thin :deep(.icon-btn) { width: 18px; height: 18px; }
 .thin :deep(.icon-btn svg) { width: 9px; height: 9px; }
+.thin :deep(.icon-btn[aria-pressed="true"]) { background: var(--accent); color: var(--accent-text); }
 .thin :deep(input[type="range"]) { height: 12px; }
 .thin :deep(input[type="range"]::-webkit-slider-runnable-track) { height: 3px; }
 .thin :deep(input[type="range"]::-webkit-slider-thumb) { width: 9px; height: 9px; margin-top: -3px; }

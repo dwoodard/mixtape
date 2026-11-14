@@ -33,7 +33,7 @@ describe("widthFromDrag", () => {
 });
 
 describe("thin bar tiers", () => {
-  const MINS = [120, 160, 200, 260, 340, 420, 520, 620, 760, 960, 1280];
+  const MINS = [120, 160, 200, 240, 300, 380, 460, 560, 660, 800, 1000, 1320];
   const on = (tier: number) =>
     Object.entries(thinParts(tier)).filter(([, shown]) => shown).map(([key]) => key);
 
@@ -62,20 +62,21 @@ describe("thin bar tiers", () => {
     expect(on(0)).toEqual(["playPause", "volume"]);
   });
 
-  it("growing from the minimum adds next, previous, title, time, scrubber, then the extras", () => {
+  it("growing from the minimum adds next, previous, the queue button, title, time, scrubber, then the extras", () => {
     expect(on(1)).toEqual(["playPause", "volume", "next"]);
     expect(on(2)).toEqual(["playPause", "volume", "next", "prev"]);
-    expect(on(3)).toContain("title");
-    expect(on(3)).not.toContain("time");
-    expect(on(4)).toContain("time");
-    expect(on(4)).not.toContain("seek");
-    expect(on(5)).toContain("seek");
-    expect(on(5)).not.toContain("repeat");
+    expect(on(3)).toEqual(["playPause", "volume", "next", "prev", "queueButton"]);
+    expect(on(4)).toContain("title");
+    expect(on(4)).not.toContain("time");
+    expect(on(5)).toContain("time");
+    expect(on(5)).not.toContain("seek");
+    expect(on(6)).toContain("seek");
+    expect(on(6)).not.toContain("repeat");
   });
 
-  it("the extras arrive as repeat, shuffle, artist, cover art, then the queue summary", () => {
+  it("the extras arrive as repeat, shuffle, artist, cover art, then the queue summary (last)", () => {
     const first = (key: keyof ReturnType<typeof thinParts>) => THIN_TIERS.findIndex((_, t) => thinParts(t)[key]);
-    const order = ["next", "prev", "title", "time", "seek", "repeat", "shuffle", "artist", "cover", "queue"] as const;
+    const order = ["next", "prev", "queueButton", "title", "time", "seek", "repeat", "shuffle", "artist", "cover", "queueSummary"] as const;
     const tiers = order.map(first);
     expect(tiers).toEqual([...tiers].sort((a, b) => a - b));
     expect(new Set(tiers).size).toBe(tiers.length);
@@ -91,9 +92,9 @@ describe("thin bar tiers", () => {
   });
 
   it("an old saved width of 480 shows the tier that fits it", () => {
-    expect(thinTier(480)).toBe(5);
+    expect(thinTier(480)).toBe(6);
     expect(on(thinTier(480))).toEqual(
-      expect.arrayContaining(["playPause", "volume", "next", "prev", "title", "time", "seek", "expandQuit"]),
+      expect.arrayContaining(["playPause", "volume", "next", "prev", "queueButton", "title", "time", "seek", "expandQuit"]),
     );
     expect(on(thinTier(480))).not.toContain("repeat");
   });

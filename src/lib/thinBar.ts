@@ -23,6 +23,8 @@ export interface ThinParts {
   volume: boolean;
   next: boolean;
   prev: boolean;
+  /** Opens and closes the queue panel. Stays reachable when the title is gone. */
+  queueButton: boolean;
   title: boolean;
   time: boolean;
   /** Switch to the large window, and quit. */
@@ -33,27 +35,29 @@ export interface ThinParts {
   artist: boolean;
   cover: boolean;
   album: boolean;
-  queue: boolean;
+  /** How many songs are queued and which is next. */
+  queueSummary: boolean;
 }
 
 /**
  * The widths (logical pixels) at which the bar shows more, narrowest first. Each tier adds
  * to the one before it. Growing from the minimum: play/pause and volume, then next,
- * previous, the title, the time, the scrubber, then the extras. Narrowing drops them in
+ * previous, the queue button, the title, the time, the scrubber, then the extras. Narrowing drops them in
  * the reverse order.
  */
 export const THIN_TIERS: readonly { min: number; adds: (keyof ThinParts)[] }[] = [
   { min: THIN_MIN_WIDTH, adds: ["playPause", "volume"] },
   { min: 160, adds: ["next"] },
   { min: 200, adds: ["prev"] },
-  { min: 260, adds: ["title"] },
-  { min: 340, adds: ["time", "expandQuit"] },
-  { min: 420, adds: ["seek"] },
-  { min: 520, adds: ["repeat"] },
-  { min: 620, adds: ["shuffle"] },
-  { min: 760, adds: ["artist"] },
-  { min: 960, adds: ["cover", "album"] },
-  { min: 1280, adds: ["queue"] },
+  { min: 240, adds: ["queueButton"] },
+  { min: 300, adds: ["title"] },
+  { min: 380, adds: ["time", "expandQuit"] },
+  { min: 460, adds: ["seek"] },
+  { min: 560, adds: ["repeat"] },
+  { min: 660, adds: ["shuffle"] },
+  { min: 800, adds: ["artist"] },
+  { min: 1000, adds: ["cover", "album"] },
+  { min: 1320, adds: ["queueSummary"] },
 ];
 
 /** The tier for a bar this wide. Anything under the minimum, or not a number, is the smallest tier. */
@@ -68,8 +72,8 @@ export function thinTier(width: number): number {
 /** What the bar shows at `tier`. */
 export function thinParts(tier: number): ThinParts {
   const parts: ThinParts = {
-    playPause: false, volume: false, next: false, prev: false, title: false, time: false, expandQuit: false,
-    seek: false, repeat: false, shuffle: false, artist: false, cover: false, album: false, queue: false,
+    playPause: false, volume: false, next: false, prev: false, queueButton: false, title: false, time: false, expandQuit: false,
+    seek: false, repeat: false, shuffle: false, artist: false, cover: false, album: false, queueSummary: false,
   };
   THIN_TIERS.slice(0, tier + 1).forEach((t) => t.adds.forEach((key) => (parts[key] = true)));
   return parts;
