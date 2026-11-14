@@ -10,6 +10,7 @@ pub mod playlists;
 pub mod queue;
 pub mod reveal;
 pub mod session;
+pub mod tags;
 pub mod track;
 pub mod window;
 pub mod window_state;
@@ -188,6 +189,55 @@ async fn trash_duplicates(
             report.holding_folder = batch.map(|b| b.to_string_lossy().into_owned());
         }
         report
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+struct TagWriteResult {
+    path: String,
+    /// The track as re-read from disk after a successful write.
+    track: Option<Track>,
+    error: Option<String>,
+}
+
+/// Writes the same tag edits to each file. Files are handled one at a time and
+/// independently: one failing does not stop or undo the others. Successfully
+/// edited files are also updated in the saved library.
+#[tauri::command]
+async fn write_tags(
+    cache: State<'_, CacheDir>,
+    paths: Vec<String>,
+    edit: tags::TagEdit,
+) -> Result<Vec<TagWriteResult>, String> {
+    edit.validate()?;
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut results = Vec::new();
+        let mut updated = Vec::new();
+        for path in paths {
+            match tags::write_tags(std::path::Path::new(&path), &edit) {
+                Ok(track) => {
+                    if let Ok(meta) = std::fs::metadata(&path) {
+                        let modified_ms = meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map_or(0, |d| d.as_millis() as u64);
+                        updated.push(library::CachedTrack { modified_ms, size: meta.len(), track: track.clone() });
+                    }
+                    results.push(TagWriteResult { path, track: Some(track), error: None });
+                }
+                Err(error) => results.push(TagWriteResult { path, track: None, error: Some(error) }),
+            }
+        }
+        if let Some(root) = cache.last_root() {
+            if let Err(e) = cache.update_tracks(&root, updated) {
+                eprintln!("could not update the library cache after editing tags: {e}");
+            }
+        }
+        results
     })
     .await
     .map_err(|e| e.to_string())
@@ -511,6 +561,7 @@ pub fn run() {
             cached_library,
             remove_from_library,
             reveal_in_finder,
+            write_tags,
             trash_duplicates,
             removed_count,
             restore_removed,

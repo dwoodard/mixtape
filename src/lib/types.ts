@@ -74,3 +74,10 @@ export interface CleanupReport {
   /** Left alone, with why. */
   skipped: { path: string; reason: string }[];
 }
+
+export interface TagWriteResult {
+  path: string;
+  /** The track as re-read from disk after a successful write. */
+  track: Track | null;
+  error: string | null;
+}

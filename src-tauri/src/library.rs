@@ -75,6 +75,8 @@ pub fn scan_folder_with(
         if entry.file_type().is_file()
             && is_audio_file(entry.path())
             && !removed.contains(entry.path().to_string_lossy().as_ref())
+            // A working copy left behind by an interrupted tag edit.
+            && !entry.file_name().to_string_lossy().contains(".mixtape-tmp.")
         {
             let (modified_ms, size) = entry
                 .metadata()

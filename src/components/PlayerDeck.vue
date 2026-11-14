@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { formatClock, formatTime } from "../lib/format";
 import { store } from "../lib/store";
+import { appMode, setAppMode } from "../lib/ui";
 import CoverArt from "./CoverArt.vue";
 import SeekBar from "./SeekBar.vue";
 import VolumeControl from "./VolumeControl.vue";
@@ -15,7 +16,12 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
 
 <template>
   <section class="deck panel" aria-label="Player">
-    <h2 class="panel-title">Mixtape</h2>
+    <h2 class="panel-title">
+      <span class="modes-switch" role="tablist" aria-label="Mode">
+        <button role="tab" :aria-selected="appMode === 'player'" :class="{ on: appMode === 'player' }" @click="setAppMode('player')">Player</button>
+        <button role="tab" :aria-selected="appMode === 'discovery'" :class="{ on: appMode === 'discovery' }" @click="setAppMode('discovery')">Discovery</button>
+      </span>
+    </h2>
     <div class="top">
       <CoverArt
         v-if="track"
@@ -71,6 +77,9 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
 
 <style scoped>
 .deck { padding-bottom: 10px; }
+.modes-switch { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg); border-radius: 8px; }
+.modes-switch button { border: none; background: transparent; padding: 1px 14px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.modes-switch button.on { background: var(--accent); color: var(--accent-text); }
 .top { display: flex; gap: 10px; padding: 10px 12px 6px; }
 .art { flex: none; width: 104px; height: 104px; }
 .clock { flex: 0 0 190px; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; padding: 6px 14px; }

@@ -1,8 +1,9 @@
 import { computed, ref } from "vue";
 import { tauriApi, type Api } from "./api";
+import type { TagEditPayload } from "./tagEdit";
 import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
 import { persistedSet, type FlagStorage } from "./ui";
-import type { CleanupReport, DuplicatePair, PlayerState, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
+import type { CleanupReport, DuplicatePair, PlayerState, TagWriteResult, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 /** What the backend returns when a scan was cancelled. */
 const SCAN_CANCELLED = "cancelled";
@@ -44,6 +45,10 @@ export function createStore(api: Api, storage?: FlagStorage) {
   const duplicateGroups = computed(() =>
     withoutIgnored(findDuplicates(library.value), ignoredDuplicates.items.value),
   );
+
+  /** What the last tag write did, per file, for the editor to show. */
+  const tagResults = ref<TagWriteResult[] | null>(null);
+  const writingTags = ref(false);
 
   /** What the last "move extra copies to Trash" did, for the Duplicates tab to show. */
   const cleanupReport = ref<CleanupReport | null>(null);
@@ -235,6 +240,28 @@ export function createStore(api: Api, storage?: FlagStorage) {
     for (const i of indexes) await api.removeFromQueue(i);
   }
 
+  /**
+   * Writes tag edits to the files of `tracks`. Each file succeeds or fails on
+   * its own; the ones that succeeded are updated in the library with what was
+   * re-read from disk. The per-file outcome is kept in `tagResults`.
+   */
+  async function writeTags(tracks: Pick<Track, "path">[], edit: TagEditPayload) {
+    if (tracks.length === 0 || Object.keys(edit).length === 0) return;
+    writingTags.value = true;
+    tagResults.value = null;
+    libraryError.value = null;
+    try {
+      const results = await api.writeTags(tracks.map((t) => t.path), edit);
+      tagResults.value = results;
+      const fresh = new Map(results.flatMap((r) => (r.track ? [[r.path, r.track] as const] : [])));
+      if (fresh.size > 0) library.value = library.value.map((t) => fresh.get(t.path) ?? t);
+    } catch (e) {
+      libraryError.value = String(e);
+    } finally {
+      writingTags.value = false;
+    }
+  }
+
   /** Shows the songs' files in Finder. */
   async function revealInFinder(tracks: Pick<Track, "path">[]) {
     if (tracks.length === 0) return;
@@ -305,6 +332,9 @@ export function createStore(api: Api, storage?: FlagStorage) {
     importLibrary,
     refresh,
     removeFromLibrary,
+    writeTags,
+    tagResults,
+    writingTags,
     trashDuplicates,
     cleanupReport,
     removeUnplayable,

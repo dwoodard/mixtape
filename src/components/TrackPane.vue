@@ -21,7 +21,7 @@ const props = withDefaults(
   { sidewaysPlayback: true, removable: false, autofocus: true },
 );
 /** Left (-1) or right (1) was pressed and `sidewaysPlayback` is off, so the parent decides what it means. */
-const emit = defineEmits<{ sideways: [direction: -1 | 1] }>();
+const emit = defineEmits<{ sideways: [direction: -1 | 1]; select: [tracks: Track[]] }>();
 
 const sortKey = ref<SortKey>("default");
 const sortDirection = ref<SortDirection>("asc");
@@ -42,6 +42,9 @@ const label = computed(() =>
 // Opening a view hands it the keyboard, so the arrows work without clicking a row first.
 onMounted(() => props.autofocus && nextTick(() => root.value?.focus({ preventScroll: true })));
 defineExpose({ focus: () => root.value?.focus({ preventScroll: true }) });
+
+// Lets a parent (the tag editor) work on whatever is selected.
+watch(chosen, (tracks) => emit("select", tracks), { immediate: true });
 
 watch(order, (paths) => (selection.value = pruneSelection(selection.value, paths)));
 // Changing the selection cancels a pending removal, so it never applies to different songs.

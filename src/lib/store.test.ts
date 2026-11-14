@@ -25,6 +25,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     cachedLibrary: vi.fn(async () => null),
     removeFromLibrary: vi.fn(async () => {}),
     revealInFinder: vi.fn(async () => {}),
+    writeTags: vi.fn(async () => []),
     trashDuplicates: vi.fn(async () => ({ trashed: [], held: [], holdingFolder: null, missing: [], skipped: [] })),
     removedCount: vi.fn(async () => 0),
     restoreRemoved: vi.fn(async () => {}),
@@ -727,5 +728,50 @@ describe("noticing duplicates after a scan", () => {
 
     store.resetIgnoredDuplicates();
     expect(store.duplicateGroups.value).toHaveLength(1);
+  });
+});
+
+describe("writing tags", () => {
+  const a = makeTrack({ path: "/m/a.mp3", title: "Old A" });
+  const b = makeTrack({ path: "/m/b.mp3", title: "Old B" });
+
+  async function loaded(results: object[], extra: Partial<Api> = {}) {
+    const fake = fakeApi({
+      cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: [a, b], scannedAtMs: 1 })),
+      writeTags: vi.fn(async () => results as never),
+      ...extra,
+    });
+    const store = createStore(fake.api);
+    await store.init();
+    return { ...fake, store };
+  }
+
+  it("updates the library with what was re-read, for the files that succeeded only", async () => {
+    const { api, store } = await loaded([
+      { path: "/m/a.mp3", track: { ...a, title: "New A" }, error: null },
+      { path: "/m/b.mp3", track: null, error: "Can't read this file." },
+    ]);
+
+    await store.writeTags([a, b], { title: "New" });
+
+    expect(api.writeTags).toHaveBeenCalledWith(["/m/a.mp3", "/m/b.mp3"], { title: "New" });
+    expect(store.library.value.map((t) => t.title)).toEqual(["New A", "Old B"]);
+    expect(store.tagResults.value?.[1].error).toBe("Can't read this file.");
+    expect(store.writingTags.value).toBe(false);
+  });
+
+  it("does nothing for no songs or no changes", async () => {
+    const { api, store } = await loaded([]);
+    await store.writeTags([], { title: "x" });
+    await store.writeTags([a], {});
+    expect(api.writeTags).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed call and leaves the library alone", async () => {
+    const { store } = await loaded([], { writeTags: vi.fn(async () => Promise.reject("boom")) });
+    await store.writeTags([a], { title: "x" });
+    expect(store.libraryError.value).toBe("boom");
+    expect(store.library.value.map((t) => t.title)).toEqual(["Old A", "Old B"]);
+    expect(store.writingTags.value).toBe(false);
   });
 });

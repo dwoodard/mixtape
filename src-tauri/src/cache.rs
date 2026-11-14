@@ -75,6 +75,18 @@ impl CacheDir {
         std::fs::write(self.last_root_path(), &cache.root)
     }
 
+    /// Replaces cached entries (matched by path) with freshly read ones, for
+    /// example after tags were edited, so the saved library shows the change.
+    pub fn update_tracks(&self, root: &Path, updated: Vec<CachedTrack>) -> std::io::Result<()> {
+        let Some(mut cache) = self.load(root) else { return Ok(()) };
+        for new in updated {
+            if let Some(slot) = cache.tracks.iter_mut().find(|c| c.track.path == new.track.path) {
+                *slot = new;
+            }
+        }
+        self.save(&cache)
+    }
+
     /// Paths the user removed from this library, which scans leave out.
     pub fn removed(&self, root: &Path) -> Removed {
         std::fs::read_to_string(self.removed_path(root))
@@ -200,6 +212,26 @@ mod tests {
         store.remove_tracks(root, &["/music/x.mp3".into()]).unwrap();
         store.clear_removed(root).unwrap();
         assert!(store.removed(root).is_empty());
+    }
+
+    #[test]
+    fn updating_tracks_replaces_matching_entries_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheDir(dir.path().to_path_buf());
+        let root = Path::new("/lib");
+        store.save(&LibraryCache::new(root, vec![cached("a"), cached("b")])).unwrap();
+
+        let mut edited = cached("a");
+        edited.track.title = "Renamed".into();
+        edited.size = 99;
+        let stranger = cached("zzz");
+        store.update_tracks(root, vec![edited, stranger]).unwrap();
+
+        let tracks = store.load(root).unwrap().tracks;
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].track.title, "Renamed");
+        assert_eq!(tracks[0].size, 99);
+        assert_eq!(tracks[1].track.title, "b");
     }
 
     #[test]
