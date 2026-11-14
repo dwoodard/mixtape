@@ -106,9 +106,9 @@ export const proto = reactive({
       reason: "",
       rejected: [],
     },
-    "tag-review": { selected: initial("tag-review", "1"), status: "exploring", refinement: "", reason: "", rejected: [] },
-    "commit-flow": { selected: initial("commit-flow", "1"), status: "exploring", refinement: "", reason: "", rejected: [] },
-    "sources-pane": { selected: initial("sources-pane", "baseline"), status: "exploring", refinement: "", reason: "", rejected: [] },
+    "tag-review": { selected: initial("tag-review", "1"), status: "locked", refinement: "", reason: "", rejected: [] },
+    "commit-flow": { selected: initial("commit-flow", "2"), status: "locked", refinement: "", reason: "", rejected: [] },
+    "sources-pane": { selected: initial("sources-pane", "baseline"), status: "locked", refinement: "", reason: "", rejected: [] },
   } as Record<string, ItemState>,
   /** The item the controls are editing and the arrow keys cycle. */
   active: "tag-review",
