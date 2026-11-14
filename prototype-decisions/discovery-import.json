@@ -1,0 +1,67 @@
+{
+  "prototype": "discovery-2",
+  "status": "design locked; not promoted",
+  "reference": "branch prototype/discovery-import",
+  "locked_at": "2026-11-14",
+  "items": {
+    "discovery-import": {
+      "question": "What should Discovery look like and how should it flow for bringing songs in by link (YouTube / Spotify), converting with ffmpeg, and reviewing tags before they join the library?",
+      "selected": "C",
+      "status": "locked",
+      "reason": "Closest of the three directions",
+      "rejected": [
+        "baseline"
+      ],
+      "decided": [
+        "YouTube fetching is for content the user owns or is licensed to use: one-time notice, no workarounds for protected videos",
+        "When YouTube has a date, the year tag comes from it (release_date first, else upload_date, flagged)"
+      ],
+      "unresolved": [
+        "Where imported files are kept before they are added (a staging folder?)",
+        "Spotify needs a developer client ID for login; is that acceptable?"
+      ]
+    },
+    "inbox-organization": {
+      "question": "How should the inbox in the Workbench be organized so a pile of incoming songs stays manageable?",
+      "selected": "baseline",
+      "status": "locked",
+      "refinement": "we want to start pulling in id3 tags for the songs as we can"
+    },
+    "tag-review": {
+      "question": "How should the inspector present proposed tags so the user can quickly trust, fix, or choose between them (Picard-style)?",
+      "selected": "1",
+      "status": "locked",
+      "note": "Selected in the prototype; locked on the user's instruction to lock the design as it stood (Lock was not clicked on this item)."
+    },
+    "commit-flow": {
+      "question": "How should songs move from the inbox into the library: one at a time, in a reviewed batch, automatically, or through a review queue?",
+      "selected": "2",
+      "status": "locked",
+      "unresolved": [
+        "Undo for real files needs somewhere to move them back to (ties to the staging folder question)."
+      ]
+    },
+    "sources-pane": {
+      "question": "How should links go in: separate boxes per service, one smart box, or a pick-before-you-fetch checklist for playlists?",
+      "selected": "baseline",
+      "status": "locked",
+      "note": "Keeps the current box-per-service pane. Locked on the user's instruction to lock the design as it stood."
+    }
+  },
+  "acceptance": [
+    "Discovery mode shows three panes: Sources (a box each for YouTube, Spotify, and ffmpeg format) | Inbox (flat table in arrival order) | Inspector.",
+    "Inbox rows: select checkbox, title, artist, source, status, match confidence.",
+    "Pasting a video title together with its link works; bracketed noise like [Official Music Video] is stripped and the title split into artist and title.",
+    "Inspector: every tag field says where its value came from (video title, channel, YouTube release date, upload date, lookup, chosen release) and offers alternatives from other sources; a missing or doubtful field is visibly flagged.",
+    "Also in the Inspector: the video's own title, an already-in-library warning, and the destination path (Artist/Album/NN Title.ext).",
+    "Year: YouTube's release_date first, else upload_date; when it is only the upload date, say so and ask for a check.",
+    "Auto-add is OPT-IN (off by default). When on, a song is added automatically only if its match is at or above the user's threshold (default 70%), every key tag is filled in, and it is not already in the library. Everything auto-added is listed with an Undo.",
+    "Auto-add supersedes the earlier rule 'never write tags without an explicit confirm' only for imported songs and only while the user has switched it on; manual Add stays available, and anything below the threshold waits for review.",
+    "Spotify links show which tracks are owned and which are missing, and can fetch the missing ones (needs a developer client ID for the login).",
+    "Tags are pulled in from real sources where possible: what the link provides, embedded tags in the fetched file, then MusicBrainz lookups; anything guessed is flagged for review."
+  ],
+  "findings": {
+    "youtube_metadata_for_example": "yt-dlp returns title, channel/uploader, release_date, duration and a thumbnail; no album or track number (those only exist on auto-generated Topic uploads). Album needs a MusicBrainz lookup.",
+    "undo_and_staging": "Undo of an auto-add is only safe if the file can be moved back out of the library, which is why the staging-folder decision matters."
+  }
+}
