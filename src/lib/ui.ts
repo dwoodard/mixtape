@@ -1,9 +1,9 @@
 import { ref } from "vue";
 import type { Track } from "./types";
 
-export type LibraryView = "tracks" | "albums" | "artists" | "playlists" | "duplicates";
+export type LibraryView = "tracks" | "albums" | "artists" | "duplicates";
 
-/** Which library view is showing. Shared so the queue panel's "Load" can open playlists. */
+/** Which library view is showing. */
 export const libraryView = ref<LibraryView>("tracks");
 
 /** The few storage methods we need, so tests can pass a fake. */
@@ -144,5 +144,7 @@ export function withdrawSelection(owner: symbol) {
 
 export const paletteOpen = ref(false);
 export const helpOpen = ref(false);
-/** The queue's "save as playlist" name form is open. */
+/** The queue's "save under a name" form is open. */
 export const savingQueue = ref(false);
+/** The queue's list of saved queues is open. */
+export const loadingQueue = ref(false);

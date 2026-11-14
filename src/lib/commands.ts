@@ -5,6 +5,7 @@ import {
   appMode,
   helpOpen,
   libraryView,
+  loadingQueue,
   paletteOpen,
   savingQueue,
   selectedSongs,
@@ -45,7 +46,7 @@ export function createCommands(store: Store): Command[] {
 
   const focusSearch = async () => {
     setAppMode("player");
-    if (libraryView.value === "playlists" || libraryView.value === "duplicates") libraryView.value = "tracks";
+    if (libraryView.value === "duplicates") libraryView.value = "tracks";
     await nextTick();
     const input = document.getElementById("library-filter") as HTMLInputElement | null;
     input?.focus();
@@ -77,7 +78,6 @@ export function createCommands(store: Store): Command[] {
     viewTracks: { run: showView("tracks") },
     viewAlbums: { run: showView("albums") },
     viewArtists: { run: showView("artists") },
-    viewPlaylists: { run: showView("playlists") },
     viewDuplicates: { enabled: store.duplicateGroups.value.length > 0, run: showView("duplicates") },
     discovery: { run: () => setAppMode(appMode.value === "player" ? "discovery" : "player") },
     toggleMode: { run: () => void store.toggleMode() },
@@ -94,7 +94,16 @@ export function createCommands(store: Store): Command[] {
       enabled: hasQueue,
       run: () => {
         setAppMode("player");
+        loadingQueue.value = false;
         savingQueue.value = true;
+      },
+    },
+    loadQueue: {
+      enabled: store.savedQueues.value.length > 0,
+      run: () => {
+        setAppMode("player");
+        savingQueue.value = false;
+        loadingQueue.value = true;
       },
     },
     clearQueue: { enabled: hasQueue, run: () => store.clearQueue() },

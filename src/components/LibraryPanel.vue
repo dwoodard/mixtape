@@ -9,7 +9,6 @@ import AlbumsView from "./AlbumsView.vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import DuplicatesView from "./DuplicatesView.vue";
 import ArtistsView from "./ArtistsView.vue";
-import PlaylistsView from "./PlaylistsView.vue";
 import TrackPane from "./TrackPane.vue";
 
 const query = libraryQuery;
@@ -65,7 +64,6 @@ const tabs = computed<{ id: LibraryView; label: string; tip: string }[]>(() => [
   { id: "tracks", label: "Tracks", tip: tip("Show Tracks", "viewTracks") },
   { id: "albums", label: "Albums", tip: tip("Show Albums", "viewAlbums") },
   { id: "artists", label: "Artists", tip: tip("Show Artists", "viewArtists") },
-  { id: "playlists", label: "Playlists", tip: tip("Show Playlists", "viewPlaylists") },
   ...(duplicateCount.value > 0
     ? [{ id: "duplicates" as const, label: `Duplicates (${duplicateCount.value})`, tip: tip("Show Duplicates", "viewDuplicates") }]
     : []),
@@ -109,7 +107,7 @@ const scanLabel = computed(() => {
         type="search"
         placeholder="Filter"
         aria-label="Filter library"
-        :disabled="libraryView === 'playlists' || libraryView === 'duplicates'"
+        :disabled="libraryView === 'duplicates'"
       />
       <span class="count">
         {{ filtered.length }} tracks<template v-if="store.scannedAt.value">
@@ -144,8 +142,7 @@ const scanLabel = computed(() => {
     <p v-if="store.scanning.value" class="status" role="status">{{ scanLabel }}</p>
     <p v-if="store.scanError.value" class="error" role="alert">{{ store.scanError.value }}</p>
 
-    <PlaylistsView v-if="libraryView === 'playlists'" />
-    <DuplicatesView v-else-if="libraryView === 'duplicates'" />
+    <DuplicatesView v-if="libraryView === 'duplicates'" />
     <div v-else-if="store.library.value.length === 0" class="hint">
       <p>{{ store.scanning.value ? scanLabel : "Open a folder to load your music." }}</p>
       <!-- First-run actions: shown only while there is nothing to browse. -->

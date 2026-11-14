@@ -392,13 +392,13 @@ describe("play modes", () => {
   });
 });
 
-describe("playlists", () => {
-  it("loads the saved playlists on init", async () => {
+describe("saved queues", () => {
+  it("loads the saved queues on init", async () => {
     const summary = { id: "mix", name: "Mix", trackCount: 3, durationMs: 1, updatedAtMs: 1 };
     const { api } = fakeApi({ listPlaylists: vi.fn(async () => [summary]) });
     const store = createStore(api);
     await store.init();
-    expect(store.playlists.value).toEqual([summary]);
+    expect(store.savedQueues.value).toEqual([summary]);
   });
 
   it("saves the current queue under a name and refreshes the list", async () => {
@@ -408,7 +408,7 @@ describe("playlists", () => {
     await store.init();
     listeners.queue[0](queued);
 
-    const ok = await store.saveQueueAsPlaylist("Road Trip");
+    const ok = await store.saveQueue("Road Trip");
 
     expect(ok).toBe(true);
     expect(api.savePlaylist).toHaveBeenCalledWith("Road Trip", queued);
@@ -419,24 +419,47 @@ describe("playlists", () => {
     const { api } = fakeApi({ savePlaylist: vi.fn(async () => Promise.reject("Give the playlist a name.")) });
     const store = createStore(api);
 
-    expect(await store.saveQueueAsPlaylist(" ")).toBe(false);
-    expect(store.playlistError.value).toBe("Give the playlist a name.");
+    expect(await store.saveQueue(" ")).toBe(false);
+    expect(store.savedQueueError.value).toBe("Give the playlist a name.");
   });
 
-  it("returns a playlist's tracks, or nothing plus an error when it is gone", async () => {
+  it("loading replaces the queue and starts playing from its first song", async () => {
     const { api } = fakeApi();
     const store = createStore(api);
-    expect((await store.playlistTracks("mix"))[0].title).toBe("From playlist");
 
+    expect(await store.loadSavedQueue("mix", "replace")).toBe(true);
+
+    expect(api.loadPlaylist).toHaveBeenCalledWith("mix");
+    expect(api.playTracks).toHaveBeenCalledWith([expect.objectContaining({ title: "From playlist" })], 0);
+    expect(api.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("loading can add the songs to the end of the queue instead", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+
+    expect(await store.loadSavedQueue("mix", "append")).toBe(true);
+
+    expect(api.enqueue).toHaveBeenCalledWith([expect.objectContaining({ title: "From playlist" })]);
+    expect(api.playTracks).not.toHaveBeenCalled();
+  });
+
+  it("a saved queue that is gone leaves the queue alone and reports why", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
     (api.loadPlaylist as ReturnType<typeof vi.fn>).mockRejectedValueOnce("gone");
-    expect(await store.playlistTracks("mix")).toEqual([]);
-    expect(store.playlistError.value).toBe("gone");
+
+    expect(await store.loadSavedQueue("mix", "replace")).toBe(false);
+
+    expect(store.savedQueueError.value).toBe("gone");
+    expect(api.playTracks).not.toHaveBeenCalled();
+    expect(api.listPlaylists).toHaveBeenCalled();
   });
 
   it("deletes and refreshes", async () => {
     const { api } = fakeApi();
     const store = createStore(api);
-    await store.deletePlaylist("mix");
+    await store.deleteSavedQueue("mix");
     expect(api.deletePlaylist).toHaveBeenCalledWith("mix");
     expect(api.listPlaylists).toHaveBeenCalled();
   });

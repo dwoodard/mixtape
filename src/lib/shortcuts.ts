@@ -38,8 +38,7 @@ export const COMMANDS: readonly CommandDef[] = [
   { id: "viewTracks", title: "Show Tracks", group: "Navigation", keys: cmd("1") },
   { id: "viewAlbums", title: "Show Albums", group: "Navigation", keys: cmd("2") },
   { id: "viewArtists", title: "Show Artists", group: "Navigation", keys: cmd("3") },
-  { id: "viewPlaylists", title: "Show Playlists", group: "Navigation", keys: cmd("4") },
-  { id: "viewDuplicates", title: "Show Duplicates", group: "Navigation", keys: cmd("5") },
+  { id: "viewDuplicates", title: "Show Duplicates", group: "Navigation", keys: cmd("4") },
   { id: "discovery", title: "Switch between Player and Discovery", group: "Navigation", keys: cmd("d") },
   { id: "toggleMode", title: "Switch between thin bar and large window", group: "Navigation", keys: cmd("t", { shift: true }) },
 
@@ -51,7 +50,8 @@ export const COMMANDS: readonly CommandDef[] = [
   { id: "reveal", title: "Reveal selected songs in Finder", group: "Selection", keys: cmd("r", { shift: true }) },
   { id: "remove", title: "Remove selected songs from the library", group: "Selection", keys: { key: "Delete" }, local: true },
 
-  { id: "saveQueue", title: "Save the queue as a playlist", group: "Queue and library", keys: cmd("s") },
+  { id: "saveQueue", title: "Save the queue under a name", group: "Queue and library", keys: cmd("s") },
+  { id: "loadQueue", title: "Load a saved queue", group: "Queue and library" },
   { id: "clearQueue", title: "Clear the queue", group: "Queue and library", keys: cmd("k", { shift: true }) },
   { id: "openFolder", title: "Open a music folder", group: "Queue and library", keys: cmd("o") },
   { id: "refresh", title: "Refresh the library", group: "Queue and library", keys: cmd("r") },

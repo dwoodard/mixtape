@@ -21,7 +21,7 @@ const problem = computed(() => {
     <PlayerDeck />
     <div v-if="problem" class="error" role="alert">
       <span class="text">{{ problem.text }}</span>
-      <button title="Take it out of the library and the playlist" @click="store.removeUnplayable(problem.path)">
+      <button title="Take it out of the library and the queue" @click="store.removeUnplayable(problem.path)">
         Remove from library
       </button>
       <button

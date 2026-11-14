@@ -4,7 +4,7 @@ import { formatTime } from "../lib/format";
 import { finalIndex, insertionIndex } from "../lib/reorder";
 import { imports, store } from "../lib/store";
 import { tip } from "../lib/shortcuts";
-import { libraryView, savingQueue } from "../lib/ui";
+import { loadingQueue, savingQueue } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 
 const total = computed(() => store.queue.value.reduce((sum, t) => sum + t.durationMs, 0));
@@ -28,7 +28,7 @@ const menuItems = computed<MenuItem[]>(() => {
     { label: "Move down", action: () => store.moveQueueTrack(index, index + 1), disabled: index === last },
     { label: "Move to top", action: () => store.moveQueueTrack(index, 0), disabled: index === 0 },
     { label: "Move to bottom", action: () => store.moveQueueTrack(index, last), disabled: index === last },
-    { label: "Remove from playlist", action: () => store.removeFromQueue(index), separated: true },
+    { label: "Remove from queue", action: () => store.removeFromQueue(index), separated: true },
   ];
 });
 
@@ -78,20 +78,22 @@ function startDrag(index: number, event: PointerEvent) {
 }
 onBeforeUnmount(() => endDrag(false));
 
-// Shared, so the Cmd+S shortcut and the command palette can open the form.
+// Shared, so the Cmd+S shortcut and the command palette can open the form and the list.
 const saving = savingQueue;
+const loading = loadingQueue;
+const confirmingDelete = ref<string | null>(null);
 const name = ref("");
 const nameInput = ref<HTMLInputElement | null>(null);
 
 watch(saving, async (open) => {
   if (!open) return;
-  store.playlistError.value = null;
+  store.savedQueueError.value = null;
   await nextTick();
   nameInput.value?.focus();
 });
 
 async function save() {
-  if (await store.saveQueueAsPlaylist(name.value)) {
+  if (await store.saveQueue(name.value)) {
     saving.value = false;
     name.value = "";
   }
@@ -100,26 +102,59 @@ async function save() {
 function cancel() {
   saving.value = false;
   name.value = "";
-  store.playlistError.value = null;
+  store.savedQueueError.value = null;
+}
+
+watch(loading, (open) => {
+  confirmingDelete.value = null;
+  if (open) store.savedQueueError.value = null;
+});
+
+/** Replacing swaps the queue and starts playing; adding keeps what is queued. */
+async function load(id: string, how: "replace" | "append") {
+  if (await store.loadSavedQueue(id, how)) loading.value = false;
+}
+
+async function remove(id: string) {
+  if (confirmingDelete.value !== id) {
+    confirmingDelete.value = id;
+    return;
+  }
+  confirmingDelete.value = null;
+  await store.deleteSavedQueue(id);
+  if (store.savedQueues.value.length === 0) loading.value = false;
 }
 </script>
 
 <template>
-  <section class="queue panel" aria-label="Playlist">
+  <section class="queue panel" aria-label="Queue">
     <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="menu = null" />
-    <h2 class="panel-title">Playlist</h2>
+    <h2 class="panel-title">Queue</h2>
     <div class="tools">
       <span class="total">{{ store.queue.value.length }} {{ store.queue.value.length === 1 ? "track" : "tracks" }} · {{ formatTime(total) }}</span>
-      <button :title="tip('Save the queue as a playlist', 'saveQueue')" :disabled="store.queue.value.length === 0" @click="saving = true">Save…</button>
-      <button title="Open saved playlists" @click="libraryView = 'playlists'">Load…</button>
+      <button :title="tip('Save the queue under a name', 'saveQueue')" :disabled="store.queue.value.length === 0" @click="loading = false; saving = true">Save…</button>
+      <button :title="tip('Load a saved queue', 'loadQueue')" :disabled="store.savedQueues.value.length === 0" @click="saving = false; loading = !loading">Load…</button>
       <button :title="tip('Clear the queue', 'clearQueue')" :disabled="store.queue.value.length === 0" @click="store.clearQueue()">Clear</button>
     </div>
     <form v-if="saving" class="save" @submit.prevent="save" @keydown.esc="cancel">
-      <input ref="nameInput" v-model="name" class="field" placeholder="Playlist name" aria-label="Playlist name" />
+      <input ref="nameInput" v-model="name" class="field" placeholder="Name for this queue" aria-label="Queue name" />
       <button type="submit">Save</button>
       <button type="button" @click="cancel">Cancel</button>
     </form>
-    <p v-if="store.playlistError.value && saving" class="error" role="alert">{{ store.playlistError.value }}</p>
+    <ul v-if="loading" class="saved" aria-label="Saved queues" @keydown.esc="loading = false">
+      <li v-for="q in store.savedQueues.value" :key="q.id">
+        <button class="pick" :title="`Replace the queue with ${q.name} and play it`" @click="load(q.id, 'replace')">
+          <span class="ellipsis">{{ q.name }}</span>
+          <span class="meta">{{ q.trackCount }} · {{ formatTime(q.durationMs) }}</span>
+        </button>
+        <button title="Add to the end of the queue" @click="load(q.id, 'append')">Add</button>
+        <button :class="{ danger: confirmingDelete === q.id }" :title="`Delete the saved queue ${q.name}`" @click="remove(q.id)">
+          {{ confirmingDelete === q.id ? "Sure?" : "Delete" }}
+        </button>
+      </li>
+      <li class="close"><button type="button" @click="loading = false">Close</button></li>
+    </ul>
+    <p v-if="store.savedQueueError.value && (saving || loading)" class="error" role="alert">{{ store.savedQueueError.value }}</p>
     <ol ref="list" :class="{ dragging: drag }">
       <li
         v-for="(t, i) in store.queue.value"
@@ -171,6 +206,14 @@ li:hover .rm { visibility: visible; }
 .empty { color: var(--muted); padding: 10px 12px; margin: 0; background: var(--panel-3); }
 .save { display: flex; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .save .field { flex: 1; min-width: 0; }
+.saved { list-style: none; margin: 0; padding: 4px 8px; max-height: 140px; overflow-y: auto; border-bottom: 1px solid var(--line); }
+.saved li { display: flex; gap: 4px; align-items: center; height: auto; padding: 2px 0; background: none; }
+.saved li:hover { background: none; }
+.saved .pick { flex: 1; min-width: 0; display: flex; justify-content: space-between; gap: 8px; text-align: left; }
+.saved .meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.saved button { padding: 1px 8px; font-size: 12px; }
+.saved .close { justify-content: flex-end; }
+.danger { background: #8a2f36; border-color: #8a2f36; color: #fff; }
 .error { margin: 0; padding: 6px 12px; background: #4a2328; color: #ffb4b4; font-size: 12px; }
 /* A slim bar under the title: the actions are occasional, so they stay small. */
 .tools { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); }

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCommands, dispatchKey, type Command, type KeyEventLike } from "./commands";
 import type { Store } from "./store";
 import { makePlayerState, makeTrack } from "./testing";
-import { appMode, helpOpen, libraryView, paletteOpen, publishSelection, savingQueue, selectedSongs, tagEditPaths } from "./ui";
+import { appMode, helpOpen, libraryView, loadingQueue, paletteOpen, publishSelection, savingQueue, selectedSongs, tagEditPaths } from "./ui";
 
 function fakeStore(over: Record<string, unknown> = {}) {
   const store = {
@@ -12,6 +12,7 @@ function fakeStore(over: Record<string, unknown> = {}) {
     scanning: { value: false },
     folder: { value: "/music" },
     duplicateGroups: { value: [] },
+    savedQueues: { value: [] as unknown[] },
     toggle: vi.fn(),
     seek: vi.fn(),
     setVolume: vi.fn(),
@@ -42,6 +43,7 @@ beforeEach(() => {
   helpOpen.value = false;
   tagEditPaths.value = [];
   savingQueue.value = false;
+  loadingQueue.value = false;
   selectedSongs.value = [];
   appMode.value = "player";
   libraryView.value = "tracks";
@@ -107,6 +109,14 @@ describe("commands", () => {
     expect(savingQueue.value).toBe(true);
     store.queue.value = [];
     expect(get(createCommands(store), "saveQueue").enabled).toBe(false);
+  });
+
+  it("opens the saved-queue list, and only when there are saved queues", async () => {
+    const store = fakeStore({ savedQueues: { value: [] } });
+    expect(get(createCommands(store), "loadQueue").enabled).toBe(false);
+    store.savedQueues.value = [{ id: "mix", name: "Mix", trackCount: 1, durationMs: 1, updatedAtMs: 1 }];
+    await get(createCommands(store), "loadQueue").run!();
+    expect(loadingQueue.value).toBe(true);
   });
 
   it("limits the thin bar to playback and the window switch", () => {
