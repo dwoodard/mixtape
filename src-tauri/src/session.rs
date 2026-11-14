@@ -67,13 +67,11 @@ impl SessionStore {
         write_json(&self.state_path(), state)
     }
 
-    /// The saved session, or `None` when there is no (readable) saved queue.
+    /// The saved session, or `None` when there is no (readable) saved queue file.
     pub fn load(&self) -> Option<Restore> {
         let tracks: Vec<Track> =
             serde_json::from_str(&std::fs::read_to_string(self.queue_path()).ok()?).ok()?;
-        if tracks.is_empty() {
-            return None;
-        }
+        // An empty queue still restores: shuffle, repeat and volume are settings of their own.
         let state: SessionState = std::fs::read_to_string(self.state_path())
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
@@ -251,12 +249,16 @@ mod tests {
         assert!(store.load().is_none());
     }
 
+    // Changed from "an empty saved queue restores nothing": the shuffle, repeat and volume
+    // settings must survive a relaunch even when the queue is empty.
     #[test]
-    fn an_empty_saved_queue_restores_nothing() {
+    fn an_empty_saved_queue_restores_as_an_empty_queue() {
         let dir = tempfile::tempdir().unwrap();
         let store = SessionStore::new(dir.path().to_path_buf());
         store.save_queue(&[]).unwrap();
-        assert!(store.load().is_none());
+        let restored = store.load().unwrap();
+        assert!(restored.tracks.is_empty());
+        assert_eq!(restored.index, None);
     }
 
     #[test]
@@ -290,5 +292,19 @@ mod tests {
         writer.flush();
 
         assert_eq!(store.load().unwrap().position_ms, 55_000, "relaunch would resume at the start of the song");
+    }
+
+    // --- QA (Maya) ---
+
+    #[test]
+    fn qa_an_empty_queue_still_remembers_shuffle_repeat_and_volume() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        store.save_queue(&[]).unwrap();
+        store.save_state(&SessionState::from(&player_state(0, 0))).unwrap(); // shuffle on, repeat one, volume 0.5
+
+        let restored = store.load();
+
+        assert!(restored.is_some_and(|r| r.shuffle && r.volume == 0.5), "settings were dropped with the empty queue");
     }
 }
