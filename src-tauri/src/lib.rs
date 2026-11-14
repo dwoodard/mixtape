@@ -1,4 +1,6 @@
 pub mod library;
+pub mod player;
+pub mod queue;
 pub mod track;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
