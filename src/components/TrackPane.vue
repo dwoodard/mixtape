@@ -16,10 +16,10 @@ import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import TrackTable from "./TrackTable.vue";
 
 /** A list of tracks with sorting, multi-select, and play / play next / queue actions. */
-const props = withDefaults(defineProps<{ tracks: Track[]; sidewaysPlayback?: boolean; removable?: boolean }>(), {
-  sidewaysPlayback: true,
-  removable: false,
-});
+const props = withDefaults(
+  defineProps<{ tracks: Track[]; sidewaysPlayback?: boolean; removable?: boolean; autofocus?: boolean }>(),
+  { sidewaysPlayback: true, removable: false, autofocus: true },
+);
 /** Left (-1) or right (1) was pressed and `sidewaysPlayback` is off, so the parent decides what it means. */
 const emit = defineEmits<{ sideways: [direction: -1 | 1] }>();
 
@@ -40,7 +40,8 @@ const label = computed(() =>
 );
 
 // Opening a view hands it the keyboard, so the arrows work without clicking a row first.
-onMounted(() => nextTick(() => root.value?.focus({ preventScroll: true })));
+onMounted(() => props.autofocus && nextTick(() => root.value?.focus({ preventScroll: true })));
+defineExpose({ focus: () => root.value?.focus({ preventScroll: true }) });
 
 watch(order, (paths) => (selection.value = pruneSelection(selection.value, paths)));
 // Changing the selection cancels a pending removal, so it never applies to different songs.

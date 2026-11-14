@@ -100,8 +100,9 @@ const scanLabel = computed(() => {
 .tabs { display: flex; gap: 4px; padding: 6px 10px 0; }
 .tabs button { border-radius: 7px 7px 0 0; border-bottom: none; background: var(--panel-3); color: var(--muted); }
 .tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.toolbar { display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); border-top: 1px solid var(--line); }
-.filter { flex: 1; min-width: 80px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); border-top: 1px solid var(--line); }
+.toolbar button { white-space: nowrap; }
+.filter { flex: 1; min-width: 120px; }
 .count { color: var(--muted); white-space: nowrap; font-size: 12px; }
 .status { margin: 0; padding: 5px 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); }
 .hint { color: var(--muted); text-align: center; margin: 48px 0; }

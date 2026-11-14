@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { nextTick, onMounted, ref, watch } from "vue";
 import { formatTime } from "../lib/format";
+import { stepList } from "../lib/gridNav";
 import { store } from "../lib/store";
 import type { Track } from "../lib/types";
 import TrackPane from "./TrackPane.vue";
@@ -23,6 +24,25 @@ watch(
   { deep: false },
 );
 
+const list = ref<HTMLElement | null>(null);
+const pane = ref<{ focus: () => void } | null>(null);
+onMounted(() => list.value?.focus({ preventScroll: true }));
+
+/** Up/down choose the previous/next playlist; right moves into its songs. */
+function onKey(event: KeyboardEvent) {
+  const all = store.playlists.value;
+  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault();
+    const at = stepList(all.findIndex((p) => p.id === chosen.value), event.key, all.length);
+    if (at < 0) return;
+    chosen.value = all[at].id;
+    nextTick(() => list.value?.querySelector(`[data-index="${at}"]`)?.scrollIntoView({ block: "nearest" }));
+  } else if ((event.key === "ArrowRight" || event.key === "Enter") && chosen.value) {
+    event.preventDefault();
+    pane.value?.focus();
+  }
+}
+
 async function remove() {
   if (!confirming.value) {
     confirming.value = true;
@@ -36,9 +56,9 @@ async function remove() {
 
 <template>
   <div class="playlists">
-    <ul class="list" aria-label="Playlists">
-      <li v-for="p in store.playlists.value" :key="p.id">
-        <button :class="{ on: p.id === chosen }" @click="chosen = p.id">
+    <ul ref="list" class="list" aria-label="Playlists" tabindex="0" @keydown="onKey">
+      <li v-for="(p, i) in store.playlists.value" :key="p.id">
+        <button :class="{ on: p.id === chosen }" tabindex="-1" :data-index="i" @click="chosen = p.id">
           <span class="name ellipsis">{{ p.name }}</span>
           <span class="count">{{ p.trackCount }} · {{ formatTime(p.durationMs) }}</span>
         </button>
@@ -53,7 +73,13 @@ async function remove() {
           {{ confirming ? "Click again to delete" : "Delete playlist" }}
         </button>
       </div>
-      <TrackPane :tracks="tracks" />
+      <TrackPane
+        ref="pane"
+        :tracks="tracks"
+        :autofocus="false"
+        :sideways-playback="false"
+        @sideways="(d) => d < 0 && list?.focus()"
+      />
     </div>
     <p v-else class="hint">Choose a playlist.</p>
     <p v-if="store.playlistError.value" class="error" role="alert">{{ store.playlistError.value }}</p>
@@ -62,10 +88,11 @@ async function remove() {
 
 <style scoped>
 .playlists { display: flex; flex: 1; min-height: 0; position: relative; }
-.list { list-style: none; margin: 0; padding: 4px; width: 240px; flex: none; overflow-y: auto; border-right: 1px solid var(--line); }
+.list { outline: none; list-style: none; margin: 0; padding: 4px; width: 240px; flex: none; overflow-y: auto; border-right: 1px solid var(--line); }
 .list button { display: flex; justify-content: space-between; gap: 8px; width: 100%; border: none; background: transparent; border-radius: 6px; text-align: left; padding: 5px 8px; }
 .list button:hover { background: var(--panel-2); }
 .list button.on { background: var(--accent); color: var(--accent-text); }
+.name { min-width: 0; flex: 1; }
 .count { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .list button.on .count { color: rgba(255, 255, 255, 0.8); }
 .empty { color: var(--muted); padding: 8px; line-height: 1.4; }

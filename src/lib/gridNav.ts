@@ -29,3 +29,14 @@ export function stepIndex(index: number, delta: -1 | 1, count: number): number {
   if (count === 0) return -1;
   return Math.min(count - 1, Math.max(0, index + delta));
 }
+
+/**
+ * The index an Up/Down press selects in a list where `current` is the
+ * selected index or -1 for none. From nothing, Down picks the first item and
+ * Up the last. Stops at the ends. -1 for an empty list.
+ */
+export function stepList(current: number, key: "ArrowUp" | "ArrowDown", count: number): number {
+  if (count === 0) return -1;
+  if (current < 0) return key === "ArrowDown" ? 0 : count - 1;
+  return stepIndex(current, key === "ArrowDown" ? 1 : -1, count);
+}
