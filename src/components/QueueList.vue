@@ -48,6 +48,18 @@ function cancel() {
   <section class="queue panel" aria-label="Playlist">
     <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="menu = null" />
     <h2 class="panel-title">Playlist</h2>
+    <div class="tools">
+      <span class="total">{{ store.queue.value.length }} {{ store.queue.value.length === 1 ? "track" : "tracks" }} · {{ formatTime(total) }}</span>
+      <button :disabled="store.queue.value.length === 0" @click="startSaving()">Save…</button>
+      <button title="Open saved playlists" @click="libraryView = 'playlists'">Load…</button>
+      <button :disabled="store.queue.value.length === 0" @click="store.clearQueue()">Clear</button>
+    </div>
+    <form v-if="saving" class="save" @submit.prevent="save" @keydown.esc="cancel">
+      <input ref="nameInput" v-model="name" class="field" placeholder="Playlist name" aria-label="Playlist name" />
+      <button type="submit">Save</button>
+      <button type="button" @click="cancel">Cancel</button>
+    </form>
+    <p v-if="store.playlistError.value && saving" class="error" role="alert">{{ store.playlistError.value }}</p>
     <ol>
       <li
         v-for="(t, i) in store.queue.value"
@@ -63,20 +75,6 @@ function cancel() {
       </li>
     </ol>
     <p v-if="store.queue.value.length === 0" class="empty">Double-click a track, or add some with “Add to queue”.</p>
-
-    <form v-if="saving" class="save" @submit.prevent="save" @keydown.esc="cancel">
-      <input ref="nameInput" v-model="name" class="field" placeholder="Playlist name" aria-label="Playlist name" />
-      <button type="submit">Save</button>
-      <button type="button" @click="cancel">Cancel</button>
-    </form>
-    <p v-if="store.playlistError.value && saving" class="error" role="alert">{{ store.playlistError.value }}</p>
-
-    <footer>
-      <span class="total">{{ store.queue.value.length }} tracks · {{ formatTime(total) }}</span>
-      <button :disabled="store.queue.value.length === 0" @click="startSaving()">Save…</button>
-      <button title="Open saved playlists" @click="libraryView = 'playlists'">Load…</button>
-      <button :disabled="store.queue.value.length === 0" @click="store.clearQueue()">Clear</button>
-    </footer>
   </section>
 </template>
 
@@ -91,9 +89,11 @@ li.current .n, li.current .dur { color: rgba(255, 255, 255, 0.8); }
 .rm { width: 20px; height: 20px; padding: 0; line-height: 1; border-radius: 50%; visibility: hidden; }
 li:hover .rm { visibility: visible; }
 .empty { color: var(--muted); padding: 10px 12px; margin: 0; background: var(--panel-3); }
-.save { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); }
+.save { display: flex; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .save .field { flex: 1; min-width: 0; }
 .error { margin: 0; padding: 6px 12px; background: #4a2328; color: #ffb4b4; font-size: 12px; }
-footer { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); }
+/* A slim bar under the title: the actions are occasional, so they stay small. */
+.tools { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.tools button { padding: 1px 8px; font-size: 12px; }
 .total { margin-right: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 </style>
