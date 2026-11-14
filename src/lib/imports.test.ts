@@ -15,7 +15,7 @@ function item(overrides: Partial<ImportItem> = {}): ImportItem {
     videoTitle: "Artist - Song",
     channel: "Artist",
     durationSecs: 180,
-    proposal: { title: "Song", artist: "Artist", album: "Album", albumArtist: "", year: "2021", track: "", genre: "" },
+    proposal: { title: "Song", artist: "Artist", album: "Album", albumArtist: "", year: "2021", track: "", genre: "", disc: "", discTotal: "" },
     sources: {},
     alternatives: {},
     notes: [],
@@ -44,6 +44,7 @@ function setup(library: Track[] = [], apiOverrides: Partial<Api> = {}, storage =
     importSetTags: vi.fn(async (_id: number, patch: object) => item({ proposal: { ...item().proposal, ...patch } })),
     importAdd: vi.fn(async () => makeTrack({ path: "/lib/Artist/Album/Song.mp3" })),
     importOpenInPicard: vi.fn(async () => {}),
+    importCancelPicard: vi.fn(async () => {}),
     importUndo: vi.fn(async () => "/lib/Artist/Album/Song.mp3"),
     importRemove: vi.fn(async () => {}),
     onImportEvent: vi.fn(async (cb: (e: ImportEvent) => void) => ((push = cb), () => {})),
@@ -176,6 +177,25 @@ describe("Picard", () => {
     const { imports } = setup([], { importOpenInPicard: vi.fn(async () => Promise.reject("MusicBrainz Picard isn't installed.")) });
     await imports.openInPicard(4);
     expect(imports.itemErrors.value[4]).toContain("isn't installed");
+  });
+
+  it("cancelling asks the backend to stop waiting, and reports a failure on the song", async () => {
+    const { imports, api } = setup();
+    await imports.cancelPicard(4);
+    expect(api.importCancelPicard).toHaveBeenCalledWith(4);
+
+    const failing = setup([], { importCancelPicard: vi.fn(async () => Promise.reject("That item is gone.")) });
+    await failing.imports.cancelPicard(9);
+    expect(failing.imports.itemErrors.value[9]).toBe("That item is gone.");
+  });
+
+  it("goes back to a normal ready song when the backend reports the wait was cancelled", async () => {
+    const { imports, push } = setup();
+    await imports.init();
+    push(itemEvent(item({ id: 1, picard: "waiting" })));
+    push(itemEvent(item({ id: 1, picard: "none" })));
+    expect(imports.items.value[0].picard).toBe("none");
+    expect(imports.items.value[0].stage).toBe("ready");
   });
 
   it("takes the tags Picard wrote when the backend reports them", async () => {

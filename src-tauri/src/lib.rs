@@ -330,6 +330,12 @@ fn import_open_in_picard(imports: State<ImportsHandle>, id: u64) -> Result<(), S
     imports.0.open_in_picard(id)
 }
 
+/// Stops waiting for Picard and takes the song out of it.
+#[tauri::command]
+fn import_cancel_picard(imports: State<ImportsHandle>, id: u64) -> Result<(), String> {
+    imports.0.cancel_picard(id)
+}
+
 #[tauri::command]
 fn import_remove(imports: State<ImportsHandle>, id: u64) {
     imports.0.remove(id);
@@ -757,6 +763,7 @@ pub fn run() {
             import_add_link,
             import_set_tags,
             import_open_in_picard,
+            import_cancel_picard,
             import_add,
             import_undo,
             import_remove,

@@ -62,9 +62,15 @@ const alternatives = (item: ImportItem, key: ImportField) => (item.alternatives[
         <template v-if="item.picard === 'waiting'">
           <p class="wait" role="status">Waiting for you to save in Picard…</p>
           <p class="muted">Look the song up in Picard and press Save. The tags here update by themselves.</p>
+          <div class="row">
+            <button class="tiny" title="Load the song into Picard again" @click="imports.openInPicard(item.id)">Send to Picard again</button>
+            <button class="tiny" title="Stop waiting and take the song out of Picard" @click="imports.cancelPicard(item.id)">Cancel</button>
+          </div>
         </template>
         <template v-else-if="item.picard === 'saved'">
-          <p class="done" role="status">✓ Tagged by MusicBrainz Picard</p>
+          <p class="done" role="status">
+            ✓ Tagged by MusicBrainz Picard<template v-if="item.proposal.disc"> · disc {{ item.proposal.disc }}<template v-if="item.proposal.discTotal"> of {{ item.proposal.discTotal }}</template></template>
+          </p>
           <p class="muted">These tags are Picard's, so they're read-only here and are added to your library exactly as Picard saved them.</p>
           <button class="tiny" @click="imports.openInPicard(item.id)">Open in Picard again</button>
         </template>

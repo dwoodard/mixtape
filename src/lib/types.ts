@@ -94,6 +94,9 @@ export interface ImportProposal {
   year: string;
   track: string;
   genre: string;
+  /** Disc of a multi-disc release and how many there are (from Picard); they only shape the file name. */
+  disc: string;
+  discTotal: string;
 }
 
 export interface ImportItem {
@@ -131,4 +134,4 @@ export interface ToolStatus {
   picard: string | null;
 }
 
-export type TagsPatch = Partial<ImportProposal>;
+export type TagsPatch = Partial<Omit<ImportProposal, "disc" | "discTotal">>;

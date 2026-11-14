@@ -132,6 +132,16 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     }
   }
 
+  /** Stops waiting for Picard (and takes the song out of it); the song carries on as before. */
+  async function cancelPicard(id: number) {
+    setItemError(id, null);
+    try {
+      await api.importCancelPicard(id);
+    } catch (e) {
+      setItemError(id, String(e));
+    }
+  }
+
   async function undo(id: number) {
     setItemError(id, null);
     try {
@@ -175,6 +185,7 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     setTags,
     add,
     openInPicard,
+    cancelPicard,
     undo,
     remove,
     addMany,

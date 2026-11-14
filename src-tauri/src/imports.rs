@@ -8,7 +8,7 @@ use crate::importer::{
     remove_from_picard, suggest, LinkKind, Progress, Proposal,
 };
 use crate::library::CachedTrack;
-use crate::track::{is_audio_file, read_track};
+use crate::track::{is_audio_file, read_disc_total, read_track};
 use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -574,20 +574,50 @@ impl Imports {
     /// to be saved there. Picard may rename the file when it saves, so the
     /// song's whole staging folder is watched, not one file name.
     pub fn open_in_picard(&self, id: u64) -> Result<(), String> {
-        let (dir, staged) = {
+        let (dir, staged, already_waiting) = {
             let state = self.inner.state.lock().unwrap();
             let item = state.items.iter().find(|i| i.id == id).ok_or("That item is gone.")?;
             if item.stage != Stage::Ready {
                 return Err("The song isn't ready yet.".into());
             }
-            (self.inner.staging.join(id.to_string()), item.staged.clone().ok_or("The song has no file yet.")?)
+            (
+                self.inner.staging.join(id.to_string()),
+                item.staged.clone().ok_or("The song has no file yet.")?,
+                item.picard == PicardState::Waiting,
+            )
         };
         let baseline = newest_audio(&dir).ok_or("The fetched file is missing.")?;
         self.inner.runner.open_in_picard(&staged)?;
+        if already_waiting {
+            // Just sent again; the watcher already running is still watching.
+            return Ok(());
+        }
         self.update(id, |i| i.picard = PicardState::Waiting);
 
         let this = self.clone();
         std::thread::spawn(move || this.watch_picard(id, dir, baseline));
+        Ok(())
+    }
+
+    /// Stops waiting for Picard and takes the song's working file out of
+    /// Picard. The song goes back to being a normal ready song. Does nothing
+    /// if it isn't waiting (so a late click is harmless).
+    pub fn cancel_picard(&self, id: u64) -> Result<(), String> {
+        let file = {
+            let mut state = self.inner.state.lock().unwrap();
+            let item = state.items.iter_mut().find(|i| i.id == id).ok_or("That item is gone.")?;
+            if item.picard != PicardState::Waiting {
+                return Ok(());
+            }
+            item.picard = PicardState::None;
+            item.staged.clone()
+        };
+        // The watcher notices the state change on its next check and stops.
+        self.update(id, |_| ());
+        if let Some(file) = file {
+            let this = self.clone();
+            std::thread::spawn(move || this.inner.runner.close_in_picard(&file));
+        }
         Ok(())
     }
 
@@ -597,6 +627,11 @@ impl Imports {
     fn watch_picard(&self, id: u64, dir: PathBuf, baseline: Fingerprint) {
         let polls = (Duration::from_secs(30 * 60).as_millis() / self.inner.poll.as_millis().max(1)) as u64;
         let mut missing = 0;
+        // A changed file is only accepted once it has stayed the same for two
+        // checks in a row: Picard writes the tags and *then* renames the file,
+        // and catching it in between would leave us pointing at a name that is
+        // about to disappear.
+        let mut pending: Option<Fingerprint> = None;
         for _ in 0..polls {
             std::thread::sleep(self.inner.poll);
             let waiting = self.inner.state.lock().unwrap().items.iter().find(|i| i.id == id).map(|i| i.picard);
@@ -618,10 +653,17 @@ impl Imports {
                     }
                 }
                 Some(now) if now != baseline => {
-                    self.picard_saved(id, now.path);
-                    return;
+                    missing = 0;
+                    if pending.as_ref() == Some(&now) {
+                        self.picard_saved(id, now.path);
+                        return;
+                    }
+                    pending = Some(now);
                 }
-                Some(_) => missing = 0,
+                Some(_) => {
+                    missing = 0;
+                    pending = None;
+                }
             }
         }
         self.update(id, |i| {
@@ -636,7 +678,8 @@ impl Imports {
         let Some(track) = read_track(&path) else {
             return self.fail(id, "Picard saved the song but its tags couldn't be read.".into());
         };
-        let proposal = proposal_from_track(&track);
+        let mut proposal = proposal_from_track(&track);
+        proposal.disc_total = read_disc_total(&path).map(|n| n.to_string()).unwrap_or_default();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("mp3").to_string();
         let preview = self.preview(&proposal, &ext);
         self.update(id, |i| {
@@ -1034,7 +1077,7 @@ mod tests {
     }
 
     fn picard_tags() -> Proposal {
-        Proposal { title: "People Are Strange".into(), artist: "The Dead South".into(), album: "Served Live".into(), year: "2018".into(), track: "4".into(), genre: "Bluegrass".into(), album_artist: "The Dead South".into() }
+        Proposal { title: "People Are Strange".into(), artist: "The Dead South".into(), album: "Served Live".into(), year: "2018".into(), track: "4".into(), genre: "Bluegrass".into(), album_artist: "The Dead South".into(), ..Default::default() }
     }
 
     #[test]
@@ -1080,6 +1123,56 @@ mod tests {
         assert!(!retag);
         // The tags are Picard's now.
         assert!(h.imports.set_tags(id, TagsPatch { album: Some("Mine".into()), ..Default::default() }).unwrap_err().contains("Picard"));
+    }
+
+    #[test]
+    fn a_save_caught_between_writing_the_tags_and_renaming_never_leaves_a_stale_file_name() {
+        // Picard writes the tags, then renames. Run it several times so a check
+        // is likely to land in between at least once.
+        for _ in 0..8 {
+            let mut fake = Fake::ok();
+            fake.real_audio = true;
+            let (h, id) = ready_song(fake);
+            h.imports.open_in_picard(id).unwrap();
+
+            let old = newest_audio(&h.staging(id)).unwrap().path;
+            std::thread::sleep(Duration::from_millis(20));
+            crate::tags::write_tags(&old, &crate::importer::to_edit(&picard_tags())).unwrap();
+            // Picard renames right after writing: much shorter than a check interval.
+            std::thread::sleep(Duration::from_millis(3));
+            let renamed = h.staging(id).join("04 People Are Strange.mp3");
+            std::fs::rename(&old, &renamed).unwrap();
+
+            wait_until(&h.imports, "picard saved", |i| i[0].picard == PicardState::Saved);
+            let (staged, _, _) = h.imports.take_for_add(id).unwrap();
+            assert_eq!(staged, renamed, "the song must point at the file that still exists");
+            assert!(staged.exists());
+        }
+    }
+
+    #[test]
+    fn a_multi_disc_release_saved_in_picard_is_filed_with_its_disc_number() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let (h, id) = ready_song(fake);
+        h.imports.open_in_picard(id).unwrap();
+        let old = newest_audio(&h.staging(id)).unwrap().path;
+        // Picard: disc 1 of 2, track 3, written the way it writes them.
+        crate::tags::write_tags(&old, &crate::importer::to_edit(&Proposal { disc: "1".into(), track: "3".into(), ..picard_tags() })).unwrap();
+        {
+            use lofty::file::TaggedFileExt;
+            use lofty::tag::{Accessor, TagExt};
+            let mut tag = lofty::read_from_path(&old).unwrap().primary_tag().cloned().unwrap();
+            tag.set_disk_total(2);
+            tag.save_to_path(&old, lofty::config::WriteOptions::default()).unwrap();
+        }
+        std::fs::rename(&old, h.staging(id).join("1-03 People Are Strange.mp3")).unwrap();
+
+        wait_until(&h.imports, "picard saved", |i| i[0].picard == PicardState::Saved);
+
+        let item = &h.imports.list()[0];
+        assert_eq!((item.proposal.disc.as_str(), item.proposal.disc_total.as_str()), ("1", "2"));
+        assert_eq!(item.destination.as_deref(), Some("The Dead South/Served Live/1-03 People Are Strange.mp3"));
     }
 
     #[test]
@@ -1197,6 +1290,71 @@ mod tests {
         h.imports.remove(id);
         std::thread::sleep(Duration::from_millis(80));
         assert!(closed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cancelling_stops_waiting_takes_the_file_out_of_picard_and_ignores_a_later_save() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let closed = fake.closed.clone();
+        let (h, id) = ready_song(fake);
+        h.imports.open_in_picard(id).unwrap();
+        assert_eq!(h.imports.list()[0].picard, PicardState::Waiting);
+
+        h.imports.cancel_picard(id).unwrap();
+
+        assert_eq!(h.imports.list()[0].picard, PicardState::None);
+        assert_eq!(h.imports.list()[0].stage, Stage::Ready, "the song itself is untouched");
+        let start = Instant::now();
+        while closed.lock().unwrap().is_empty() && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(closed.lock().unwrap().len(), 1);
+        // A save in Picard after cancelling is not picked up.
+        picard_saves(&h.staging(id), "04 People Are Strange.mp3", &picard_tags());
+        std::thread::sleep(Duration::from_millis(120));
+        assert_eq!(h.imports.list()[0].picard, PicardState::None);
+        assert_eq!(h.imports.list()[0].proposal.album, "", "tags stay the YouTube guess");
+    }
+
+    #[test]
+    fn after_cancelling_the_song_can_be_sent_to_picard_again() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let (h, id) = ready_song(fake);
+        h.imports.open_in_picard(id).unwrap();
+        h.imports.cancel_picard(id).unwrap();
+
+        h.imports.open_in_picard(id).unwrap();
+        picard_saves(&h.staging(id), "04 People Are Strange.mp3", &picard_tags());
+
+        wait_until(&h.imports, "picard saved", |i| i[0].picard == PicardState::Saved);
+    }
+
+    #[test]
+    fn cancelling_when_not_waiting_is_harmless_and_a_missing_song_is_an_error() {
+        let (h, id) = ready_song(Fake::ok());
+        h.imports.cancel_picard(id).unwrap();
+        assert_eq!(h.imports.list()[0].picard, PicardState::None);
+        assert!(h.imports.cancel_picard(999).is_err());
+    }
+
+    #[test]
+    fn sending_again_while_waiting_reloads_in_picard_without_a_second_watcher() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let opened = fake.opened.clone();
+        let (h, id) = ready_song(fake);
+
+        h.imports.open_in_picard(id).unwrap();
+        h.imports.open_in_picard(id).unwrap();
+
+        assert_eq!(opened.lock().unwrap().len(), 2, "Picard is told again");
+        picard_saves(&h.staging(id), "04 People Are Strange.mp3", &picard_tags());
+        wait_until(&h.imports, "picard saved", |i| i[0].picard == PicardState::Saved);
+        // Exactly one transition to Saved was reported.
+        let saved_events = h.events.lock().unwrap().iter().filter(|e| matches!(e, ImportEvent::Item(i) if i.picard == PicardState::Saved)).count();
+        assert_eq!(saved_events, 1);
     }
 
     #[test]

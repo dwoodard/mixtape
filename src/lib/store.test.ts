@@ -32,6 +32,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     importSetTags: vi.fn(async () => ({}) as never),
     importAdd: vi.fn(async () => makeTrack()),
     importOpenInPicard: vi.fn(async () => {}),
+    importCancelPicard: vi.fn(async () => {}),
     importUndo: vi.fn(async () => ""),
     importRemove: vi.fn(async () => {}),
     onImportEvent: vi.fn(async () => unlisten),

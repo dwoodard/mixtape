@@ -21,6 +21,13 @@ pub struct Track {
     pub duration_ms: u64,
 }
 
+/// How many discs the release has, if the file says so (e.g. disc 1 of 2).
+pub fn read_disc_total(path: &Path) -> Option<u32> {
+    let tagged = lofty::read_from_path(path).ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    tag.disk_total()
+}
+
 pub fn is_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())

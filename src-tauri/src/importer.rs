@@ -123,6 +123,10 @@ pub struct Proposal {
     pub year: String,
     pub track: String,
     pub genre: String,
+    /// Which disc of a multi-disc release this is, and how many discs there are.
+    /// Not edited by hand: they come from Picard's tags and only shape the file name.
+    pub disc: String,
+    pub disc_total: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -295,7 +299,21 @@ pub fn sanitize_component(name: &str) -> String {
     limited.trim().to_string()
 }
 
-/// Where a song belongs: `Artist/Album/NN Title.ext` under the library folder.
+/// The number in front of a file name: `03 ` for a one-disc release, `2-07 `
+/// for a song on a later (or any, if there are several) disc of a multi-disc
+/// release, which is how the library already names such songs.
+fn track_prefix(p: &Proposal) -> String {
+    let Some(track) = p.track.trim().parse::<u32>().ok() else { return String::new() };
+    let disc = p.disc.trim().parse::<u32>().ok();
+    let total = p.disc_total.trim().parse::<u32>().unwrap_or(0);
+    match disc {
+        Some(d) if total > 1 || d >= 2 => format!("{d}-{track:02} "),
+        _ => format!("{track:02} "),
+    }
+}
+
+/// Where a song belongs: `Artist/Album/NN Title.ext` (`D-NN Title.ext` on a
+/// multi-disc release) under the library folder.
 pub fn destination(root: &Path, p: &Proposal, ext: &str) -> PathBuf {
     let artist = [&p.album_artist, &p.artist]
         .into_iter()
@@ -304,8 +322,7 @@ pub fn destination(root: &Path, p: &Proposal, ext: &str) -> PathBuf {
         .unwrap_or_else(|| "Unknown Artist".into());
     let album = Some(sanitize_component(&p.album)).filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown Album".into());
     let title = Some(sanitize_component(&p.title)).filter(|t| !t.is_empty()).unwrap_or_else(|| "Untitled".into());
-    let number = p.track.trim().parse::<u32>().ok().map(|n| format!("{n:02} ")).unwrap_or_default();
-    root.join(artist).join(album).join(format!("{number}{title}.{ext}"))
+    root.join(artist).join(album).join(format!("{}{title}.{ext}", track_prefix(p)))
 }
 
 /// A name reduced to its letters and digits, so `AC/DC`, `AC_DC` and `ac dc`
@@ -388,6 +405,8 @@ pub fn proposal_from_track(t: &Track) -> Proposal {
         year: t.year.map(|y| y.to_string()).unwrap_or_default(),
         track: t.track_number.map(|n| n.to_string()).unwrap_or_default(),
         genre: t.genre.clone(),
+        disc: t.disc_number.map(|n| n.to_string()).unwrap_or_default(),
+        disc_total: String::new(),
     }
 }
 
@@ -399,7 +418,7 @@ pub fn to_edit(p: &Proposal) -> TagEdit {
         album: Some(p.album.clone()),
         album_artist: Some(p.album_artist.clone()),
         track_number: Some(p.track.clone()),
-        disc_number: None,
+        disc_number: Some(p.disc.clone()),
         year: Some(p.year.clone()),
         genre: Some(p.genre.clone()),
     }
@@ -815,6 +834,19 @@ mod tests {
     fn destination_is_artist_album_number_title() {
         let p = Proposal { title: "People Are Strange".into(), artist: "The Dead South".into(), album: "Served Live".into(), track: "4".into(), ..Default::default() };
         assert_eq!(destination(Path::new("/Music"), &p, "mp3"), PathBuf::from("/Music/The Dead South/Served Live/04 People Are Strange.mp3"));
+    }
+
+    #[test]
+    fn multi_disc_releases_get_a_disc_prefix_like_the_rest_of_the_library() {
+        let p = |disc: &str, total: &str, track: &str| Proposal { title: "Kashmir".into(), artist: "Led Zeppelin".into(), album: "Mothership".into(), track: track.into(), disc: disc.into(), disc_total: total.into(), ..Default::default() };
+        let name = |p: &Proposal| destination(Path::new("/M"), p, "mp3").file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(name(&p("2", "2", "7")), "2-07 Kashmir.mp3");
+        assert_eq!(name(&p("1", "2", "3")), "1-03 Kashmir.mp3", "disc 1 of several is prefixed too, so the discs sort together");
+        assert_eq!(name(&p("2", "", "7")), "2-07 Kashmir.mp3", "a later disc is enough even without a total");
+        assert_eq!(name(&p("1", "1", "3")), "03 Kashmir.mp3", "a one-disc release is not prefixed");
+        assert_eq!(name(&p("1", "", "3")), "03 Kashmir.mp3");
+        assert_eq!(name(&p("", "2", "3")), "03 Kashmir.mp3", "no disc number, nothing to prefix");
+        assert_eq!(name(&p("2", "2", "")), "Kashmir.mp3", "no track number, no prefix");
     }
 
     #[test]
