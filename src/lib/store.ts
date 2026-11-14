@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
 import { tauriApi, type Api } from "./api";
 import type { TagEditPayload } from "./tagEdit";
+import { changedTracks, queueReplacements } from "./changes";
 import { applyFolderRefresh, insertSorted } from "./librarySort";
 import { dirName } from "./format";
 import { createImports } from "./imports";
@@ -48,6 +49,9 @@ export function createStore(api: Api, storage?: FlagStorage) {
   const duplicateGroups = computed(() =>
     withoutIgnored(findDuplicates(library.value), ignoredDuplicates.items.value),
   );
+
+  /** The latest change to a song in the library, for a notice with a "Show" button. */
+  const lastChange = ref<{ message: string; track: Track } | null>(null);
 
   /** Folders of songs sent to Picard, with when: re-checked when the user comes back to the app. */
   const picardFolders = ref<Record<string, number>>({});
@@ -268,7 +272,12 @@ export function createStore(api: Api, storage?: FlagStorage) {
       const results = await api.writeTags(tracks.map((t) => t.path), edit);
       tagResults.value = results;
       const fresh = new Map(results.flatMap((r) => (r.track ? [[r.path, r.track] as const] : [])));
-      if (fresh.size > 0) library.value = library.value.map((t) => fresh.get(t.path) ?? t);
+      if (fresh.size > 0) {
+        library.value = library.value.map((t) => fresh.get(t.path) ?? t);
+        const first = [...fresh.values()][0];
+        noteChange(fresh.size === 1 ? `Saved tags: ${first.title}` : `Saved tags for ${fresh.size} songs`, first);
+        void reconcileQueue([...fresh.values()]);
+      }
     } catch (e) {
       libraryError.value = String(e);
     } finally {
@@ -276,9 +285,31 @@ export function createStore(api: Api, storage?: FlagStorage) {
     }
   }
 
+  /**
+   * Makes the play queue follow songs that were just added or retagged: entries
+   * for them get the fresh tags, and entries for a file that is gone (undone,
+   * renamed, re-added elsewhere) are pointed at the same recording. What is
+   * playing keeps playing.
+   */
+  async function reconcileQueue(changed: Track[]) {
+    const replacements = queueReplacements(queue.value, library.value, changed);
+    if (replacements.length === 0) return;
+    try {
+      await api.replaceQueueTracks(replacements);
+    } catch (e) {
+      console.error("could not update the queue:", e);
+    }
+  }
+
+  function noteChange(message: string, track: Track) {
+    lastChange.value = { message, track };
+  }
+
   /** A song that was just added to the library on disk (by an import): shows it in scan order. */
   function addToLibrary(track: Track) {
     library.value = insertSorted(library.value, track);
+    noteChange(`Added: ${track.artist ? `${track.artist} – ` : ""}${track.title}`, track);
+    void reconcileQueue([track]);
   }
 
   /** A song whose file was removed (an undone import): drops it from the list. */
@@ -317,7 +348,16 @@ export function createStore(api: Api, storage?: FlagStorage) {
     if (fresh.length === 0) return;
     try {
       const results = await api.refreshFolders(fresh.map(([dir]) => dir));
-      library.value = applyFolderRefresh(library.value, results);
+      const before = library.value;
+      library.value = applyFolderRefresh(before, results);
+      const changed = changedTracks(before, library.value);
+      if (changed.length > 0) {
+        noteChange(
+          changed.length === 1 ? `Updated from Picard: ${changed[0].title}` : `Updated ${changed.length} songs from Picard`,
+          changed[0],
+        );
+        void reconcileQueue(changed);
+      }
     } catch (e) {
       libraryError.value = String(e);
     }
@@ -404,6 +444,8 @@ export function createStore(api: Api, storage?: FlagStorage) {
     removeUnplayable,
     dismissError: () => api.dismissError(),
     revealInFinder,
+    lastChange,
+    dismissChange: () => (lastChange.value = null),
     openInPicard,
     refreshPicardFolders,
     picardFolders,

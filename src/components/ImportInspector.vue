@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { fileName } from "../lib/format";
 import { findOwned } from "../lib/imports";
 import { imports, store } from "../lib/store";
+import { showInLibrary } from "../lib/ui";
 import type { ImportField, ImportItem } from "../lib/types";
 import ImportStage from "./ImportStage.vue";
 
@@ -103,7 +104,10 @@ const alternatives = (item: ImportItem, key: ImportField) => (item.alternatives[
       </div>
 
       <p v-if="owned" class="dup">Already in your library:<br /><code>{{ fileName(owned.path) }}</code></p>
-      <p v-if="item.stage === 'added' && item.addedPath" class="added">Added to<br /><code>{{ item.addedPath }}</code></p>
+      <p v-if="item.stage === 'added' && item.addedPath" class="added">
+        Added to<br /><code>{{ item.addedPath }}</code><br />
+        <button class="tiny" @click="showInLibrary({ path: item.addedPath, title: item.proposal.title })">Show in library</button>
+      </p>
       <p v-else-if="item.destination" class="muted">
         Will be added to<br /><code>{{ libraryName ? `${libraryName}/` : "" }}{{ item.destination }}</code>
         <template v-if="!libraryName"><br />(Open or import a library folder first.)</template>

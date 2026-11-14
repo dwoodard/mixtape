@@ -101,6 +101,17 @@ impl Queue {
         self.played = self.played.iter().map(|&i| shift(i)).collect();
     }
 
+    /// Replaces every queue entry whose file is `old_path` with `track`, in
+    /// place (same position, cursor and shuffle history untouched). Returns how many were replaced.
+    pub fn replace_track(&mut self, old_path: &str, track: &Track) -> usize {
+        let mut replaced = 0;
+        for slot in self.tracks.iter_mut().filter(|t| t.path == old_path) {
+            *slot = track.clone();
+            replaced += 1;
+        }
+        replaced
+    }
+
     pub fn clear(&mut self) {
         self.tracks.clear();
         self.current = None;
@@ -333,6 +344,27 @@ mod tests {
         let mut q = queue_of(&["a"], 0);
         assert!(!q.remove(3));
         assert_eq!(q.tracks().len(), 1);
+    }
+
+    #[test]
+    fn replacing_a_track_keeps_its_place_and_the_cursor() {
+        let mut q = queue_of(&["a", "b", "c"], 1);
+        let mut updated = test_track("b2");
+        updated.path = "/music/moved/b2.mp3".into();
+
+        assert_eq!(q.replace_track("/music/b.mp3", &updated), 1);
+
+        assert_eq!(q.tracks().iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), vec!["a", "b2", "c"]);
+        assert_eq!(q.current_index(), Some(1));
+        assert_eq!(title(&q), Some("b2"));
+    }
+
+    #[test]
+    fn replacing_covers_every_copy_and_ignores_unknown_files() {
+        let mut q = queue_of(&["a", "b", "a"], 0);
+        assert_eq!(q.replace_track("/music/a.mp3", &test_track("a2")), 2);
+        assert_eq!(q.replace_track("/music/nope.mp3", &test_track("x")), 0);
+        assert_eq!(q.tracks().iter().filter(|t| t.title == "a2").count(), 2);
     }
 
     #[test]

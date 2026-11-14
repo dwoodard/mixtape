@@ -33,6 +33,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     importAdd: vi.fn(async () => makeTrack()),
     importOpenInPicard: vi.fn(async () => {}),
     importCancelPicard: vi.fn(async () => {}),
+    replaceQueueTracks: vi.fn(async () => {}),
     picardOpenFiles: vi.fn(async () => {}),
     refreshFolders: vi.fn(async () => []),
     importUndo: vi.fn(async () => ""),
@@ -870,5 +871,72 @@ describe("library songs in Picard", () => {
     await store.refreshPicardFolders();
     expect(store.library.value).toHaveLength(3);
     expect(store.libraryError.value).toBe("not mounted");
+  });
+});
+
+describe("updates reach the queue and are easy to find", () => {
+  const stale = makeTrack({ path: "/m/PROF/Unknown Album/Dynamite.mp3", title: "Dynamite", artist: "PROF", durationMs: 165_000 });
+  const readded = makeTrack({ path: "/m/PROF/Good Time Boy/06 Dynamite.mp3", title: "Dynamite", artist: "Prof", album: "Good Time Boy", durationMs: 165_100 });
+
+  async function withQueue(queue: Track[], library: Track[], overrides: Partial<Api> = {}) {
+    const fake = fakeApi({ cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: library, scannedAtMs: 1 })), ...overrides });
+    const store = createStore(fake.api);
+    await store.init();
+    fake.listeners.queue[0](queue);
+    return { ...fake, store };
+  }
+
+  it("a song added to the library points a stale queue entry at it and raises a notice", async () => {
+    const { api, store } = await withQueue([stale], [makeTrack({ path: "/m/other.mp3", title: "Other" })]);
+
+    store.addToLibrary(readded);
+
+    expect(api.replaceQueueTracks).toHaveBeenCalledWith([{ oldPath: stale.path, track: readded }]);
+    expect(store.lastChange.value).toEqual({ message: "Added: Prof – Dynamite", track: readded });
+    expect(store.library.value.map((t) => t.path)).toContain(readded.path);
+  });
+
+  it("an add that matches nothing in the queue leaves the queue alone but still raises a notice", async () => {
+    const { api, store } = await withQueue([makeTrack({ path: "/m/x.mp3", title: "Something else" })], []);
+    store.addToLibrary(readded);
+    expect(api.replaceQueueTracks).not.toHaveBeenCalled();
+    expect(store.lastChange.value?.message).toContain("Dynamite");
+  });
+
+  it("a folder re-check that retagged a song updates the queue and says so", async () => {
+    const fresh = { ...stale, album: "Good Time Boy" };
+    const { api, store } = await withQueue([stale], [stale], { refreshFolders: vi.fn(async () => [{ dir: "/m/PROF/Unknown Album", tracks: [fresh] }]) });
+    await store.openInPicard([stale]);
+
+    await store.refreshPicardFolders();
+
+    expect(api.replaceQueueTracks).toHaveBeenCalledWith([{ oldPath: stale.path, track: fresh }]);
+    expect(store.lastChange.value?.message).toBe("Updated from Picard: Dynamite");
+  });
+
+  it("a re-check that found nothing new raises no notice", async () => {
+    const { store } = await withQueue([stale], [stale], { refreshFolders: vi.fn(async () => [{ dir: "/m/PROF/Unknown Album", tracks: [stale] }]) });
+    await store.openInPicard([stale]);
+    await store.refreshPicardFolders();
+    expect(store.lastChange.value).toBeNull();
+  });
+
+  it("saving tags in the editor updates the queue entry for that file", async () => {
+    const edited = { ...stale, album: "Edited" };
+    const { api, store } = await withQueue([stale], [stale], {
+      writeTags: vi.fn(async () => [{ path: stale.path, track: edited, error: null }]),
+    });
+
+    await store.writeTags([stale], { album: "Edited" });
+
+    expect(api.replaceQueueTracks).toHaveBeenCalledWith([{ oldPath: stale.path, track: edited }]);
+    expect(store.lastChange.value?.message).toBe("Saved tags: Dynamite");
+  });
+
+  it("the notice can be dismissed", async () => {
+    const { store } = await withQueue([], []);
+    store.addToLibrary(readded);
+    store.dismissChange();
+    expect(store.lastChange.value).toBeNull();
   });
 });

@@ -168,6 +168,20 @@ impl Player {
         self.emit_state();
     }
 
+    /// Updates queue entries after their files were retagged, renamed or
+    /// re-added: each `(old path, new track)` replaces the entries for that
+    /// file in place. What is playing keeps playing (nothing is reloaded).
+    pub fn replace_tracks(&mut self, replacements: Vec<(String, Track)>) {
+        let mut replaced = 0;
+        for (old_path, track) in &replacements {
+            replaced += self.queue.replace_track(old_path, track);
+        }
+        if replaced > 0 {
+            self.emit_queue();
+            self.emit_state();
+        }
+    }
+
     pub fn set_shuffle(&mut self, on: bool) {
         self.queue.set_shuffle(on);
         self.emit_state();
@@ -588,6 +602,34 @@ mod tests {
         h.player.seek(999_999);
         assert!(h.calls().contains(&Call::Seek(180_000)));
         assert_eq!(h.player.state().position_ms, 180_000);
+    }
+
+    #[test]
+    fn replacing_the_playing_track_updates_what_is_shown_without_interrupting_playback() {
+        let mut h = Harness::new();
+        h.load_abc(1);
+        let loads_before = h.loads().len();
+        let mut fresh = test_track("b-retagged");
+        fresh.path = "/music/PROF/Good Time Boy/06 b.mp3".into();
+
+        h.player.replace_tracks(vec![("/music/b.mp3".into(), fresh)]);
+
+        let state = h.player.state();
+        assert_eq!(state.status, Status::Playing);
+        assert_eq!(state.current_index, Some(1));
+        assert_eq!(state.current_track.unwrap().title, "b-retagged");
+        assert_eq!(h.loads().len(), loads_before, "nothing was reloaded");
+        let events = h.events.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(e, PlayerEvent::Queue(q) if q.iter().any(|t| t.title == "b-retagged"))));
+    }
+
+    #[test]
+    fn replacing_nothing_known_emits_nothing() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        let before = h.events.lock().unwrap().len();
+        h.player.replace_tracks(vec![("/music/unknown.mp3".into(), test_track("x"))]);
+        assert_eq!(h.events.lock().unwrap().len(), before);
     }
 
     #[test]

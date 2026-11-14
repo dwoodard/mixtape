@@ -111,3 +111,17 @@ export const setAppMode = appModeChoice.set;
 
 /** Paths of the library songs whose tags are being edited in the dialog (empty: closed). */
 export const tagEditPaths = ref<string[]>([]);
+
+/** The library filter box, shared so other parts of the app can set it ("Show in library"). */
+export const libraryQuery = ref("");
+
+/** A song to select and scroll to the next time the song list shows. */
+export const revealPath = ref<string | null>(null);
+
+/** Switches to Player mode's Tracks view filtered to the song, and selects it. */
+export function showInLibrary(track: { path: string; title: string }) {
+  setAppMode("player");
+  libraryView.value = "tracks";
+  libraryQuery.value = track.title;
+  revealPath.value = track.path;
+}

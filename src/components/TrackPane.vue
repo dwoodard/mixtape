@@ -12,7 +12,7 @@ import {
 } from "../lib/selection";
 import { sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
-import { tagEditPaths } from "../lib/ui";
+import { revealPath, tagEditPaths } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import TrackTable from "./TrackTable.vue";
 
@@ -43,6 +43,20 @@ const label = computed(() =>
 // Opening a view hands it the keyboard, so the arrows work without clicking a row first.
 onMounted(() => props.autofocus && nextTick(() => root.value?.focus({ preventScroll: true })));
 defineExpose({ focus: () => root.value?.focus({ preventScroll: true }) });
+
+// "Show in library": select the requested song and scroll to it once it is in this list.
+watch(
+  [revealPath, rows],
+  () => {
+    const path = revealPath.value;
+    const at = path ? order.value.indexOf(path) : -1;
+    if (at === -1) return;
+    selection.value = { paths: new Set([path!]), anchor: path, focus: path };
+    revealPath.value = null;
+    nextTick(() => root.value?.querySelector(`[data-index="${at}"]`)?.scrollIntoView({ block: "center" }));
+  },
+  { immediate: true, flush: "post" },
+);
 
 watch(order, (paths) => (selection.value = pruneSelection(selection.value, paths)));
 // Changing the selection cancels a pending removal, so it never applies to different songs.

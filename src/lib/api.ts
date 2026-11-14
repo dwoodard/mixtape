@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { QueueReplacement } from "./changes";
 import type { TagEditPayload } from "./tagEdit";
 import type { FolderRefresh, ImportEvent, ImportItem, TagsPatch, ToolStatus } from "./types";
 import type { CachedLibrary, CleanupReport, DuplicatePair, PlayerSnapshot, PlayerState, PlaylistSummary, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
@@ -38,6 +39,7 @@ export interface Api {
   playTracks(tracks: Track[], start: number): Promise<void>;
   enqueue(tracks: Track[]): Promise<void>;
   enqueueNext(tracks: Track[]): Promise<void>;
+  replaceQueueTracks(replacements: QueueReplacement[]): Promise<void>;
   stop(): Promise<void>;
   dismissError(): Promise<void>;
   setShuffle(on: boolean): Promise<void>;
@@ -96,6 +98,7 @@ export const tauriApi: Api = {
   playTracks: (tracks, start) => invoke("play_tracks", { tracks, start }),
   enqueue: (tracks) => invoke("enqueue", { tracks }),
   enqueueNext: (tracks) => invoke("enqueue_next", { tracks }),
+  replaceQueueTracks: (replacements) => invoke("replace_queue_tracks", { replacements }),
   stop: () => invoke("stop_playback"),
   dismissError: () => invoke("dismiss_error"),
   setShuffle: (on) => invoke("set_shuffle", { on }),

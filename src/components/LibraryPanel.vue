@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { formatAgo } from "../lib/format";
 import { store } from "../lib/store";
 import { filterTracks } from "../lib/trackList";
-import { libraryView, type LibraryView } from "../lib/ui";
+import { libraryQuery, libraryView, showInLibrary, type LibraryView } from "../lib/ui";
 import AlbumsView from "./AlbumsView.vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import DuplicatesView from "./DuplicatesView.vue";
@@ -11,7 +11,7 @@ import ArtistsView from "./ArtistsView.vue";
 import PlaylistsView from "./PlaylistsView.vue";
 import TrackPane from "./TrackPane.vue";
 
-const query = ref("");
+const query = libraryQuery;
 const filtered = computed(() => filterTracks(store.library.value, query.value));
 
 /** Library actions are rarely needed, so they live in a menu instead of the toolbar. */
@@ -125,6 +125,11 @@ const scanLabel = computed(() => {
       <button @click="reviewDuplicates()">Review</button>
       <button @click="store.dismissDuplicateNotice()">Dismiss</button>
     </div>
+    <div v-if="store.lastChange.value" class="changed" role="status">
+      <span class="ellipsis">{{ store.lastChange.value.message }}</span>
+      <button @click="showInLibrary(store.lastChange.value.track)">Show</button>
+      <button aria-label="Dismiss" @click="store.dismissChange()">×</button>
+    </div>
     <p v-if="store.scanning.value" class="status" role="status">{{ scanLabel }}</p>
     <p v-if="store.scanError.value" class="error" role="alert">{{ store.scanError.value }}</p>
 
@@ -156,6 +161,9 @@ const scanLabel = computed(() => {
 .filter { flex: 1; min-width: 120px; }
 .count { color: var(--muted); white-space: nowrap; font-size: 12px; }
 .status { margin: 0; padding: 5px 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); }
+.changed { display: flex; align-items: center; gap: 6px; padding: 4px 10px; background: #26374a; border-bottom: 1px solid var(--line); font-size: 12px; }
+.changed span { flex: 1; min-width: 0; }
+.changed button { padding: 0 8px; font-size: 11px; }
 .notice { display: flex; align-items: center; gap: 6px; padding: 5px 10px; background: #2f3b4a; border-bottom: 1px solid var(--line); font-size: 12px; }
 .notice span { margin-right: auto; }
 .notice button { padding: 1px 8px; font-size: 12px; }

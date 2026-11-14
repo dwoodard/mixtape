@@ -553,6 +553,19 @@ fn play_index(player: State<PlayerHandle>, index: usize) {
     player.with(|p| p.play_index(index));
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueReplacement {
+    old_path: String,
+    track: Track,
+}
+
+/// Updates queue entries whose files were retagged, renamed or re-added.
+#[tauri::command]
+fn replace_queue_tracks(player: State<PlayerHandle>, replacements: Vec<QueueReplacement>) {
+    player.with(|p| p.replace_tracks(replacements.into_iter().map(|r| (r.old_path, r.track)).collect()));
+}
+
 #[tauri::command]
 fn enqueue_next(player: State<PlayerHandle>, tracks: Vec<Track>) {
     player.with(|p| p.enqueue_next(tracks));
@@ -834,6 +847,7 @@ pub fn run() {
             play_tracks,
             enqueue,
             enqueue_next,
+            replace_queue_tracks,
             stop_playback,
             dismiss_error,
             set_shuffle,
