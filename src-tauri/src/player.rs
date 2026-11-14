@@ -1130,4 +1130,6 @@ mod tests {
         assert_eq!(h.player.state().current_index, None);
         assert_eq!(h.player.state().position_ms, 0);
     }
+
+    // --- QA (Maya) ---
 }

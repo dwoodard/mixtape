@@ -122,42 +122,50 @@ impl SessionWriter {
             .name("mixtape-session".into())
             .spawn(move || {
                 let mut queue: Option<Vec<Track>> = None;
+                // The latest known state is kept after a write, so later position updates
+                // have something to update. `dirty` says it has changed since it was saved.
                 let mut state: Option<SessionState> = None;
+                let mut dirty = false;
                 let mut last_write = Instant::now() - WRITE_EVERY;
-                let write = |queue: &mut Option<Vec<Track>>, state: &mut Option<SessionState>| {
+                let write = |queue: &mut Option<Vec<Track>>, state: &Option<SessionState>, dirty: &mut bool| {
                     if let Some(q) = queue.take() {
                         if let Err(e) = store.save_queue(&q) {
                             eprintln!("could not save queue: {e}");
                         }
                     }
-                    if let Some(s) = state.take() {
-                        if let Err(e) = store.save_state(&s) {
+                    if let (Some(s), true) = (state, *dirty) {
+                        if let Err(e) = store.save_state(s) {
                             eprintln!("could not save session state: {e}");
                         }
+                        *dirty = false;
                     }
                 };
                 loop {
                     match rx.recv_timeout(WRITE_EVERY) {
                         Ok(Msg::Queue(q)) => queue = Some(q),
-                        Ok(Msg::State(s)) => state = Some(s),
+                        Ok(Msg::State(s)) => {
+                            state = Some(s);
+                            dirty = true;
+                        }
                         Ok(Msg::Position(ms)) => {
                             if let Some(s) = &mut state {
                                 s.position_ms = ms;
+                                dirty = true;
                             }
                         }
                         Ok(Msg::Flush(done)) => {
-                            write(&mut queue, &mut state);
+                            write(&mut queue, &state, &mut dirty);
                             let _ = done.send(());
                             continue;
                         }
                         Err(RecvTimeoutError::Timeout) => {}
                         Err(RecvTimeoutError::Disconnected) => {
-                            write(&mut queue, &mut state);
+                            write(&mut queue, &state, &mut dirty);
                             return;
                         }
                     }
                     if last_write.elapsed() >= WRITE_EVERY {
-                        write(&mut queue, &mut state);
+                        write(&mut queue, &state, &mut dirty);
                         last_write = Instant::now();
                     }
                 }
@@ -265,5 +273,22 @@ mod tests {
         let restored = store.load().unwrap();
         assert_eq!(restored.tracks.len(), 2);
         assert_eq!(restored.position_ms, 55_000);
+    }
+
+    // --- QA (Maya) ---
+
+    #[test]
+    fn qa_position_keeps_being_saved_while_a_song_plays() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        store.save_queue(&[test_track("a"), test_track("b")]).unwrap();
+        let writer = SessionWriter::spawn(store.clone());
+
+        writer.state_changed(&player_state(0, 0)); // a song starts
+        std::thread::sleep(Duration::from_millis(300)); // the writer saves it
+        writer.position_changed(55_000); // it plays on, then Maya quits
+        writer.flush();
+
+        assert_eq!(store.load().unwrap().position_ms, 55_000, "relaunch would resume at the start of the song");
     }
 }
