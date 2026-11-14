@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { store } from "../lib/store";
+import { imports, store } from "../lib/store";
 import {
   clickRow,
   emptySelection,
@@ -72,6 +72,16 @@ function onRowMenu(index: number, event: MouseEvent) {
   menu.value = { x: event.clientX, y: event.clientY };
 }
 
+/** "Open in MusicBrainz Picard", greyed out (with the reason) when Picard isn't installed. */
+const picardMenuItem = (songs: Track[]): MenuItem => {
+  const missing = imports.tools.value !== null && imports.tools.value.picard === null;
+  return {
+    label: missing ? "Open in MusicBrainz Picard (not installed)" : "Open in MusicBrainz Picard",
+    action: () => store.openInPicard(songs),
+    disabled: missing,
+  };
+};
+
 const menuItems = computed<MenuItem[]>(() => {
   const songs = chosen.value;
   const items: MenuItem[] = [
@@ -79,6 +89,7 @@ const menuItems = computed<MenuItem[]>(() => {
     { label: "Play next", action: () => store.enqueueNext(songs) },
     { label: "Add to queue", action: () => store.enqueue(songs) },
     { label: "Edit tags…", action: () => (tagEditPaths.value = songs.map((t) => t.path)), separated: true },
+    picardMenuItem(songs),
     { label: "Reveal in Finder", action: () => store.revealInFinder(songs) },
   ];
   if (props.removable) {
@@ -144,6 +155,13 @@ function onKey(event: KeyboardEvent) {
         @click="tagEditPaths = chosen.map((t) => t.path)"
       >
         Edit tags…
+      </button>
+      <button
+        :disabled="chosen.length === 0 || (imports.tools.value !== null && imports.tools.value.picard === null)"
+        title="Open the selected songs in MusicBrainz Picard"
+        @click="store.openInPicard(chosen)"
+      >
+        Picard
       </button>
       <button
         :disabled="chosen.length === 0"

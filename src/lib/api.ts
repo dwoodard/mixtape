@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { TagEditPayload } from "./tagEdit";
-import type { ImportEvent, ImportItem, TagsPatch, ToolStatus } from "./types";
+import type { FolderRefresh, ImportEvent, ImportItem, TagsPatch, ToolStatus } from "./types";
 import type { CachedLibrary, CleanupReport, DuplicatePair, PlayerSnapshot, PlayerState, PlaylistSummary, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
 
 type Unlisten = () => void;
@@ -22,6 +22,8 @@ export interface Api {
   trashDuplicates(pairs: DuplicatePair[]): Promise<CleanupReport>;
   writeTags(paths: string[], edit: TagEditPayload): Promise<TagWriteResult[]>;
   importTools(): Promise<ToolStatus>;
+  picardOpenFiles(paths: string[]): Promise<void>;
+  refreshFolders(dirs: string[]): Promise<FolderRefresh[]>;
   importList(): Promise<ImportItem[]>;
   importAddLink(text: string, format: string): Promise<void>;
   importSetTags(id: number, patch: TagsPatch): Promise<ImportItem>;
@@ -78,6 +80,8 @@ export const tauriApi: Api = {
   trashDuplicates: (pairs) => invoke("trash_duplicates", { pairs }),
   writeTags: (paths, edit) => invoke("write_tags", { paths, edit }),
   importTools: () => invoke("import_tools"),
+  picardOpenFiles: (paths) => invoke("picard_open_files", { paths }),
+  refreshFolders: (dirs) => invoke("refresh_folders", { dirs }),
   importList: () => invoke("import_list"),
   importAddLink: (text, format) => invoke("import_add_link", { text, format }),
   importSetTags: (id, patch) => invoke("import_set_tags", { id, patch }),

@@ -52,3 +52,9 @@ export function describePlaybackError(path: string, message: string): string {
     ? `Can't find “${name}”. It may have been moved, renamed or deleted, or its drive isn't mounted.`
     : `Can't play “${name}”: ${message}`;
 }
+
+/** The folder a file is in: "/a/b/song.mp3" -> "/a/b". */
+export function dirName(path: string): string {
+  const at = path.lastIndexOf("/");
+  return at <= 0 ? "" : path.slice(0, at);
+}

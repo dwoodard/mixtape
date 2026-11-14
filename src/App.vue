@@ -6,11 +6,15 @@ import { imports, store } from "./lib/store";
 
 let cleanup: (() => void) | undefined;
 let cleanupImports: (() => void) | undefined;
+// Songs sent to Picard may have been retagged or renamed while the user was away.
+const onFocus = () => void store.refreshPicardFolders();
 onMounted(async () => {
   cleanup = await store.init();
   cleanupImports = await imports.init();
+  window.addEventListener("focus", onFocus);
 });
 onUnmounted(() => {
+  window.removeEventListener("focus", onFocus);
   cleanup?.();
   cleanupImports?.();
 });

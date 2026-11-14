@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { insertSorted } from "./librarySort";
+import { applyFolderRefresh, insertSorted } from "./librarySort";
 import { makeTrack } from "./testing";
 
 const t = (path: string, artist: string, album: string, track: number | null = null, albumArtist = "") =>
@@ -36,5 +36,42 @@ describe("insertSorted", () => {
     const copy = [...library];
     insertSorted(library, t("n", "B", "b"));
     expect(library).toEqual(copy);
+  });
+});
+
+describe("applyFolderRefresh", () => {
+  const lib = [
+    t("/m/Korn/Follow/15 Got the Life.mp3", "Korn", "Follow", 15),
+    t("/m/Korn/Follow/old name.mp3", "Korn", "Follow", 3),
+    t("/m/Korn/Follower/x.mp3", "Korn", "Follower", 1),
+    t("/m/PROF/Unknown/Dynamite.mp3", "PROF", "", null),
+  ];
+
+  it("replaces only the re-checked folder: renames, retags and deletions", () => {
+    const out = applyFolderRefresh(lib, [
+      { dir: "/m/Korn/Follow", tracks: [t("/m/Korn/Follow/15 Got the Life.mp3", "Korn", "Follow", 15), t("/m/Korn/Follow/1-03 New name.mp3", "Korn", "Follow", 3)] },
+    ]);
+    expect(out.map((x) => x.path).sort()).toEqual([
+      "/m/Korn/Follow/1-03 New name.mp3",
+      "/m/Korn/Follow/15 Got the Life.mp3",
+      "/m/Korn/Follower/x.mp3",
+      "/m/PROF/Unknown/Dynamite.mp3",
+    ]);
+  });
+
+  it("does not touch a folder whose name merely starts the same", () => {
+    const out = applyFolderRefresh(lib, [{ dir: "/m/Korn/Follow", tracks: [] }]);
+    expect(out.map((x) => x.path)).toContain("/m/Korn/Follower/x.mp3");
+    expect(out).toHaveLength(2);
+  });
+
+  it("moves a song to its new place when its artist and album tags changed", () => {
+    const out = applyFolderRefresh(lib, [{ dir: "/m/PROF/Unknown", tracks: [t("/m/PROF/Unknown/Dynamite.mp3", "PROF", "Dynamite - Single", 1)] }]);
+    expect(out.find((x) => x.path === "/m/PROF/Unknown/Dynamite.mp3")!.album).toBe("Dynamite - Single");
+  });
+
+  it("handles no results and a trailing slash", () => {
+    expect(applyFolderRefresh(lib, [])).toEqual(lib);
+    expect(applyFolderRefresh(lib, [{ dir: "/m/PROF/Unknown/", tracks: [] }])).toHaveLength(3);
   });
 });

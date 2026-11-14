@@ -579,9 +579,12 @@ pub fn picard_running() -> bool {
         .unwrap_or(false)
 }
 
-/// Arguments that tell a running Picard to load `file` and come to the front.
-pub fn picard_load_args(file: &Path) -> Vec<std::ffi::OsString> {
-    vec!["-e".into(), "LOAD".into(), file.as_os_str().to_owned(), "-e".into(), "SHOW".into()]
+/// Arguments that tell a running Picard to load `files` and come to the front.
+pub fn picard_load_args(files: &[PathBuf]) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = vec!["-e".into(), "LOAD".into()];
+    args.extend(files.iter().map(|f| f.as_os_str().to_owned()));
+    args.extend(["-e".into(), "SHOW".into()]);
+    args
 }
 
 /// Arguments that tell a running Picard to drop `file` from its lists.
@@ -589,13 +592,34 @@ pub fn picard_remove_args(file: &Path) -> Vec<std::ffi::OsString> {
     vec!["-e".into(), "REMOVE".into(), file.as_os_str().to_owned()]
 }
 
-/// Loads `file` in Picard. A running Picard is sent the file with its own
+/// Most files sent to Picard at once.
+pub const PICARD_MAX_FILES: usize = 200;
+
+/// Checks a list of files before handing it to Picard: audio files with
+/// absolute paths only, and not too many.
+pub fn validate_picard_files(paths: &[String]) -> Result<Vec<PathBuf>, String> {
+    if paths.is_empty() {
+        return Err("Nothing to send to Picard.".into());
+    }
+    if paths.len() > PICARD_MAX_FILES {
+        return Err(format!("That's a lot of songs. Send up to {PICARD_MAX_FILES} to Picard at a time."));
+    }
+    paths
+        .iter()
+        .map(|p| {
+            let path = PathBuf::from(p);
+            if path.is_absolute() && crate::track::is_audio_file(&path) { Ok(path) } else { Err(format!("Can't send {p} to Picard.")) }
+        })
+        .collect()
+}
+
+/// Loads `files` in Picard. A running Picard is sent them with its own
 /// command-line (`-e LOAD`), which is more reliable than asking macOS to open
-/// a document; if Picard isn't running it is started with the file.
-pub fn open_in_picard(app: &Path, file: &Path) -> Result<(), String> {
+/// documents; if Picard isn't running it is started with the files.
+pub fn open_files_in_picard(app: &Path, files: &[PathBuf]) -> Result<(), String> {
     let run = picard_run(app);
     if run.exists() && picard_running() {
-        let sent = Command::new(&run).args(picard_load_args(file)).output();
+        let sent = Command::new(&run).args(picard_load_args(files)).output();
         if sent.is_ok_and(|o| o.status.success()) {
             return Ok(());
         }
@@ -604,10 +628,15 @@ pub fn open_in_picard(app: &Path, file: &Path) -> Result<(), String> {
         .arg("-a")
         .arg(app)
         .arg("--args")
-        .arg(file)
+        .args(files)
         .status()
         .map_err(|e| format!("Couldn't start Picard: {e}"))?;
-    if status.success() { Ok(()) } else { Err("Picard didn't open the file.".into()) }
+    if status.success() { Ok(()) } else { Err("Picard didn't open the files.".into()) }
+}
+
+/// Loads one file in Picard.
+pub fn open_in_picard(app: &Path, file: &Path) -> Result<(), String> {
+    open_files_in_picard(app, &[file.to_path_buf()])
 }
 
 /// Tells a running Picard to forget `file` (best effort: nothing to do if Picard isn't running).
@@ -637,11 +666,25 @@ mod tests {
     #[test]
     fn picard_commands_load_the_file_and_show_the_window_or_remove_it() {
         let f = Path::new("/Users/me/Library/Application Support/com.dustin.mixtape/imports/2/a b.mp3");
-        let load: Vec<_> = picard_load_args(f).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        let load: Vec<_> = picard_load_args(&[f.to_path_buf()]).iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(load, vec!["-e", "LOAD", "/Users/me/Library/Application Support/com.dustin.mixtape/imports/2/a b.mp3", "-e", "SHOW"]);
+        let several: Vec<_> = picard_load_args(&[PathBuf::from("/a/1.mp3"), PathBuf::from("/a/2.flac")]).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(several, vec!["-e", "LOAD", "/a/1.mp3", "/a/2.flac", "-e", "SHOW"]);
         let remove: Vec<_> = picard_remove_args(f).iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(remove[..2], ["-e", "REMOVE"]);
         assert_eq!(remove.len(), 3, "the path stays one argument even with spaces");
+    }
+
+    #[test]
+    fn only_a_sensible_list_of_audio_files_is_sent_to_picard() {
+        assert_eq!(validate_picard_files(&["/a/b.mp3".into(), "/c/d.FLAC".into()]).unwrap().len(), 2);
+        assert!(validate_picard_files(&[]).is_err());
+        assert!(validate_picard_files(&["relative/a.mp3".into()]).is_err());
+        assert!(validate_picard_files(&["/etc/passwd".into()]).is_err());
+        assert!(validate_picard_files(&["-e QUIT".into()]).is_err());
+        assert!(validate_picard_files(&["/a/b.mp3".into(), "/a/notes.txt".into()]).is_err());
+        let many: Vec<String> = (0..=PICARD_MAX_FILES).map(|i| format!("/m/{i}.mp3")).collect();
+        assert!(validate_picard_files(&many).unwrap_err().contains("up to"));
     }
 
     #[test]

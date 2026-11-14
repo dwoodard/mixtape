@@ -420,6 +420,61 @@ async fn import_undo(
     .map_err(|e| e.to_string())?
 }
 
+/// Sends songs to MusicBrainz Picard (starting it if needed).
+#[tauri::command]
+async fn picard_open_files(paths: Vec<String>) -> Result<(), String> {
+    let files = importer::validate_picard_files(&paths)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let app = importer::find_picard()
+            .ok_or("MusicBrainz Picard isn't installed. In a terminal: brew install --cask musicbrainz-picard")?;
+        importer::open_files_in_picard(&app, &files)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+struct FolderRefresh {
+    dir: String,
+    tracks: Vec<Track>,
+}
+
+/// Re-checks some folders of the library (after Picard changed files in them):
+/// only changed files are re-read. Returns each folder's songs as they are now.
+#[tauri::command]
+async fn refresh_folders(
+    cache: State<'_, CacheDir>,
+    config: State<'_, Config>,
+    dirs: Vec<String>,
+) -> Result<Vec<FolderRefresh>, String> {
+    let root = library_root(&cache, &config)?;
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut saved = cache.load(&root).ok_or("The library hasn't been saved yet. Use Refresh first.")?;
+        let known = saved.known();
+        let removed = cache.removed(&root);
+        let never = AtomicBool::new(false);
+        let mut results = Vec::new();
+        for dir in dirs {
+            let dir = PathBuf::from(dir);
+            // Only folders inside the library, and only ones that exist.
+            if !dir.starts_with(&root) || !dir.is_dir() {
+                continue;
+            }
+            let scanned = library::scan_folder_with(&dir, &never, &known, &removed, |_| {}).unwrap_or_default();
+            results.push(FolderRefresh {
+                dir: dir.to_string_lossy().into_owned(),
+                tracks: scanned.iter().map(|c| c.track.clone()).collect(),
+            });
+            library::merge_folder(&mut saved.tracks, &dir, scanned);
+        }
+        cache.save(&saved).map_err(|e| e.to_string())?;
+        Ok(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Shows songs in Finder.
 #[tauri::command]
 async fn reveal_in_finder(paths: Vec<String>) -> Result<(), String> {
@@ -763,6 +818,8 @@ pub fn run() {
             import_add_link,
             import_set_tags,
             import_open_in_picard,
+            picard_open_files,
+            refresh_folders,
             import_cancel_picard,
             import_add,
             import_undo,

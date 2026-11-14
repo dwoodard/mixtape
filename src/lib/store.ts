@@ -1,7 +1,8 @@
 import { computed, ref } from "vue";
 import { tauriApi, type Api } from "./api";
 import type { TagEditPayload } from "./tagEdit";
-import { insertSorted } from "./librarySort";
+import { applyFolderRefresh, insertSorted } from "./librarySort";
+import { dirName } from "./format";
 import { createImports } from "./imports";
 import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
 import { persistedSet, type FlagStorage } from "./ui";
@@ -47,6 +48,11 @@ export function createStore(api: Api, storage?: FlagStorage) {
   const duplicateGroups = computed(() =>
     withoutIgnored(findDuplicates(library.value), ignoredDuplicates.items.value),
   );
+
+  /** Folders of songs sent to Picard, with when: re-checked when the user comes back to the app. */
+  const picardFolders = ref<Record<string, number>>({});
+  /** How long after sending a song to Picard its folder is still re-checked. */
+  const PICARD_WINDOW_MS = 30 * 60 * 1000;
 
   /** What the last tag write did, per file, for the editor to show. */
   const tagResults = ref<TagWriteResult[] | null>(null);
@@ -280,6 +286,43 @@ export function createStore(api: Api, storage?: FlagStorage) {
     library.value = library.value.filter((t) => t.path !== path);
   }
 
+  /**
+   * Sends library songs to MusicBrainz Picard. Picard saves tags in place and
+   * may rename the files, so their folders are re-checked each time the user
+   * returns to the app (see refreshPicardFolders).
+   */
+  async function openInPicard(tracks: Pick<Track, "path">[]) {
+    if (tracks.length === 0) return;
+    libraryError.value = null;
+    try {
+      await api.picardOpenFiles(tracks.map((t) => t.path));
+    } catch (e) {
+      libraryError.value = String(e);
+      return;
+    }
+    const now = Date.now();
+    const next = { ...picardFolders.value };
+    for (const t of tracks) next[dirName(t.path)] = now;
+    picardFolders.value = next;
+  }
+
+  /**
+   * Re-checks the folders of songs sent to Picard and updates the library with
+   * what changed there (cheap: only changed files are re-read). Forgets
+   * folders that were sent long ago.
+   */
+  async function refreshPicardFolders(now = Date.now()) {
+    const fresh = Object.entries(picardFolders.value).filter(([, at]) => now - at <= PICARD_WINDOW_MS);
+    picardFolders.value = Object.fromEntries(fresh);
+    if (fresh.length === 0) return;
+    try {
+      const results = await api.refreshFolders(fresh.map(([dir]) => dir));
+      library.value = applyFolderRefresh(library.value, results);
+    } catch (e) {
+      libraryError.value = String(e);
+    }
+  }
+
   /** Shows the songs' files in Finder. */
   async function revealInFinder(tracks: Pick<Track, "path">[]) {
     if (tracks.length === 0) return;
@@ -361,6 +404,9 @@ export function createStore(api: Api, storage?: FlagStorage) {
     removeUnplayable,
     dismissError: () => api.dismissError(),
     revealInFinder,
+    openInPicard,
+    refreshPicardFolders,
+    picardFolders,
     restoreRemoved,
     refreshPlaylists,
     saveQueueAsPlaylist,

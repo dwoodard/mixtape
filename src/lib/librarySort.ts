@@ -25,3 +25,18 @@ export function insertSorted(tracks: Track[], track: Track): Track[] {
   if (at === -1) at = rest.length;
   return [...rest.slice(0, at), track, ...rest.slice(at)];
 }
+
+/**
+ * `library` with each re-checked folder replaced by its current songs:
+ * songs renamed, retagged or deleted there are updated or dropped, and the
+ * rest of the library is untouched.
+ */
+export function applyFolderRefresh(library: Track[], results: { dir: string; tracks: Track[] }[]): Track[] {
+  let out = library;
+  for (const { dir, tracks } of results) {
+    const prefix = dir.endsWith("/") ? dir : `${dir}/`;
+    out = out.filter((t) => !t.path.startsWith(prefix));
+    for (const t of tracks) out = insertSorted(out, t);
+  }
+  return out;
+}

@@ -33,6 +33,8 @@ function fakeApi(overrides: Partial<Api> = {}) {
     importAdd: vi.fn(async () => makeTrack()),
     importOpenInPicard: vi.fn(async () => {}),
     importCancelPicard: vi.fn(async () => {}),
+    picardOpenFiles: vi.fn(async () => {}),
+    refreshFolders: vi.fn(async () => []),
     importUndo: vi.fn(async () => ""),
     importRemove: vi.fn(async () => {}),
     onImportEvent: vi.fn(async () => unlisten),
@@ -803,5 +805,70 @@ describe("writing tags", () => {
     expect(store.libraryError.value).toBe("boom");
     expect(store.library.value.map((t) => t.title)).toEqual(["Old A", "Old B"]);
     expect(store.writingTags.value).toBe(false);
+  });
+});
+
+describe("library songs in Picard", () => {
+  const a = makeTrack({ path: "/m/Korn/Follow/old.mp3", title: "Old", artist: "Korn", album: "Follow" });
+  const b = makeTrack({ path: "/m/Korn/Follow/other.mp3", title: "Other", artist: "Korn", album: "Follow" });
+  const c = makeTrack({ path: "/m/PROF/Unknown/Dynamite.mp3", title: "Dynamite", artist: "PROF" });
+
+  async function loaded(overrides: Partial<Api> = {}) {
+    const fake = fakeApi({ cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: [a, b, c], scannedAtMs: 1 })), ...overrides });
+    const store = createStore(fake.api);
+    await store.init();
+    return { ...fake, store };
+  }
+
+  it("sends the songs to Picard and remembers their folders", async () => {
+    const { api, store } = await loaded();
+    await store.openInPicard([a, b, c]);
+    expect(api.picardOpenFiles).toHaveBeenCalledWith([a.path, b.path, c.path]);
+    expect(Object.keys(store.picardFolders.value).sort()).toEqual(["/m/Korn/Follow", "/m/PROF/Unknown"]);
+  });
+
+  it("shows why Picard could not be opened and remembers nothing", async () => {
+    const { store } = await loaded({ picardOpenFiles: vi.fn(async () => Promise.reject("Picard isn't installed.")) });
+    await store.openInPicard([a]);
+    expect(store.libraryError.value).toContain("isn't installed");
+    expect(store.picardFolders.value).toEqual({});
+  });
+
+  it("does nothing for no songs", async () => {
+    const { api, store } = await loaded();
+    await store.openInPicard([]);
+    expect(api.picardOpenFiles).not.toHaveBeenCalled();
+  });
+
+  it("when the user comes back, re-checks those folders and applies what Picard changed", async () => {
+    const renamed = makeTrack({ path: "/m/Korn/Follow/1-03 Got the Life.mp3", title: "Got the Life", artist: "Korn", album: "Follow" });
+    const { api, store } = await loaded({ refreshFolders: vi.fn(async () => [{ dir: "/m/Korn/Follow", tracks: [renamed, b] }]) });
+    await store.openInPicard([a]);
+
+    await store.refreshPicardFolders();
+
+    expect(api.refreshFolders).toHaveBeenCalledWith(["/m/Korn/Follow"]);
+    expect(store.library.value.map((t) => t.path).sort()).toEqual([renamed.path, b.path, c.path].sort());
+    // Still being watched: the user may save in Picard later.
+    expect(Object.keys(store.picardFolders.value)).toEqual(["/m/Korn/Follow"]);
+  });
+
+  it("does nothing when no songs were sent, and forgets folders sent long ago", async () => {
+    const { api, store } = await loaded();
+    await store.refreshPicardFolders();
+    expect(api.refreshFolders).not.toHaveBeenCalled();
+
+    await store.openInPicard([a]);
+    await store.refreshPicardFolders(Date.now() + 31 * 60 * 1000);
+    expect(api.refreshFolders).not.toHaveBeenCalled();
+    expect(store.picardFolders.value).toEqual({});
+  });
+
+  it("keeps the library as it was if the re-check fails", async () => {
+    const { store } = await loaded({ refreshFolders: vi.fn(async () => Promise.reject("not mounted")) });
+    await store.openInPicard([a]);
+    await store.refreshPicardFolders();
+    expect(store.library.value).toHaveLength(3);
+    expect(store.libraryError.value).toBe("not mounted");
   });
 });

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { needsAttention } from "../lib/imports";
 import { imports, store } from "../lib/store";
 import type { ImportItem } from "../lib/types";
+import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import ImportStage from "./ImportStage.vue";
 
 /** Everything brought in, in the order it arrived. */
@@ -12,6 +13,39 @@ const emit = defineEmits<{ focus: [id: number]; toggle: [id: number] }>();
 const ready = computed(() => imports.items.value.filter((i) => i.stage === "ready"));
 const readyPicked = computed(() => ready.value.filter((i) => props.picked.has(i.id)));
 const attention = (i: ImportItem) => i.stage === "ready" && needsAttention(i, store.library.value);
+/** Right-click on a song in the inbox. */
+const menu = ref<{ x: number; y: number; item: ImportItem } | null>(null);
+const picardMissing = computed(() => imports.tools.value !== null && imports.tools.value.picard === null);
+function openMenu(item: ImportItem, event: MouseEvent) {
+  emit("focus", item.id);
+  menu.value = { x: event.clientX, y: event.clientY, item };
+}
+const menuItems = computed<MenuItem[]>(() => {
+  const item = menu.value?.item;
+  if (!item) return [];
+  const items: MenuItem[] = [];
+  if (item.stage === "ready") {
+    if (item.picard === "waiting") {
+      items.push({ label: "Send to Picard again", action: () => imports.openInPicard(item.id), disabled: picardMissing.value });
+      items.push({ label: "Cancel Picard", action: () => imports.cancelPicard(item.id) });
+    } else {
+      items.push({
+        label: picardMissing.value
+          ? "Tag in MusicBrainz Picard (not installed)"
+          : item.picard === "saved"
+            ? "Open in MusicBrainz Picard again"
+            : "Tag in MusicBrainz Picard…",
+        action: () => imports.openInPicard(item.id),
+        disabled: picardMissing.value,
+      });
+    }
+    items.push({ label: "Add to library", action: () => imports.add(item.id), separated: true });
+  }
+  if (item.stage === "added") items.push({ label: "Undo add", action: () => imports.undo(item.id) });
+  items.push({ label: item.stage === "failed" ? "Clear" : "Remove", action: () => imports.remove(item.id), danger: true, separated: items.length > 0 });
+  return items;
+});
+
 const autoList = computed(() =>
   imports.items.value.filter((i) => imports.autoAdded.value.includes(i.id) && i.stage === "added"),
 );
@@ -31,7 +65,7 @@ const autoList = computed(() =>
       <table v-if="imports.items.value.length">
         <thead><tr><th /><th>Title</th><th>Artist</th><th>Status</th><th title="How sure we are of the artist and title">Match</th></tr></thead>
         <tbody>
-          <tr v-for="it in imports.items.value" :key="it.id" :class="{ focus: focus === it.id }" @click="emit('focus', it.id)">
+          <tr v-for="it in imports.items.value" :key="it.id" :class="{ focus: focus === it.id }" @click="emit('focus', it.id)" @contextmenu.prevent="openMenu(it, $event)">
             <td><input type="checkbox" :checked="picked.has(it.id)" aria-label="Select" @click.stop="emit('toggle', it.id)" /></td>
             <td class="ellipsis">{{ it.proposal.title || it.videoTitle || it.url }}</td>
             <td class="ellipsis muted">{{ it.proposal.artist }}</td>
@@ -76,6 +110,7 @@ const autoList = computed(() =>
         </li>
       </ul>
     </div>
+    <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="menu = null" />
   </section>
 </template>
 

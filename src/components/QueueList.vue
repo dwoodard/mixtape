@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import { formatTime } from "../lib/format";
-import { store } from "../lib/store";
+import { imports, store } from "../lib/store";
 import { libraryView } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 
@@ -12,9 +12,15 @@ const menuItems = computed<MenuItem[]>(() => {
   const index = menu.value?.index ?? -1;
   const track = store.queue.value[index];
   if (!track) return [];
+  const picardMissing = imports.tools.value !== null && imports.tools.value.picard === null;
   return [
     { label: "Play", action: () => store.playQueueIndex(index) },
     { label: "Reveal in Finder", action: () => store.revealInFinder([track]) },
+    {
+      label: picardMissing ? "Open in MusicBrainz Picard (not installed)" : "Open in MusicBrainz Picard",
+      action: () => store.openInPicard([track]),
+      disabled: picardMissing,
+    },
     { label: "Remove from playlist", action: () => store.removeFromQueue(index), separated: true },
   ];
 });

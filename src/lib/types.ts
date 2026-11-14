@@ -135,3 +135,9 @@ export interface ToolStatus {
 }
 
 export type TagsPatch = Partial<Omit<ImportProposal, "disc" | "discTotal">>;
+
+/** A folder of the library as it is now, after it was re-checked. */
+export interface FolderRefresh {
+  dir: string;
+  tracks: Track[];
+}
