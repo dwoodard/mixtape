@@ -4,6 +4,7 @@ pub mod cleanup;
 pub mod config;
 pub mod cover;
 pub mod importer;
+pub mod imports;
 pub mod library;
 pub mod media;
 pub mod player;
@@ -44,6 +45,23 @@ struct CoverService {
 /// Set while a duplicate clean-up runs, so only one can run at a time.
 #[derive(Default)]
 struct CleanupBusy(Arc<AtomicBool>);
+
+struct ImportsHandle(imports::Imports);
+
+/// Locates yt-dlp on every call, so installing it while the app is open just works.
+struct LazyYtDlp;
+
+impl imports::Runner for LazyYtDlp {
+    fn probe(&self, url: &str) -> Result<String, String> {
+        imports::YtDlp::locate()?.probe(url)
+    }
+    fn playlist(&self, url: &str) -> Result<String, String> {
+        imports::YtDlp::locate()?.playlist(url)
+    }
+    fn fetch(&self, url: &str, format: &str, dir: &std::path::Path, line: &mut dyn FnMut(&str), kill: &imports::KillSwitch) -> Result<(), String> {
+        imports::YtDlp::locate()?.fetch(url, format, dir, line, kill)
+    }
+}
 
 struct PlayerHandle(Arc<Mutex<Player>>);
 
@@ -256,6 +274,119 @@ async fn write_tags(
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolStatus {
+    yt_dlp: Option<String>,
+    ffmpeg: Option<String>,
+}
+
+/// Whether the tools the import pipeline needs are installed.
+#[tauri::command]
+fn import_tools() -> ToolStatus {
+    let found = |n: &str| importer::find_tool(n).map(|p| p.display().to_string());
+    ToolStatus { yt_dlp: found("yt-dlp"), ffmpeg: found("ffmpeg") }
+}
+
+#[tauri::command]
+fn import_list(imports: State<ImportsHandle>) -> Vec<imports::ImportItem> {
+    imports.0.list()
+}
+
+#[tauri::command]
+fn import_add_link(imports: State<ImportsHandle>, text: String, format: String) -> Result<(), String> {
+    imports.0.add_link(&text, &format)
+}
+
+#[tauri::command]
+fn import_set_tags(
+    imports: State<ImportsHandle>,
+    id: u64,
+    patch: imports::TagsPatch,
+) -> Result<imports::ImportItem, String> {
+    imports.0.set_tags(id, patch)
+}
+
+#[tauri::command]
+fn import_remove(imports: State<ImportsHandle>, id: u64) {
+    imports.0.remove(id);
+}
+
+fn library_root(cache: &CacheDir, config: &Config) -> Result<PathBuf, String> {
+    cache
+        .last_root()
+        .or_else(|| config.music_folder.clone())
+        .ok_or_else(|| "Open or import a library folder first, so there is somewhere to add songs.".to_string())
+}
+
+/// Adds a ready song to the library: tags written, filed as Artist/Album/NN Title.
+#[tauri::command]
+async fn import_add(
+    imports: State<'_, ImportsHandle>,
+    cache: State<'_, CacheDir>,
+    config: State<'_, Config>,
+    id: u64,
+) -> Result<Track, String> {
+    let root = library_root(&cache, &config)?;
+    let (staged, proposal) = imports.0.take_for_add(id)?;
+    let cache = cache.inner().clone();
+    let manager = imports.0.clone();
+    let root_for_job = root.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let added = importer::add_to_library(&staged, &proposal, &root_for_job)?;
+        if let Ok(meta) = std::fs::metadata(&added.path) {
+            let modified_ms = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as u64);
+            let cached = library::CachedTrack { modified_ms, size: meta.len(), track: added.track.clone() };
+            if let Err(e) = cache.add_tracks(&root_for_job, vec![cached]) {
+                eprintln!("could not update the library cache: {e}");
+            }
+        }
+        Ok::<_, String>(added)
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r);
+    match outcome {
+        Ok(added) => {
+            manager.mark_added(id, &added.path, added.size);
+            Ok(added.track)
+        }
+        Err(e) => {
+            manager.abort_add(id);
+            Err(e)
+        }
+    }
+}
+
+/// Undoes an add: removes the file we added and forgets it in the library.
+#[tauri::command]
+async fn import_undo(
+    imports: State<'_, ImportsHandle>,
+    cache: State<'_, CacheDir>,
+    config: State<'_, Config>,
+    id: u64,
+) -> Result<String, String> {
+    let root = library_root(&cache, &config)?;
+    let (path, size) = imports.0.take_for_undo(id)?;
+    let cache = cache.inner().clone();
+    let manager = imports.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        importer::remove_added(&root, &path, size)?;
+        let shown = path.to_string_lossy().into_owned();
+        if let Err(e) = cache.forget_tracks(&root, std::slice::from_ref(&shown)) {
+            eprintln!("could not update the library cache: {e}");
+        }
+        manager.mark_undone(id);
+        Ok(shown)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Shows songs in Finder.
@@ -543,6 +674,16 @@ pub fn run() {
             setup_player(app);
             app.manage(ScanControl::default());
             app.manage(CleanupBusy::default());
+            {
+                let emit_handle = app.handle().clone();
+                app.manage(ImportsHandle(imports::Imports::new(
+                    app.path().app_data_dir()?.join("imports"),
+                    Box::new(LazyYtDlp),
+                    Box::new(move |event| {
+                        let _ = emit_handle.emit("import-event", event);
+                    }),
+                )));
+            }
             app.manage(Arc::new(CoverService {
                 cache: CoverCache::new(app.path().app_cache_dir()?.join("covers")),
                 pool: rayon::ThreadPoolBuilder::new()
@@ -577,6 +718,13 @@ pub fn run() {
             cached_library,
             remove_from_library,
             reveal_in_finder,
+            import_tools,
+            import_list,
+            import_add_link,
+            import_set_tags,
+            import_add,
+            import_undo,
+            import_remove,
             write_tags,
             trash_duplicates,
             removed_count,

@@ -129,6 +129,11 @@ fn modified_ms(meta: &std::fs::Metadata) -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// Puts cached tracks in the order a scan produces: artist, album, disc, track, path.
+pub fn sort_cached(tracks: &mut [CachedTrack]) {
+    tracks.sort_by(|a, b| sort_key(&a.track).cmp(&sort_key(&b.track)));
+}
+
 fn sort_key(t: &Track) -> (String, String, u32, u32, String) {
     let artist = if t.album_artist.is_empty() { &t.artist } else { &t.album_artist };
     (
