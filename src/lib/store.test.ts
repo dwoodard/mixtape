@@ -22,6 +22,20 @@ function fakeApi(overrides: Partial<Api> = {}) {
     importLibrary: vi.fn(async () => [makeTrack()]),
     cancelScan: vi.fn(async () => {}),
     cachedLibrary: vi.fn(async () => null),
+    enqueueNext: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+    setShuffle: vi.fn(async () => {}),
+    setRepeat: vi.fn(async () => {}),
+    listPlaylists: vi.fn(async () => []),
+    loadPlaylist: vi.fn(async () => [makeTrack({ title: "From playlist" })]),
+    savePlaylist: vi.fn(async (name: string, tracks: Track[]) => ({
+      id: name.toLowerCase(),
+      name,
+      trackCount: tracks.length,
+      durationMs: 0,
+      updatedAtMs: 0,
+    })),
+    deletePlaylist: vi.fn(async () => {}),
     playTracks: vi.fn(async () => {}),
     enqueue: vi.fn(async () => {}),
     playIndex: vi.fn(async () => {}),
@@ -311,5 +325,95 @@ describe("saved library", () => {
     const store = createStore(api);
     await store.refresh();
     expect(api.scanFolder).not.toHaveBeenCalled();
+  });
+});
+
+describe("play modes", () => {
+  it("toggleShuffle flips the current setting", async () => {
+    const { api, listeners } = fakeApi();
+    const store = createStore(api);
+    await store.init();
+
+    await store.toggleShuffle();
+    expect(api.setShuffle).toHaveBeenLastCalledWith(true);
+
+    listeners.state[0](makePlayerState({ shuffle: true }));
+    await store.toggleShuffle();
+    expect(api.setShuffle).toHaveBeenLastCalledWith(false);
+  });
+
+  it("cycleRepeat goes off, all, one, then back to off", async () => {
+    const { api, listeners } = fakeApi();
+    const store = createStore(api);
+    await store.init();
+
+    await store.cycleRepeat();
+    expect(api.setRepeat).toHaveBeenLastCalledWith("all");
+    listeners.state[0](makePlayerState({ repeat: "all" }));
+    await store.cycleRepeat();
+    expect(api.setRepeat).toHaveBeenLastCalledWith("one");
+    listeners.state[0](makePlayerState({ repeat: "one" }));
+    await store.cycleRepeat();
+    expect(api.setRepeat).toHaveBeenLastCalledWith("off");
+  });
+
+  it("forwards play next and stop", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    const tracks = [makeTrack()];
+    await store.enqueueNext(tracks);
+    await store.stop();
+    expect(api.enqueueNext).toHaveBeenCalledWith(tracks);
+    expect(api.stop).toHaveBeenCalled();
+  });
+});
+
+describe("playlists", () => {
+  it("loads the saved playlists on init", async () => {
+    const summary = { id: "mix", name: "Mix", trackCount: 3, durationMs: 1, updatedAtMs: 1 };
+    const { api } = fakeApi({ listPlaylists: vi.fn(async () => [summary]) });
+    const store = createStore(api);
+    await store.init();
+    expect(store.playlists.value).toEqual([summary]);
+  });
+
+  it("saves the current queue under a name and refreshes the list", async () => {
+    const queued = [makeTrack({ title: "Q1" }), makeTrack({ title: "Q2" })];
+    const { api, listeners } = fakeApi();
+    const store = createStore(api);
+    await store.init();
+    listeners.queue[0](queued);
+
+    const ok = await store.saveQueueAsPlaylist("Road Trip");
+
+    expect(ok).toBe(true);
+    expect(api.savePlaylist).toHaveBeenCalledWith("Road Trip", queued);
+    expect(api.listPlaylists).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a failed save and keeps going", async () => {
+    const { api } = fakeApi({ savePlaylist: vi.fn(async () => Promise.reject("Give the playlist a name.")) });
+    const store = createStore(api);
+
+    expect(await store.saveQueueAsPlaylist(" ")).toBe(false);
+    expect(store.playlistError.value).toBe("Give the playlist a name.");
+  });
+
+  it("returns a playlist's tracks, or nothing plus an error when it is gone", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    expect((await store.playlistTracks("mix"))[0].title).toBe("From playlist");
+
+    (api.loadPlaylist as ReturnType<typeof vi.fn>).mockRejectedValueOnce("gone");
+    expect(await store.playlistTracks("mix")).toEqual([]);
+    expect(store.playlistError.value).toBe("gone");
+  });
+
+  it("deletes and refreshes", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.deletePlaylist("mix");
+    expect(api.deletePlaylist).toHaveBeenCalledWith("mix");
+    expect(api.listPlaylists).toHaveBeenCalled();
   });
 });

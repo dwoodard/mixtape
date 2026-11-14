@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { CachedLibrary, PlayerSnapshot, PlayerState, ScanProgress, Track, WindowMode } from "./types";
+import type { CachedLibrary, PlayerSnapshot, PlayerState, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 type Unlisten = () => void;
 
@@ -17,6 +17,14 @@ export interface Api {
   cachedLibrary(): Promise<CachedLibrary | null>;
   playTracks(tracks: Track[], start: number): Promise<void>;
   enqueue(tracks: Track[]): Promise<void>;
+  enqueueNext(tracks: Track[]): Promise<void>;
+  stop(): Promise<void>;
+  setShuffle(on: boolean): Promise<void>;
+  setRepeat(repeat: Repeat): Promise<void>;
+  listPlaylists(): Promise<PlaylistSummary[]>;
+  loadPlaylist(id: string): Promise<Track[]>;
+  savePlaylist(name: string, tracks: Track[]): Promise<PlaylistSummary>;
+  deletePlaylist(id: string): Promise<void>;
   playIndex(index: number): Promise<void>;
   toggle(): Promise<void>;
   next(): Promise<void>;
@@ -48,6 +56,14 @@ export const tauriApi: Api = {
   cachedLibrary: () => invoke("cached_library"),
   playTracks: (tracks, start) => invoke("play_tracks", { tracks, start }),
   enqueue: (tracks) => invoke("enqueue", { tracks }),
+  enqueueNext: (tracks) => invoke("enqueue_next", { tracks }),
+  stop: () => invoke("stop_playback"),
+  setShuffle: (on) => invoke("set_shuffle", { on }),
+  setRepeat: (repeat) => invoke("set_repeat", { repeat }),
+  listPlaylists: () => invoke("list_playlists"),
+  loadPlaylist: (id) => invoke("load_playlist", { id }),
+  savePlaylist: (name, tracks) => invoke("save_playlist", { name, tracks }),
+  deletePlaylist: (id) => invoke("delete_playlist", { id }),
   playIndex: (index) => invoke("play_index", { index }),
   toggle: () => invoke("toggle_playback"),
   next: () => invoke("next_track"),

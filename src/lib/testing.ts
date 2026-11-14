@@ -24,6 +24,8 @@ export function makePlayerState(overrides: Partial<PlayerState> = {}): PlayerSta
     positionMs: 0,
     durationMs: 0,
     volume: 1,
+    shuffle: false,
+    repeat: "off",
     error: null,
     ...overrides,
   };

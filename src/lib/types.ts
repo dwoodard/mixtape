@@ -13,6 +13,8 @@ export interface Track {
 
 export type PlaybackStatus = "stopped" | "playing" | "paused";
 
+export type Repeat = "off" | "all" | "one";
+
 export interface PlayerState {
   status: PlaybackStatus;
   currentIndex: number | null;
@@ -20,6 +22,8 @@ export interface PlayerState {
   positionMs: number;
   durationMs: number;
   volume: number;
+  shuffle: boolean;
+  repeat: Repeat;
   error: string | null;
 }
 
@@ -41,4 +45,12 @@ export interface CachedLibrary {
   folder: string;
   tracks: Track[];
   scannedAtMs: number;
+}
+
+export interface PlaylistSummary {
+  id: string;
+  name: string;
+  trackCount: number;
+  durationMs: number;
+  updatedAtMs: number;
 }

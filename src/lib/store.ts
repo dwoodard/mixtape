@@ -1,6 +1,6 @@
 import { ref } from "vue";
 import { tauriApi, type Api } from "./api";
-import type { PlayerState, ScanProgress, Track, WindowMode } from "./types";
+import type { PlayerState, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 /** What the backend returns when a scan was cancelled. */
 const SCAN_CANCELLED = "cancelled";
@@ -12,6 +12,8 @@ const emptyState = (): PlayerState => ({
   positionMs: 0,
   durationMs: 0,
   volume: 1,
+  shuffle: false,
+  repeat: "off",
   error: null,
 });
 
@@ -28,6 +30,9 @@ export function createStore(api: Api) {
   const scanning = ref(false);
   const scanError = ref<string | null>(null);
   const scanProgress = ref<ScanProgress | null>(null);
+  const playlists = ref<PlaylistSummary[]>([]);
+  /** Why the last playlist action failed, if it did. */
+  const playlistError = ref<string | null>(null);
   /** Identifies the latest scan so a cancelled older one cannot clobber its state. */
   let scanId = 0;
   const mode = ref<WindowMode>("large");
@@ -47,6 +52,7 @@ export function createStore(api: Api) {
     queue.value = snapshot.queue;
     mode.value = await api.windowMode();
     configuredFolder.value = await api.musicFolder();
+    playlists.value = await api.listPlaylists();
     // Show the saved library right away; a refresh is up to the user.
     const cached = await api.cachedLibrary();
     if (cached && library.value.length === 0) {
@@ -86,6 +92,45 @@ export function createStore(api: Api) {
     await scan(path, () => api.scanFolder(path));
   }
 
+  async function refreshPlaylists() {
+    playlists.value = await api.listPlaylists();
+  }
+
+  /** Saves the current queue under `name` (replacing a playlist of the same name). */
+  async function saveQueueAsPlaylist(name: string): Promise<boolean> {
+    playlistError.value = null;
+    try {
+      await api.savePlaylist(name, queue.value);
+      await refreshPlaylists();
+      return true;
+    } catch (e) {
+      playlistError.value = String(e);
+      return false;
+    }
+  }
+
+  async function deletePlaylist(id: string) {
+    playlistError.value = null;
+    try {
+      await api.deletePlaylist(id);
+      await refreshPlaylists();
+    } catch (e) {
+      playlistError.value = String(e);
+    }
+  }
+
+  /** The tracks of a saved playlist, or an empty list (with playlistError set) if it is gone. */
+  async function playlistTracks(id: string): Promise<Track[]> {
+    playlistError.value = null;
+    try {
+      return await api.loadPlaylist(id);
+    } catch (e) {
+      playlistError.value = String(e);
+      await refreshPlaylists();
+      return [];
+    }
+  }
+
   async function cancelScan() {
     await api.cancelScan();
   }
@@ -113,6 +158,8 @@ export function createStore(api: Api) {
     folder,
     configuredFolder,
     scannedAt,
+    playlists,
+    playlistError,
     scanning,
     scanError,
     scanProgress,
@@ -121,11 +168,24 @@ export function createStore(api: Api) {
     openFolder,
     importLibrary,
     refresh,
+    refreshPlaylists,
+    saveQueueAsPlaylist,
+    deletePlaylist,
+    playlistTracks,
     cancelScan,
     toggleMode,
     /** Replaces the queue with `tracks` and starts at `index`. */
     playTracks: (tracks: Track[], index: number) => api.playTracks(tracks, index),
     enqueue: (tracks: Track[]) => api.enqueue(tracks),
+    enqueueNext: (tracks: Track[]) => api.enqueueNext(tracks),
+    stop: () => api.stop(),
+    toggleShuffle: () => api.setShuffle(!player.value.shuffle),
+    /** off -> all -> one -> off */
+    cycleRepeat: () => {
+      const order: Repeat[] = ["off", "all", "one"];
+      const next = order[(order.indexOf(player.value.repeat) + 1) % order.length];
+      return api.setRepeat(next);
+    },
     playQueueIndex: (index: number) => api.playIndex(index),
     toggle: () => api.toggle(),
     next: () => api.next(),
