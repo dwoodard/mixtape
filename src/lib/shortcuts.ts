@@ -50,8 +50,6 @@ export const COMMANDS: readonly CommandDef[] = [
   { id: "reveal", title: "Reveal selected songs in Finder", group: "Selection", keys: cmd("r", { shift: true }) },
   { id: "remove", title: "Remove selected songs from the library", group: "Selection", keys: { key: "Delete" }, local: true },
 
-  { id: "saveQueue", title: "Save the queue under a name", group: "Queue and library", keys: cmd("s") },
-  { id: "loadQueue", title: "Load a saved queue", group: "Queue and library" },
   { id: "clearQueue", title: "Clear the queue", group: "Queue and library", keys: cmd("k", { shift: true }) },
   { id: "openFolder", title: "Open a music folder", group: "Queue and library", keys: cmd("o") },
   { id: "refresh", title: "Refresh the library", group: "Queue and library", keys: cmd("r") },

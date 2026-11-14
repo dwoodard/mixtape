@@ -124,8 +124,9 @@ describe("filterCommands", () => {
     expect(ids.slice(0, 4)).toEqual(["viewTracks", "viewAlbums", "viewArtists", "viewDuplicates"]);
   });
 
-  it("has one queue: no playlist commands, and the view keys run 1 to 4 without a gap", () => {
-    expect(COMMANDS.some((c) => /playlist/i.test(c.id + c.title))).toBe(false);
+  it("has one unnamed queue: nothing to save, name or load, and the view keys run 1 to 4 without a gap", () => {
+    expect(COMMANDS.some((c) => /playlist|saveQueue|loadQueue|saved queue/i.test(c.id + c.title))).toBe(false);
+    expect(COMMANDS.some((c) => c.keys?.meta && c.keys.key === "s" && !c.keys.shift)).toBe(false);
     const views = ["viewTracks", "viewAlbums", "viewArtists", "viewDuplicates"];
     expect(views.map((id) => COMMANDS.find((c) => c.id === id)!.keys!.key)).toEqual(["1", "2", "3", "4"]);
   });

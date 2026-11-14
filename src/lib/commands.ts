@@ -5,9 +5,7 @@ import {
   appMode,
   helpOpen,
   libraryView,
-  loadingQueue,
   paletteOpen,
-  savingQueue,
   selectedSongs,
   setAppMode,
   tagEditPaths,
@@ -90,22 +88,6 @@ export function createCommands(store: Store): Command[] {
     reveal: { enabled: songs.length > 0, run: () => store.revealInFinder(songs) },
     remove: {},
 
-    saveQueue: {
-      enabled: hasQueue,
-      run: () => {
-        setAppMode("player");
-        loadingQueue.value = false;
-        savingQueue.value = true;
-      },
-    },
-    loadQueue: {
-      enabled: store.savedQueues.value.length > 0,
-      run: () => {
-        setAppMode("player");
-        savingQueue.value = false;
-        loadingQueue.value = true;
-      },
-    },
     clearQueue: { enabled: hasQueue, run: () => store.clearQueue() },
     openFolder: { enabled: !scanning, run: () => store.openFolder() },
     refresh: { enabled: !!store.folder.value && !scanning, run: () => store.refresh() },

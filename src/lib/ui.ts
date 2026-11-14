@@ -144,7 +144,3 @@ export function withdrawSelection(owner: symbol) {
 
 export const paletteOpen = ref(false);
 export const helpOpen = ref(false);
-/** The queue's "save under a name" form is open. */
-export const savingQueue = ref(false);
-/** The queue's list of saved queues is open. */
-export const loadingQueue = ref(false);

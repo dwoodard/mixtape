@@ -7,7 +7,7 @@ import { dirName } from "./format";
 import { createImports } from "./imports";
 import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
 import { persistedSet, type FlagStorage } from "./ui";
-import type { CleanupReport, DuplicatePair, PlayerState, TagWriteResult, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
+import type { CleanupReport, DuplicatePair, PlayerState, TagWriteResult, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 /** What the backend returns when a scan was cancelled. */
 const SCAN_CANCELLED = "cancelled";
@@ -67,10 +67,6 @@ export function createStore(api: Api, storage?: FlagStorage) {
   /** What the last "move extra copies to Trash" did, for the Duplicates tab to show. */
   const cleanupReport = ref<CleanupReport | null>(null);
   const scanProgress = ref<ScanProgress | null>(null);
-  /** Queues saved by name (stored on disk as playlists.json). */
-  const savedQueues = ref<PlaylistSummary[]>([]);
-  /** Why the last saved-queue action failed, if it did. */
-  const savedQueueError = ref<string | null>(null);
   /** Identifies the latest scan so a cancelled older one cannot clobber its state. */
   let scanId = 0;
   /** Unknown (null) until the backend says which window mode this launch is in. */
@@ -97,7 +93,6 @@ export function createStore(api: Api, storage?: FlagStorage) {
     // Nice-to-have data: a failure here is logged and must not break startup.
     await Promise.all([
       api.musicFolder().then((f) => (configuredFolder.value = f)),
-      api.listPlaylists().then((p) => (savedQueues.value = p)),
       api.removedCount().then((n) => (removedCount.value = n)),
       api.cachedLibrary().then((cached) => {
         // Show the saved library right away; a refresh is up to the user.
@@ -151,54 +146,6 @@ export function createStore(api: Api, storage?: FlagStorage) {
     if (!folder.value) return;
     const path = folder.value;
     await scan(path, () => api.scanFolder(path));
-  }
-
-  async function refreshSavedQueues() {
-    savedQueues.value = await api.listPlaylists();
-  }
-
-  /** Saves the current queue under `name` (replacing a saved queue of the same name). */
-  async function saveQueue(name: string): Promise<boolean> {
-    savedQueueError.value = null;
-    try {
-      await api.savePlaylist(name, queue.value);
-      await refreshSavedQueues();
-      return true;
-    } catch (e) {
-      savedQueueError.value = String(e);
-      return false;
-    }
-  }
-
-  async function deleteSavedQueue(id: string) {
-    savedQueueError.value = null;
-    try {
-      await api.deletePlaylist(id);
-      await refreshSavedQueues();
-    } catch (e) {
-      savedQueueError.value = String(e);
-    }
-  }
-
-  /**
-   * Puts a saved queue's songs in the queue: "replace" swaps the queue and starts
-   * playing from the first song, "append" adds them to the end. If the saved queue
-   * is gone, the queue is left alone and savedQueueError says why.
-   */
-  async function loadSavedQueue(id: string, how: "replace" | "append"): Promise<boolean> {
-    savedQueueError.value = null;
-    let tracks: Track[];
-    try {
-      tracks = await api.loadPlaylist(id);
-    } catch (e) {
-      savedQueueError.value = String(e);
-      await refreshSavedQueues();
-      return false;
-    }
-    if (tracks.length === 0) return false;
-    if (how === "replace") await api.playTracks(tracks, 0);
-    else await api.enqueue(tracks);
-    return true;
   }
 
   /** Takes songs out of the library. Their files stay on disk and are not re-added by a refresh. */
@@ -432,8 +379,6 @@ export function createStore(api: Api, storage?: FlagStorage) {
     ignoreDuplicate: (key: string) => ignoredDuplicates.add(key),
     resetIgnoredDuplicates: () => ignoredDuplicates.clear(),
     dismissDuplicateNotice: () => (duplicateNotice.value = 0),
-    savedQueues,
-    savedQueueError,
     scanning,
     scanError,
     scanProgress,
@@ -460,10 +405,6 @@ export function createStore(api: Api, storage?: FlagStorage) {
     refreshPicardFolders,
     picardFolders,
     restoreRemoved,
-    refreshSavedQueues,
-    saveQueue,
-    deleteSavedQueue,
-    loadSavedQueue,
     cancelScan,
     toggleMode,
     /** Replaces the queue with `tracks` and starts at `index`. */

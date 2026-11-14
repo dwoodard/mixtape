@@ -48,16 +48,6 @@ function fakeApi(overrides: Partial<Api> = {}) {
     dismissError: vi.fn(async () => {}),
     setShuffle: vi.fn(async () => {}),
     setRepeat: vi.fn(async () => {}),
-    listPlaylists: vi.fn(async () => []),
-    loadPlaylist: vi.fn(async () => [makeTrack({ title: "From playlist" })]),
-    savePlaylist: vi.fn(async (name: string, tracks: Track[]) => ({
-      id: name.toLowerCase(),
-      name,
-      trackCount: tracks.length,
-      durationMs: 0,
-      updatedAtMs: 0,
-    })),
-    deletePlaylist: vi.fn(async () => {}),
     playTracks: vi.fn(async () => {}),
     enqueue: vi.fn(async () => {}),
     playIndex: vi.fn(async () => {}),
@@ -392,79 +382,6 @@ describe("play modes", () => {
   });
 });
 
-describe("saved queues", () => {
-  it("loads the saved queues on init", async () => {
-    const summary = { id: "mix", name: "Mix", trackCount: 3, durationMs: 1, updatedAtMs: 1 };
-    const { api } = fakeApi({ listPlaylists: vi.fn(async () => [summary]) });
-    const store = createStore(api);
-    await store.init();
-    expect(store.savedQueues.value).toEqual([summary]);
-  });
-
-  it("saves the current queue under a name and refreshes the list", async () => {
-    const queued = [makeTrack({ title: "Q1" }), makeTrack({ title: "Q2" })];
-    const { api, listeners } = fakeApi();
-    const store = createStore(api);
-    await store.init();
-    listeners.queue[0](queued);
-
-    const ok = await store.saveQueue("Road Trip");
-
-    expect(ok).toBe(true);
-    expect(api.savePlaylist).toHaveBeenCalledWith("Road Trip", queued);
-    expect(api.listPlaylists).toHaveBeenCalledTimes(2);
-  });
-
-  it("reports a failed save and keeps going", async () => {
-    const { api } = fakeApi({ savePlaylist: vi.fn(async () => Promise.reject("Give the playlist a name.")) });
-    const store = createStore(api);
-
-    expect(await store.saveQueue(" ")).toBe(false);
-    expect(store.savedQueueError.value).toBe("Give the playlist a name.");
-  });
-
-  it("loading replaces the queue and starts playing from its first song", async () => {
-    const { api } = fakeApi();
-    const store = createStore(api);
-
-    expect(await store.loadSavedQueue("mix", "replace")).toBe(true);
-
-    expect(api.loadPlaylist).toHaveBeenCalledWith("mix");
-    expect(api.playTracks).toHaveBeenCalledWith([expect.objectContaining({ title: "From playlist" })], 0);
-    expect(api.enqueue).not.toHaveBeenCalled();
-  });
-
-  it("loading can add the songs to the end of the queue instead", async () => {
-    const { api } = fakeApi();
-    const store = createStore(api);
-
-    expect(await store.loadSavedQueue("mix", "append")).toBe(true);
-
-    expect(api.enqueue).toHaveBeenCalledWith([expect.objectContaining({ title: "From playlist" })]);
-    expect(api.playTracks).not.toHaveBeenCalled();
-  });
-
-  it("a saved queue that is gone leaves the queue alone and reports why", async () => {
-    const { api } = fakeApi();
-    const store = createStore(api);
-    (api.loadPlaylist as ReturnType<typeof vi.fn>).mockRejectedValueOnce("gone");
-
-    expect(await store.loadSavedQueue("mix", "replace")).toBe(false);
-
-    expect(store.savedQueueError.value).toBe("gone");
-    expect(api.playTracks).not.toHaveBeenCalled();
-    expect(api.listPlaylists).toHaveBeenCalled();
-  });
-
-  it("deletes and refreshes", async () => {
-    const { api } = fakeApi();
-    const store = createStore(api);
-    await store.deleteSavedQueue("mix");
-    expect(api.deletePlaylist).toHaveBeenCalledWith("mix");
-    expect(api.listPlaylists).toHaveBeenCalled();
-  });
-});
-
 describe("startup", () => {
   it("has no window mode until the backend answers", async () => {
     let answer!: (m: WindowMode) => void;
@@ -483,7 +400,6 @@ describe("startup", () => {
     const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
     const { api } = fakeApi({
       windowMode: vi.fn(async () => "thin" as WindowMode),
-      listPlaylists: vi.fn(async () => Promise.reject("no such command")),
       cachedLibrary: vi.fn(async () => Promise.reject("cache unreadable")),
     });
     const store = createStore(api);
@@ -491,7 +407,7 @@ describe("startup", () => {
     await store.init();
 
     expect(store.mode.value).toBe("thin");
-    expect(quiet).toHaveBeenCalledTimes(2);
+    expect(quiet).toHaveBeenCalledTimes(1);
     quiet.mockRestore();
   });
 });

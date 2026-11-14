@@ -49,14 +49,6 @@ export interface CachedLibrary {
   scannedAtMs: number;
 }
 
-export interface PlaylistSummary {
-  id: string;
-  name: string;
-  trackCount: number;
-  durationMs: number;
-  updatedAtMs: number;
-}
-
 export interface DuplicatePair {
   keep: string;
   extra: string;
