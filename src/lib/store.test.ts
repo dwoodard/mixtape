@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Api } from "./api";
 import { createStore } from "./store";
 import { makePlayerState, makeTrack } from "./testing";
-import type { PlayerState, Track, WindowMode } from "./types";
+import type { PlayerState, ScanProgress, Track, WindowMode } from "./types";
 
 function fakeApi(overrides: Partial<Api> = {}) {
   const listeners = {
@@ -10,6 +10,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     queue: [] as ((q: Track[]) => void)[],
     position: [] as ((ms: number) => void)[],
     mode: [] as ((m: WindowMode) => void)[],
+    scan: [] as ((p: ScanProgress) => void)[],
   };
   const unlisten = vi.fn();
   const api: Api = {
@@ -19,6 +20,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     scanFolder: vi.fn(async () => [makeTrack()]),
     musicFolder: vi.fn(async () => "/nas/music" as string | null),
     importLibrary: vi.fn(async () => [makeTrack()]),
+    cancelScan: vi.fn(async () => {}),
     playTracks: vi.fn(async () => {}),
     enqueue: vi.fn(async () => {}),
     playIndex: vi.fn(async () => {}),
@@ -35,6 +37,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     onQueue: vi.fn(async (cb) => (listeners.queue.push(cb), unlisten)),
     onPosition: vi.fn(async (cb) => (listeners.position.push(cb), unlisten)),
     onWindowMode: vi.fn(async (cb) => (listeners.mode.push(cb), unlisten)),
+    onScanProgress: vi.fn(async (cb) => (listeners.scan.push(cb), unlisten)),
     ...overrides,
   };
   return { api, listeners, unlisten };
@@ -80,7 +83,7 @@ describe("init", () => {
     const { api, unlisten } = fakeApi();
     const cleanup = await createStore(api).init();
     cleanup();
-    expect(unlisten).toHaveBeenCalledTimes(4);
+    expect(unlisten).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -192,5 +195,71 @@ describe("actions", () => {
     expect(api.toggle).toHaveBeenCalled();
     expect(api.next).toHaveBeenCalled();
     expect(api.prev).toHaveBeenCalled();
+  });
+});
+
+describe("scan progress and cancel", () => {
+  it("shows pushed progress while scanning and clears it when done", async () => {
+    let finish!: (tracks: Track[]) => void;
+    const { api, listeners } = fakeApi({
+      scanFolder: vi.fn(() => new Promise<Track[]>((resolve) => (finish = resolve))),
+    });
+    const store = createStore(api);
+    await store.init();
+
+    const scanning = store.openFolder();
+    await vi.waitFor(() => expect(store.scanning.value).toBe(true));
+    listeners.scan[0]({ phase: "reading", done: 25, total: 100 });
+    expect(store.scanProgress.value).toEqual({ phase: "reading", done: 25, total: 100 });
+
+    finish([makeTrack()]);
+    await scanning;
+
+    expect(store.scanProgress.value).toBeNull();
+    expect(store.scanning.value).toBe(false);
+  });
+
+  it("cancelScan asks the backend to stop", async () => {
+    const { api } = fakeApi();
+    await createStore(api).cancelScan();
+    expect(api.cancelScan).toHaveBeenCalled();
+  });
+
+  it("treats a cancelled scan as neither an error nor a library change", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.openFolder();
+    (api.scanFolder as ReturnType<typeof vi.fn>).mockRejectedValueOnce("cancelled");
+
+    await store.openFolder();
+
+    expect(store.scanError.value).toBeNull();
+    expect(store.library.value).toHaveLength(1);
+    expect(store.scanning.value).toBe(false);
+  });
+
+  it("a cancelled older scan does not clear the state of the newer one", async () => {
+    let rejectFirst!: (reason: string) => void;
+    let finishSecond!: (tracks: Track[]) => void;
+    const scanFolder = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<Track[]>((_, reject) => (rejectFirst = reject)))
+      .mockImplementationOnce(() => new Promise<Track[]>((resolve) => (finishSecond = resolve)));
+    const { api } = fakeApi({ scanFolder });
+    const store = createStore(api);
+
+    const first = store.openFolder();
+    await vi.waitFor(() => expect(scanFolder).toHaveBeenCalledTimes(1));
+    const second = store.openFolder();
+    await vi.waitFor(() => expect(scanFolder).toHaveBeenCalledTimes(2));
+
+    rejectFirst("cancelled");
+    await first;
+    expect(store.scanning.value).toBe(true);
+
+    finishSecond([makeTrack({ title: "Second" })]);
+    await second;
+    expect(store.library.value[0].title).toBe("Second");
+    expect(store.scanning.value).toBe(false);
   });
 });

@@ -19,6 +19,13 @@ const selected = ref<Track | null>(null);
 const visible = computed(() =>
   sortTracks(filterTracks(store.library.value, query.value), sortKey.value, sortDirection.value),
 );
+const scanLabel = computed(() => {
+  const p = store.scanProgress.value;
+  if (!p) return "Scanning…";
+  return p.phase === "discovering"
+    ? `Finding files… ${p.done}`
+    : `Reading tags… ${p.done} / ${p.total}`;
+});
 const nowPlaying = computed(() => store.player.value.currentTrack);
 
 function sortBy(key: SortKey) {
@@ -66,12 +73,16 @@ function sortBy(key: SortKey) {
             Import library
           </button>
           <button :disabled="store.scanning.value" @click="store.openFolder()">
-            {{ store.scanning.value ? "Scanning…" : "Open folder…" }}
+            Open folder…
           </button>
+          <button v-if="store.scanning.value" @click="store.cancelScan()">Cancel</button>
           <input v-model="query" type="search" placeholder="Filter" aria-label="Filter library" />
           <span class="count">{{ visible.length }} tracks</span>
           <button :disabled="visible.length === 0" @click="store.enqueue(visible)">Queue all</button>
         </div>
+        <p v-if="store.scanning.value && store.library.value.length > 0" class="scan-status" role="status">
+          {{ scanLabel }}
+        </p>
         <p v-if="store.scanError.value" class="error" role="alert">{{ store.scanError.value }}</p>
         <TrackTable
           v-if="store.library.value.length > 0"
@@ -86,7 +97,7 @@ function sortBy(key: SortKey) {
           @sort="sortBy"
         />
         <p v-else class="hint">
-          {{ store.scanning.value ? "Scanning…" : "Open a folder to load your music." }}
+          {{ store.scanning.value ? scanLabel : "Open a folder to load your music." }}
         </p>
       </section>
 
@@ -113,5 +124,6 @@ aside { flex: 2; min-width: 240px; display: flex; flex-direction: column; backgr
 .toolbar input { flex: 1; min-width: 0; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; user-select: text; -webkit-user-select: text; }
 .count { color: var(--muted); white-space: nowrap; }
 .hint { color: var(--muted); text-align: center; margin: 48px 0; }
+.scan-status { margin: 0; padding: 6px 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); }
 .error { margin: 0; padding: 6px 12px; background: #4a2328; color: #ffb4b4; font-size: 12px; }
 </style>
