@@ -23,3 +23,18 @@ export function songChoiceItems(track: Track, actions: SongActions): { label: st
     { label: "Add to queue", action: () => void actions.enqueue([track]) },
   ];
 }
+
+/** Option+click adds songs to the queue. Shift, Cmd and Ctrl clicks select, so they never count. */
+export function isAddClick(event: { altKey: boolean; metaKey: boolean; shiftKey: boolean; ctrlKey: boolean }): boolean {
+  return event.altKey && !event.metaKey && !event.shiftKey && !event.ctrlKey;
+}
+
+/**
+ * What Option+click on row `index` adds: the whole selection (in the order shown) when
+ * that row is part of it, otherwise just that row. Never the rest of the view.
+ */
+export function optionClickTargets(rows: Track[], selectedPaths: ReadonlySet<string>, index: number): Track[] {
+  const clicked = rows[index];
+  if (!clicked) return [];
+  return selectedPaths.has(clicked.path) ? rows.filter((t) => selectedPaths.has(t.path)) : [clicked];
+}

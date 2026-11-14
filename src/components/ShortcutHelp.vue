@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from "vue";
-import { COMMANDS, formatKeys, type CommandGroup } from "../lib/shortcuts";
+import { COMMANDS, formatKeys, GESTURES, type CommandGroup } from "../lib/shortcuts";
 import { helpOpen } from "../lib/ui";
 
 /** Cmd+/: every shortcut, grouped. */
@@ -27,6 +27,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             <template v-for="c in shown(g)" :key="c.id">
               <dt>{{ c.title }}</dt>
               <dd><kbd>{{ formatKeys(c.keys!) }}</kbd></dd>
+            </template>
+          </dl>
+        </section>
+        <section>
+          <h3>Mouse</h3>
+          <dl>
+            <template v-for="g in GESTURES" :key="g.gesture">
+              <dt>{{ g.title }}</dt>
+              <dd><kbd>{{ g.gesture }}</kbd></dd>
             </template>
           </dl>
         </section>

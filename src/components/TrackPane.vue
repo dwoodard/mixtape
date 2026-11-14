@@ -13,7 +13,7 @@ import {
 import { sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
 import { shortcutText } from "../lib/shortcuts";
-import { enterAction, songChoiceItems } from "../lib/songChoice";
+import { enterAction, isAddClick, optionClickTargets, songChoiceItems } from "../lib/songChoice";
 import { publishSelection, revealPath, tagEditPaths, withdrawSelection } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import TrackTable from "./TrackTable.vue";
@@ -159,6 +159,11 @@ function closeChoice() {
 }
 
 function onRowClick(index: number, event: MouseEvent) {
+  // Option+click adds to the queue the same way the Add to queue button does, and leaves the selection alone.
+  if (isAddClick(event)) {
+    void store.enqueue(optionClickTargets(rows.value, selection.value.paths, index));
+    return;
+  }
   selection.value = clickRow(selection.value, order.value, rows.value[index].path, {
     shift: event.shiftKey,
     toggle: event.metaKey || event.ctrlKey,

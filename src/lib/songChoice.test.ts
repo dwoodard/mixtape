@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { enterAction, songChoiceItems } from "./songChoice";
+import { enterAction, isAddClick, optionClickTargets, songChoiceItems } from "./songChoice";
 import { makeTrack } from "./testing";
 
 const song = makeTrack({ path: "/m/one.mp3", title: "One" });
@@ -44,5 +44,38 @@ describe("songChoiceItems", () => {
     expect(a[method]).toHaveBeenCalledWith(arg);
     const others = (["playNow", "enqueueNext", "enqueue"] as const).filter((m) => m !== method);
     others.forEach((m) => expect(a[m]).not.toHaveBeenCalled());
+  });
+});
+
+describe("Option+click", () => {
+  const rows = ["a", "b", "c", "d", "e"].map((n) => makeTrack({ path: `/m/${n}.mp3`, title: n }));
+  const titles = (tracks: { title: string }[]) => tracks.map((t) => t.title);
+
+  it("on a selected row adds the whole selection, in the order shown", () => {
+    const selected = new Set(["/m/d.mp3", "/m/b.mp3"]);
+    expect(titles(optionClickTargets(rows, selected, 3))).toEqual(["b", "d"]);
+    expect(titles(optionClickTargets(rows, selected, 1))).toEqual(["b", "d"]);
+  });
+
+  it("on a row outside the selection adds only that song", () => {
+    const selected = new Set(["/m/d.mp3", "/m/b.mp3"]);
+    expect(titles(optionClickTargets(rows, selected, 4))).toEqual(["e"]);
+  });
+
+  it("with nothing selected adds only the clicked song, never the view", () => {
+    expect(titles(optionClickTargets(rows, new Set(), 2))).toEqual(["c"]);
+  });
+
+  it("ignores a row that does not exist", () => {
+    expect(optionClickTargets(rows, new Set(), 9)).toEqual([]);
+  });
+
+  it("only Option alone counts; Shift, Cmd and Ctrl clicks keep selecting", () => {
+    const click = (over = {}) => ({ altKey: false, metaKey: false, shiftKey: false, ctrlKey: false, ...over });
+    expect(isAddClick(click({ altKey: true }))).toBe(true);
+    expect(isAddClick(click())).toBe(false);
+    expect(isAddClick(click({ altKey: true, shiftKey: true }))).toBe(false);
+    expect(isAddClick(click({ altKey: true, metaKey: true }))).toBe(false);
+    expect(isAddClick(click({ altKey: true, ctrlKey: true }))).toBe(false);
   });
 });

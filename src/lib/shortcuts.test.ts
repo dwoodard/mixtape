@@ -5,6 +5,7 @@ import {
   COMMANDS,
   findCommand,
   focusKind,
+  GESTURES,
   formatKeys,
   matches,
   shortcutText,
@@ -19,6 +20,15 @@ const press = (key: string, mods: Partial<KeyLike> = {}): KeyLike => ({
   altKey: false,
   ctrlKey: false,
   ...mods,
+});
+
+describe("mouse gestures", () => {
+  it("lists Option+click as adding to the queue, apart from the Cmd and Shift selection clicks", () => {
+    const by = (g: string) => GESTURES.find((x) => x.gesture === g)?.title ?? "";
+    expect(by("⌥ Click")).toMatch(/queue/i);
+    expect(by("⌘ Click")).toMatch(/selection/i);
+    expect(by("⇧ Click")).toMatch(/range/i);
+  });
 });
 
 describe("shortcut table", () => {

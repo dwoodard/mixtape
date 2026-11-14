@@ -143,3 +143,11 @@ export function allowedWhileFocused(spec: KeySpec, focus: FocusKind): boolean {
   if (spec.key === " " && focus.pressable) return false;
   return true;
 }
+
+/** Mouse gestures on song rows. Shown in the shortcut list; they are not commands, so the palette has no entry for them. */
+export const GESTURES: readonly { title: string; gesture: string }[] = [
+  { title: "Play a song (asks first while something plays)", gesture: "Double-click" },
+  { title: "Add the song, or the whole selection, to the queue", gesture: "⌥ Click" },
+  { title: "Add songs to the selection", gesture: "⌘ Click" },
+  { title: "Select a range of songs", gesture: "⇧ Click" },
+];

@@ -51,8 +51,9 @@ const columns: { key: SortKey; label: string }[] = [
         role="row"
         :data-index="i"
         :aria-selected="selected.has(t.path)"
+        @mousedown="$event.altKey && $event.preventDefault()"
         @click="emit('rowClick', i, $event)"
-        @dblclick="emit('play', i)"
+        @dblclick="!$event.altKey && emit('play', i)"
         @contextmenu.prevent="emit('rowMenu', i, $event)"
       >
         <span class="num">{{ i + 1 }}.</span>
