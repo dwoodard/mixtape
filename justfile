@@ -2,11 +2,15 @@ default:
     @just --list
 
 # Install deps and launch the app (Tauri starts Vite via beforeDevCommand)
-up: install
+up: stop install
     npm run tauri dev
 
 install:
     npm install
+
+# Free port 1420 (Vite dev server) if something holds it
+stop:
+    -lsof -tiTCP:1420 -sTCP:LISTEN | xargs kill
 
 # Frontend only, in the browser
 web:
