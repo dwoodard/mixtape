@@ -15,7 +15,11 @@ import type { Track } from "../lib/types";
 import TrackTable from "./TrackTable.vue";
 
 /** A list of tracks with sorting, multi-select, and play / play next / queue actions. */
-const props = defineProps<{ tracks: Track[] }>();
+const props = withDefaults(defineProps<{ tracks: Track[]; sidewaysPlayback?: boolean }>(), {
+  sidewaysPlayback: true,
+});
+/** Left (-1) or right (1) was pressed and `sidewaysPlayback` is off, so the parent decides what it means. */
+const emit = defineEmits<{ sideways: [direction: -1 | 1] }>();
 
 const sortKey = ref<SortKey>("default");
 const sortDirection = ref<SortDirection>("asc");
@@ -32,7 +36,7 @@ const label = computed(() =>
 );
 
 // Opening a view hands it the keyboard, so the arrows work without clicking a row first.
-onMounted(() => root.value?.focus({ preventScroll: true }));
+onMounted(() => nextTick(() => root.value?.focus({ preventScroll: true })));
 
 watch(order, (paths) => (selection.value = pruneSelection(selection.value, paths)));
 
@@ -68,7 +72,9 @@ function onKey(event: KeyboardEvent) {
   } else if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
     // Left and right step back and forth through the music that is playing.
     event.preventDefault();
-    if (event.key === "ArrowRight") store.next();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    if (!props.sidewaysPlayback) emit("sideways", direction);
+    else if (direction === 1) store.next();
     else store.prev();
   } else if (event.key === "Enter" && target.value.length > 0) {
     store.playTracks(target.value, 0);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { moveInGrid } from "./gridNav";
+import { moveInGrid, stepIndex } from "./gridNav";
 
 // 10 items, 4 wide:
 //  0  1  2  3
@@ -38,5 +38,18 @@ describe("moveInGrid", () => {
     expect(moveInGrid(1, "ArrowDown", 1, 3)).toBe(2);
     expect(moveInGrid(1, "ArrowDown", 0, 3)).toBe(2);
     expect(moveInGrid(0, "ArrowRight", 4, 0)).toBe(-1);
+  });
+});
+
+describe("stepIndex", () => {
+  it("steps by one and stops at the ends", () => {
+    expect(stepIndex(2, 1, 5)).toBe(3);
+    expect(stepIndex(2, -1, 5)).toBe(1);
+    expect(stepIndex(4, 1, 5)).toBe(4);
+    expect(stepIndex(0, -1, 5)).toBe(0);
+  });
+
+  it("returns -1 for an empty list", () => {
+    expect(stepIndex(0, 1, 0)).toBe(-1);
   });
 });

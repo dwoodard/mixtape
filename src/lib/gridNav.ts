@@ -23,3 +23,9 @@ export function moveInGrid(index: number, key: GridKey, columns: number, count: 
     }
   }
 }
+
+/** The index one step away in a list, clamped to its ends. -1 when the list is empty. */
+export function stepIndex(index: number, delta: -1 | 1, count: number): number {
+  if (count === 0) return -1;
+  return Math.min(count - 1, Math.max(0, index + delta));
+}
