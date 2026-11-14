@@ -127,7 +127,7 @@ impl Player {
     /// Replaces the queue and starts playing at `start`.
     pub fn play_tracks(&mut self, tracks: Vec<Track>, start: usize) {
         self.pending_seek = None;
-        self.queue.set(tracks, start);
+        self.queue.replace(tracks, start);
         self.emit_queue();
         self.start_current();
     }
@@ -191,8 +191,12 @@ impl Player {
         }
     }
 
+    /// Turning shuffle on reorders the queue below the current song, so the new order is sent too.
     pub fn set_shuffle(&mut self, on: bool) {
         self.queue.set_shuffle(on);
+        if on {
+            self.emit_queue();
+        }
         self.emit_state();
     }
 
@@ -205,7 +209,7 @@ impl Player {
     /// the track at the saved position.
     pub fn restore(&mut self, saved: Restore) {
         self.queue.set(saved.tracks, saved.index.unwrap_or(0));
-        self.queue.set_shuffle(saved.shuffle);
+        self.queue.mark_shuffle(saved.shuffle);
         self.queue.set_repeat(saved.repeat);
         self.volume = saved.volume.clamp(0.0, 1.0);
         self.backend.set_volume(self.volume);
@@ -893,6 +897,107 @@ mod tests {
         assert_eq!(h.player.state().current_index, Some(0));
         h.player.next();
         assert_eq!(h.player.state().current_track.unwrap().title, "x");
+    }
+
+    const TWELVE: [&str; 12] = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
+
+    fn titles(h: &Harness) -> Vec<String> {
+        h.player.queue_tracks().iter().map(|t| t.title.clone()).collect()
+    }
+
+    fn playing(h: &Harness) -> String {
+        h.player.state().current_track.unwrap().title
+    }
+
+    #[test]
+    fn turning_shuffle_on_sends_the_new_order_and_next_and_track_end_follow_it() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 0);
+        h.player.set_shuffle(true);
+
+        let shown = titles(&h);
+        assert_ne!(shown, TWELVE, "the list was reordered");
+        let last_sent = h.events.lock().unwrap().iter().rev().find_map(|e| match e {
+            PlayerEvent::Queue(q) => Some(q.iter().map(|t| t.title.clone()).collect::<Vec<_>>()),
+            _ => None,
+        });
+        assert_eq!(last_sent, Some(shown.clone()), "the UI is told the order it must show");
+
+        h.player.next();
+        assert_eq!(playing(&h), shown[1]);
+        let token = h.token();
+        h.player.handle_backend_event(BackendEvent::Ended { token });
+        assert_eq!(playing(&h), shown[2]);
+        h.player.prev();
+        assert_eq!(h.player.state().current_index, Some(1));
+        assert_eq!(playing(&h), shown[1]);
+    }
+
+    #[test]
+    fn turning_shuffle_off_leaves_the_list_and_playback_alone() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 0);
+        h.player.set_shuffle(true);
+        let shown = titles(&h);
+        let loads = h.loads().len();
+
+        h.player.set_shuffle(false);
+
+        assert_eq!(titles(&h), shown);
+        assert_eq!(h.loads().len(), loads);
+        assert!(!h.player.state().shuffle);
+    }
+
+    #[test]
+    fn play_next_removal_and_moves_act_on_the_shown_order_while_shuffling() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 0);
+        h.player.set_shuffle(true);
+
+        h.player.enqueue_next(vec![test_track("x")]);
+        assert_eq!(titles(&h)[1], "x");
+        h.player.move_track(5, 1);
+        let moved = titles(&h)[1].clone();
+        h.player.next();
+        assert_eq!(playing(&h), moved);
+        let below = titles(&h)[2].clone();
+        let after = titles(&h)[3].clone();
+        h.player.remove(2);
+        assert_ne!(below, after);
+        h.player.next();
+        assert_eq!(playing(&h), after);
+    }
+
+    #[test]
+    fn playing_new_songs_while_shuffling_starts_with_the_chosen_one_and_shows_the_rest_shuffled() {
+        let mut h = Harness::new();
+        h.player.set_shuffle(true);
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 4);
+
+        assert_eq!(playing(&h), "e");
+        assert_eq!(h.player.state().current_index, Some(0));
+        assert_eq!(titles(&h)[0], "e");
+        assert_eq!(titles(&h).len(), 12);
+    }
+
+    #[test]
+    fn restoring_a_shuffled_session_shows_the_saved_order_untouched() {
+        let mut h = Harness::new();
+        let order: Vec<_> = ["k", "c", "h", "a", "l"].iter().map(|n| test_track(n)).collect();
+        h.player.restore(Restore {
+            tracks: order,
+            index: Some(2),
+            position_ms: 0,
+            volume: 1.0,
+            shuffle: true,
+            repeat: Repeat::Off,
+        });
+
+        assert_eq!(titles(&h), vec!["k", "c", "h", "a", "l"]);
+        assert!(h.player.state().shuffle);
+        assert_eq!(h.player.state().current_index, Some(2));
+        h.player.next();
+        assert_eq!(playing(&h), "a");
     }
 
     fn saved(index: Option<usize>, position_ms: u64) -> Restore {

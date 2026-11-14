@@ -1,9 +1,5 @@
 use crate::track::Track;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-
-/// How many past tracks "previous" can step back through while shuffling.
-const HISTORY_LIMIT: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -18,16 +14,16 @@ pub enum Repeat {
 
 /// Ordered list of tracks with a cursor on the current one.
 ///
-/// With shuffle on, `next` picks a random track that has not been played in
-/// this pass; `played` tracks that and `history` lets "previous" walk back.
+/// The list is the play order: `next` is the track directly below the cursor
+/// and `prev` the one directly above, always. Shuffle is not a playback mode;
+/// turning it on reorders the tracks below the current one, so the list shows
+/// exactly what will play. Turning it off leaves the order as it is.
 #[derive(Debug)]
 pub struct Queue {
     tracks: Vec<Track>,
     current: Option<usize>,
     shuffle: bool,
     repeat: Repeat,
-    history: Vec<usize>,
-    played: HashSet<usize>,
     rng: fastrand::Rng,
 }
 
@@ -44,8 +40,6 @@ impl Queue {
             current: None,
             shuffle: false,
             repeat: Repeat::Off,
-            history: Vec::new(),
-            played: HashSet::new(),
             rng,
         }
     }
@@ -70,21 +64,43 @@ impl Queue {
         self.repeat
     }
 
+    /// Turning shuffle on puts the tracks below the current one in a new random
+    /// order (what is above and the current track stay put). Turning it off keeps
+    /// the order as shown.
     pub fn set_shuffle(&mut self, on: bool) {
         self.shuffle = on;
-        self.restart_pass();
+        if on {
+            self.shuffle_upcoming();
+        }
+    }
+
+    /// Records the shuffle setting without touching the order, for a saved queue
+    /// whose order is already the one to show.
+    pub fn mark_shuffle(&mut self, on: bool) {
+        self.shuffle = on;
     }
 
     pub fn set_repeat(&mut self, repeat: Repeat) {
         self.repeat = repeat;
     }
 
-    /// Replaces the queue. `start` is clamped; an empty list clears the cursor.
+    /// Replaces the queue exactly as given. `start` is clamped; an empty list clears the cursor.
     pub fn set(&mut self, tracks: Vec<Track>, start: usize) {
         self.current = if tracks.is_empty() { None } else { Some(start.min(tracks.len() - 1)) };
         self.tracks = tracks;
-        self.history.clear();
-        self.restart_pass();
+    }
+
+    /// Replaces the queue with new songs to play from `start`. With shuffle on,
+    /// that song goes first and the rest are shuffled below it.
+    pub fn replace(&mut self, mut tracks: Vec<Track>, start: usize) {
+        if self.shuffle && !tracks.is_empty() {
+            let first = tracks.remove(start.min(tracks.len() - 1));
+            tracks.insert(0, first);
+            self.set(tracks, 0);
+            self.shuffle_upcoming();
+        } else {
+            self.set(tracks, start);
+        }
     }
 
     pub fn append(&mut self, tracks: Vec<Track>) {
@@ -94,15 +110,11 @@ impl Queue {
     /// Inserts right after the current track (or at the end if nothing is current).
     pub fn insert_next(&mut self, tracks: Vec<Track>) {
         let at = self.current.map_or(self.tracks.len(), |c| c + 1);
-        let n = tracks.len();
         self.tracks.splice(at..at, tracks);
-        let shift = |i: usize| if i >= at { i + n } else { i };
-        self.history = self.history.iter().map(|&i| shift(i)).collect();
-        self.played = self.played.iter().map(|&i| shift(i)).collect();
     }
 
     /// Replaces every queue entry whose file is `old_path` with `track`, in
-    /// place (same position, cursor and shuffle history untouched). Returns how many were replaced.
+    /// place (same position, cursor untouched). Returns how many were replaced.
     pub fn replace_track(&mut self, old_path: &str, track: &Track) -> usize {
         let mut replaced = 0;
         for slot in self.tracks.iter_mut().filter(|t| t.path == old_path) {
@@ -113,8 +125,7 @@ impl Queue {
     }
 
     /// Moves the track at `from` so it ends up at index `to` (as in
-    /// remove-then-insert). The cursor, the shuffle history and the played
-    /// set all follow their tracks. Returns false if either index is out of
+    /// remove-then-insert). The cursor follows its track. Returns false if either index is out of
     /// range or nothing would change.
     pub fn move_track(&mut self, from: usize, to: usize) -> bool {
         let len = self.tracks.len();
@@ -136,16 +147,12 @@ impl Queue {
             }
         };
         self.current = self.current.map(remap);
-        self.history = self.history.iter().map(|&i| remap(i)).collect();
-        self.played = self.played.iter().map(|&i| remap(i)).collect();
         true
     }
 
     pub fn clear(&mut self) {
         self.tracks.clear();
         self.current = None;
-        self.history.clear();
-        self.played.clear();
     }
 
     /// Moves the cursor to `index`. Returns `None` if it is out of range.
@@ -153,7 +160,7 @@ impl Queue {
         if index >= self.tracks.len() {
             return None;
         }
-        self.move_to(index);
+        self.current = Some(index);
         self.current()
     }
 
@@ -168,30 +175,20 @@ impl Queue {
         if n == 0 {
             return None;
         }
-        let target = if self.shuffle {
-            self.pick_shuffled()
-        } else {
-            match self.current {
-                None => Some(0),
-                Some(c) if c + 1 < n => Some(c + 1),
-                Some(_) if self.repeat == Repeat::All => Some(0),
-                Some(_) => None,
-            }
-        }?;
-        self.move_to(target);
+        let target = match self.current {
+            None => 0,
+            Some(c) if c + 1 < n => c + 1,
+            Some(_) if self.repeat == Repeat::All => 0,
+            Some(_) => return None,
+        };
+        self.current = Some(target);
         self.current()
     }
 
-    /// Goes back one track (the one played before, when shuffling). At the
-    /// start returns `None` and leaves the cursor where it was.
+    /// Goes back to the track directly above. At the top returns `None` and
+    /// leaves the cursor where it was.
     pub fn prev(&mut self) -> Option<&Track> {
-        let target = if self.shuffle {
-            self.history.pop()?
-        } else {
-            self.current?.checked_sub(1)?
-        };
-        self.current = Some(target);
-        self.played.insert(target);
+        self.current = Some(self.current?.checked_sub(1)?);
         self.current()
     }
 
@@ -204,9 +201,6 @@ impl Queue {
             return false;
         }
         self.tracks.remove(index);
-        let fix = |i: usize| (i != index).then(|| if i > index { i - 1 } else { i });
-        self.history = self.history.iter().filter_map(|&i| fix(i)).collect();
-        self.played = self.played.iter().filter_map(|&i| fix(i)).collect();
         match self.current {
             Some(c) if index < c => {
                 self.current = Some(c - 1);
@@ -220,42 +214,10 @@ impl Queue {
         }
     }
 
-    fn move_to(&mut self, index: usize) {
-        if let Some(previous) = self.current {
-            self.history.push(previous);
-            if self.history.len() > HISTORY_LIMIT {
-                self.history.remove(0);
-            }
-        }
-        self.current = Some(index);
-        self.played.insert(index);
-    }
-
-    /// Starts a fresh shuffle pass in which only the current track counts as played.
-    fn restart_pass(&mut self) {
-        self.played.clear();
-        if let Some(c) = self.current {
-            self.played.insert(c);
-        }
-    }
-
-    fn pick_shuffled(&mut self) -> Option<usize> {
-        let unplayed = |q: &Queue| -> Vec<usize> {
-            (0..q.tracks.len()).filter(|i| !q.played.contains(i)).collect()
-        };
-        let mut candidates = unplayed(self);
-        if candidates.is_empty() {
-            if self.repeat == Repeat::Off {
-                return None;
-            }
-            self.restart_pass();
-            candidates = unplayed(self);
-            if candidates.is_empty() {
-                // A single-track queue: replay it.
-                return self.current;
-            }
-        }
-        Some(candidates[self.rng.usize(..candidates.len())])
+    /// Puts the tracks below the current one (all of them if nothing is current) in random order.
+    fn shuffle_upcoming(&mut self) {
+        let from = self.current.map_or(0, |c| c + 1).min(self.tracks.len());
+        self.rng.shuffle(&mut self.tracks[from..]);
     }
 }
 
@@ -449,30 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn shuffle_history_and_played_follow_their_tracks_through_a_move() {
-        let mut q = queue_of(&["a", "b", "c", "d", "e"], 0);
-        q.set_shuffle(true);
-        let second = next_title(&mut q, false).unwrap();
-        let third = next_title(&mut q, false).unwrap();
-
-        // Rearrange everything; "previous" must still land on the tracks that were actually played.
-        q.move_track(0, 4);
-        q.move_track(2, 0);
-
-        assert_eq!(q.prev().map(|t| t.title.clone()), Some(second));
-        assert_eq!(q.prev().map(|t| t.title.clone()), Some("a".into()));
-        assert!(q.prev().is_none());
-        // Played tracks are not offered again in this pass: only the two unplayed remain.
-        let mut rest = Vec::new();
-        q.set_shuffle(true); // restart the pass from the current track
-        while let Some(t) = next_title(&mut q, true) {
-            rest.push(t);
-        }
-        assert!(!rest.contains(&"a".to_string()) || title(&q).is_some());
-        assert!(rest.len() <= 4, "{rest:?} / {third}");
-    }
-
-    #[test]
     fn clear_empties_everything() {
         let mut q = queue_of(&["a", "b"], 1);
         q.clear();
@@ -497,76 +435,6 @@ mod tests {
         assert_eq!(next_title(&mut q, false), Some("b".into()));
     }
 
-    // --- shuffle ---
-
-    #[test]
-    fn shuffle_plays_every_track_once_before_ending() {
-        let mut q = queue_of(&["a", "b", "c", "d", "e"], 0);
-        q.set_shuffle(true);
-
-        let mut seen = vec![title(&q).unwrap().to_string()];
-        while let Some(t) = next_title(&mut q, true) {
-            seen.push(t);
-        }
-
-        seen.sort();
-        assert_eq!(seen, vec!["a", "b", "c", "d", "e"]);
-    }
-
-    #[test]
-    fn shuffle_with_repeat_all_starts_a_new_pass_without_repeating_the_current_track() {
-        let mut q = queue_of(&["a", "b", "c"], 0);
-        q.set_shuffle(true);
-        q.set_repeat(Repeat::All);
-
-        let mut last = title(&q).unwrap().to_string();
-        for _ in 0..20 {
-            let next = next_title(&mut q, true).expect("repeat all never ends");
-            assert_ne!(next, last);
-            last = next;
-        }
-    }
-
-    #[test]
-    fn shuffle_prev_walks_back_through_what_was_played() {
-        let mut q = queue_of(&["a", "b", "c", "d"], 0);
-        q.set_shuffle(true);
-        let second = next_title(&mut q, false).unwrap();
-        let third = next_title(&mut q, false).unwrap();
-
-        assert_eq!(q.prev().map(|t| t.title.clone()), Some(second));
-        assert_eq!(q.prev().map(|t| t.title.clone()), Some("a".into()));
-        assert!(q.prev().is_none());
-        // Going back does not forget the third track was played.
-        assert_ne!(next_title(&mut q, false).unwrap(), third);
-    }
-
-    #[test]
-    fn single_track_shuffle_repeat_all_replays_it() {
-        let mut q = queue_of(&["a"], 0);
-        q.set_shuffle(true);
-        q.set_repeat(Repeat::All);
-        assert_eq!(next_title(&mut q, true), Some("a".into()));
-    }
-
-    #[test]
-    fn removing_a_track_keeps_shuffle_bookkeeping_consistent() {
-        let mut q = queue_of(&["a", "b", "c", "d"], 0);
-        q.set_shuffle(true);
-        let played = next_title(&mut q, false).unwrap();
-        // Remove a track that is neither current nor the one just played.
-        let victim = ["b", "c", "d"].iter().position(|n| *n != played).unwrap() + 1;
-        q.remove(victim);
-
-        let mut seen = vec![played];
-        while let Some(t) = next_title(&mut q, true) {
-            seen.push(t);
-        }
-        // 'a' was current at the start, one other was played; the rest remain.
-        assert_eq!(seen.len(), 3 - 1);
-        assert!(!seen.contains(&"a".to_string()));
-    }
-
     // --- play next ---
 
     #[test]
@@ -588,13 +456,152 @@ mod tests {
         assert_eq!(q.current_index(), None);
     }
 
+    // --- shuffle: the list is the play order ---
+
+    fn twelve() -> Queue {
+        queue_of(&["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"], 2)
+    }
+
+    /// Plays from the current track to the end with `next`, returning what played, in order.
+    fn play_out(q: &mut Queue) -> String {
+        let mut played = title(q).unwrap_or("").to_string();
+        while let Some(t) = next_title(q, true) {
+            played.push_str(&t);
+        }
+        played
+    }
+
     #[test]
-    fn insert_next_keeps_history_pointing_at_the_same_tracks() {
+    fn shuffle_on_reorders_only_what_comes_after_the_current_track() {
+        let mut q = twelve();
+        q.set_shuffle(true);
+
+        let shown = order(&q);
+        assert_eq!(&shown[..3], "abc", "the played tracks and the current one stay put");
+        assert_ne!(&shown[3..], "defghijkl", "the rest is reordered");
+        let mut rest: Vec<char> = shown[3..].chars().collect();
+        rest.sort();
+        assert_eq!(rest.into_iter().collect::<String>(), "defghijkl", "nothing lost or added");
+        assert_eq!(q.current_index(), Some(2));
+        assert_eq!(title(&q), Some("c"));
+    }
+
+    #[test]
+    fn with_shuffle_on_next_is_always_the_song_below_and_previous_the_song_above() {
+        let mut q = twelve();
+        q.set_shuffle(true);
+        let shown = order(&q);
+
+        assert_eq!(play_out(&mut q), shown[2..], "auto-advance plays the list top to bottom");
+        let mut back = String::new();
+        while let Some(t) = q.prev().map(|t| t.title.clone()) {
+            back.push_str(&t);
+        }
+        assert_eq!(back, shown[..11].chars().rev().collect::<String>());
+    }
+
+    #[test]
+    fn turning_shuffle_off_keeps_the_order_on_screen() {
+        let mut q = twelve();
+        q.set_shuffle(true);
+        let shuffled = order(&q);
+        q.set_shuffle(false);
+        assert_eq!(order(&q), shuffled);
+        assert!(!q.shuffle());
+        assert_eq!(q.current_index(), Some(2));
+    }
+
+    #[test]
+    fn shuffle_with_nothing_after_the_current_track_changes_nothing() {
+        let mut q = queue_of(&["a", "b", "c"], 2);
+        q.set_shuffle(true);
+        assert_eq!(order(&q), "abc");
+        let mut one = queue_of(&["a"], 0);
+        one.set_shuffle(true);
+        assert_eq!(order(&one), "a");
+    }
+
+    #[test]
+    fn repeat_all_wraps_from_the_bottom_to_the_top_of_the_list_while_shuffling() {
+        let mut q = queue_of(&["a", "b", "c", "d"], 0);
+        q.set_shuffle(true);
+        q.set_repeat(Repeat::All);
+        let shown = order(&q);
+        let mut played = String::new();
+        for _ in 0..7 {
+            played.push_str(&next_title(&mut q, true).unwrap());
+        }
+        assert_eq!(order(&q), shown, "the list does not move on its own");
+        assert_eq!(played, format!("{}{}", &shown[1..], &shown));
+    }
+
+    #[test]
+    fn with_shuffle_on_the_end_of_the_list_is_the_end_unless_repeating() {
         let mut q = queue_of(&["a", "b", "c"], 0);
         q.set_shuffle(true);
-        let _ = q.next(false); // history now holds "a"
+        assert!(play_out(&mut q).len() == 3);
+        assert!(q.next(true).is_none());
+        assert_eq!(q.current_index(), Some(2));
+    }
+
+    #[test]
+    fn replacing_the_queue_while_shuffling_plays_the_chosen_song_first_then_a_shuffled_rest() {
+        let mut q = Queue::with_rng(fastrand::Rng::with_seed(7));
+        q.set_shuffle(true);
+        let names = ["a", "b", "c", "d", "e", "f", "g", "h"];
+        q.replace(names.iter().map(|n| test_track(n)).collect(), 3);
+
+        let shown = order(&q);
+        assert_eq!(&shown[..1], "d");
+        assert_eq!(q.current_index(), Some(0));
+        assert_ne!(&shown[1..], "abcefgh");
+        let mut all: Vec<char> = shown.chars().collect();
+        all.sort();
+        assert_eq!(all.into_iter().collect::<String>(), "abcdefgh");
+    }
+
+    #[test]
+    fn replacing_the_queue_without_shuffle_keeps_the_order_and_start() {
+        let mut q = queue_of(&["a", "b"], 0);
+        q.replace(["x", "y", "z"].iter().map(|n| test_track(n)).collect(), 1);
+        assert_eq!(order(&q), "xyz");
+        assert_eq!(title(&q), Some("y"));
+    }
+
+    #[test]
+    fn restoring_the_flag_does_not_reorder_a_saved_queue() {
+        let mut q = twelve();
+        q.mark_shuffle(true);
+        assert!(q.shuffle());
+        assert_eq!(order(&q), "abcdefghijkl");
+    }
+
+    #[test]
+    fn play_next_and_add_go_where_the_list_shows_them_while_shuffling() {
+        let mut q = twelve();
+        q.set_shuffle(true);
+        let before = order(&q);
         q.insert_next(vec![test_track("x")]);
-        // Walking back must still land on "a", wherever it moved to.
-        assert_eq!(q.prev().map(|t| t.title.clone()), Some("a".into()));
+        q.append(vec![test_track("y")]);
+
+        assert_eq!(order(&q), format!("{}x{}y", &before[..3], &before[3..]));
+        assert_eq!(next_title(&mut q, false), Some("x".into()));
+    }
+
+    #[test]
+    fn move_and_remove_change_what_is_next_exactly_as_the_list_shows_while_shuffling() {
+        let mut q = twelve();
+        q.set_shuffle(true);
+        let before = order(&q);
+
+        q.move_track(11, 3);
+        assert_eq!(next_title(&mut q, false), Some(before[11..].to_string()));
+
+        // The song now directly below the current one (index 4) is removed: the next one slides up.
+        let below = order(&q).chars().nth(4).unwrap().to_string();
+        let after = order(&q).chars().nth(5).unwrap().to_string();
+        q.remove(4);
+        assert_ne!(below, after);
+        assert_eq!(next_title(&mut q, false), Some(after));
     }
 }
