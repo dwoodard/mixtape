@@ -9,7 +9,6 @@ pub mod imports;
 pub mod library;
 pub mod media;
 pub mod player;
-pub mod playlists;
 pub mod queue;
 pub mod reveal;
 pub mod session;
@@ -24,7 +23,6 @@ use config::Config;
 use cover::CoverCache;
 use media::{MediaCommand, MediaSession};
 use player::{Player, PlayerEvent, PlayerState};
-use playlists::{PlaylistStore, PlaylistSummary};
 use queue::Repeat;
 use session::{SessionStore, SessionWriter};
 use serde::Serialize;
@@ -598,33 +596,6 @@ fn set_repeat(player: State<PlayerHandle>, repeat: Repeat) {
 }
 
 #[tauri::command]
-fn list_playlists(store: State<PlaylistStore>) -> Vec<PlaylistSummary> {
-    store.list()
-}
-
-#[tauri::command]
-fn load_playlist(store: State<PlaylistStore>, id: String) -> Result<Vec<Track>, String> {
-    store
-        .get(&id)
-        .map(|p| p.tracks)
-        .ok_or_else(|| "That playlist no longer exists.".to_string())
-}
-
-#[tauri::command]
-fn save_playlist(
-    store: State<PlaylistStore>,
-    name: String,
-    tracks: Vec<Track>,
-) -> Result<PlaylistSummary, String> {
-    store.save(&name, tracks)
-}
-
-#[tauri::command]
-fn delete_playlist(store: State<PlaylistStore>, id: String) -> Result<(), String> {
-    store.delete(&id)
-}
-
-#[tauri::command]
 fn toggle_playback(player: State<PlayerHandle>) {
     player.with(|p| p.toggle());
 }
@@ -806,7 +777,6 @@ pub fn run() {
                     .build()
                     .expect("cover thread pool"),
             }));
-            app.manage(PlaylistStore::new(app.path().app_data_dir()?.join("playlists.json")));
             app.manage(CacheDir(app.path().app_cache_dir()?.join("library")));
             setup_config(app)?;
             setup_window(app)?;
@@ -859,10 +829,6 @@ pub fn run() {
             dismiss_error,
             set_shuffle,
             set_repeat,
-            list_playlists,
-            load_playlist,
-            save_playlist,
-            delete_playlist,
             play_index,
             toggle_playback,
             next_track,
