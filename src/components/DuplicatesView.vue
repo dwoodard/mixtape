@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { extraCopies, findDuplicates } from "../lib/duplicates";
+import { extraCopies } from "../lib/duplicates";
 import { fileName } from "../lib/format";
 import { store } from "../lib/store";
 
-const groups = computed(() => findDuplicates(store.library.value));
+const groups = computed(() => store.duplicateGroups.value);
 const extras = computed(() => extraCopies(groups.value));
 const confirming = ref(false);
 // A different set of duplicates (after a rescan or a removal) cancels a pending confirmation.
@@ -33,6 +33,13 @@ async function trashExtras() {
         {{ groups.length }} {{ groups.length === 1 ? "song is" : "songs are" }} in the library more than once ·
         {{ extras.length }} extra {{ extras.length === 1 ? "copy" : "copies" }}
       </span>
+      <button
+        v-if="store.ignoredDuplicates.value.size > 0"
+        title="Show the groups you marked “Not a duplicate” again"
+        @click="store.resetIgnoredDuplicates()"
+      >
+        Reset dismissed ({{ store.ignoredDuplicates.value.size }})
+      </button>
       <button v-if="!confirming" :disabled="extras.length === 0" @click="confirming = true">
         Clean up {{ extras.length }} extra {{ extras.length === 1 ? "copy" : "copies" }}…
       </button>
@@ -71,6 +78,13 @@ async function trashExtras() {
         <div class="head">
           <strong class="ellipsis">{{ g.keep.title }}</strong>
           <span class="muted ellipsis">{{ [g.keep.artist, g.keep.album].filter(Boolean).join(" · ") }}</span>
+          <button
+            class="reveal"
+            title="These are different recordings (for example a live version): stop listing them"
+            @click="store.ignoreDuplicate(g.key)"
+          >
+            Not a duplicate
+          </button>
           <button
             class="reveal"
             title="Show these files in Finder, for example to delete the extras yourself"

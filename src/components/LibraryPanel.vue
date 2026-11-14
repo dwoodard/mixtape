@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { findDuplicates } from "../lib/duplicates";
 import { formatAgo } from "../lib/format";
 import { store } from "../lib/store";
 import { filterTracks } from "../lib/trackList";
@@ -49,7 +48,12 @@ const menuItems = computed<MenuItem[]>(() => {
   return items;
 });
 
-const duplicateCount = computed(() => findDuplicates(store.library.value).length);
+const duplicateCount = computed(() => store.duplicateGroups.value.length);
+const showNotice = computed(() => store.duplicateNotice.value > 0 && libraryView.value !== "duplicates");
+function reviewDuplicates() {
+  store.dismissDuplicateNotice();
+  libraryView.value = "duplicates";
+}
 // The tab only exists while there is something to clean up.
 const tabs = computed<{ id: LibraryView; label: string }[]>(() => [
   { id: "tracks", label: "Tracks" },
@@ -113,6 +117,14 @@ const scanLabel = computed(() => {
     </div>
     <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="closeMenu" />
 
+    <div v-if="showNotice" class="notice" role="status">
+      <span>
+        Found {{ store.duplicateNotice.value }} duplicate
+        {{ store.duplicateNotice.value === 1 ? "song" : "songs" }} on disk.
+      </span>
+      <button @click="reviewDuplicates()">Review</button>
+      <button @click="store.dismissDuplicateNotice()">Dismiss</button>
+    </div>
     <p v-if="store.scanning.value" class="status" role="status">{{ scanLabel }}</p>
     <p v-if="store.scanError.value" class="error" role="alert">{{ store.scanError.value }}</p>
 
@@ -144,6 +156,9 @@ const scanLabel = computed(() => {
 .filter { flex: 1; min-width: 120px; }
 .count { color: var(--muted); white-space: nowrap; font-size: 12px; }
 .status { margin: 0; padding: 5px 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); }
+.notice { display: flex; align-items: center; gap: 6px; padding: 5px 10px; background: #2f3b4a; border-bottom: 1px solid var(--line); font-size: 12px; }
+.notice span { margin-right: auto; }
+.notice button { padding: 1px 8px; font-size: 12px; }
 .hint { color: var(--muted); text-align: center; margin: 48px 0; }
 .hint p { margin: 0 0 12px; }
 .error { margin: 0; padding: 6px 12px; background: #4a2328; color: #ffb4b4; font-size: 12px; }

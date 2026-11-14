@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampMenuPosition, persistedChoice, persistedFlag, type FlagStorage } from "./ui";
+import { clampMenuPosition, persistedChoice, persistedFlag, persistedSet, type FlagStorage } from "./ui";
 
 function memoryStorage(initial: Record<string, string> = {}): FlagStorage & { data: Record<string, string> } {
   const data = { ...initial };
@@ -78,5 +78,37 @@ describe("persistedChoice", () => {
     set("b");
     expect(choice.value).toBe("b");
     expect(storage.data.k).toBe("b");
+  });
+});
+
+describe("persistedSet", () => {
+  it("starts empty and remembers additions, removals and clearing", () => {
+    const storage = memoryStorage();
+    const { items, add, remove, clear } = persistedSet("k", storage);
+    expect(items.value.size).toBe(0);
+
+    add("a", "b");
+    add("b", "c");
+    expect([...items.value].sort()).toEqual(["a", "b", "c"]);
+    expect(JSON.parse(storage.data.k).sort()).toEqual(["a", "b", "c"]);
+
+    remove("b");
+    expect([...items.value].sort()).toEqual(["a", "c"]);
+    clear();
+    expect(items.value.size).toBe(0);
+    expect(storage.data.k).toBe("[]");
+  });
+
+  it("restores what was saved and ignores corrupt or non-string data", () => {
+    expect([...persistedSet("k", memoryStorage({ k: '["x","y"]' })).items.value]).toEqual(["x", "y"]);
+    expect(persistedSet("k", memoryStorage({ k: "{ nope" })).items.value.size).toBe(0);
+    expect([...persistedSet("k", memoryStorage({ k: '["ok", 5, null]' })).items.value]).toEqual(["ok"]);
+  });
+
+  it("gives each add a new set so watchers notice the change", () => {
+    const { items, add } = persistedSet("k", memoryStorage());
+    const before = items.value;
+    add("a");
+    expect(items.value).not.toBe(before);
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Api } from "./api";
 import { createStore } from "./store";
+import type { FlagStorage } from "./ui";
 import { makePlayerState, makeTrack } from "./testing";
 import type { PlayerState, ScanProgress, Track, WindowMode } from "./types";
 
@@ -637,5 +638,76 @@ describe("trashing duplicate copies", () => {
     const { api, store } = await loaded({ trashed: [], missing: [], skipped: [] });
     await store.trashDuplicates([]);
     expect(api.trashDuplicates).not.toHaveBeenCalled();
+  });
+});
+
+describe("noticing duplicates after a scan", () => {
+  const memory = (): FlagStorage => {
+    const data: Record<string, string> = {};
+    return { getItem: (k) => data[k] ?? null, setItem: (k, v) => void (data[k] = v) };
+  };
+  const dupe = (path: string) =>
+    makeTrack({ path, title: "Spiderwebs", artist: "No Doubt", album: "Tragic Kingdom", durationMs: 268_000 });
+  const withDupes = [dupe("/m/a.mp3"), dupe("/m/a 1.mp3"), makeTrack({ path: "/m/other.mp3", title: "Other" })];
+
+  function storeScanning(tracks: Track[], storage = memory()) {
+    const { api } = fakeApi({ scanFolder: vi.fn(async () => tracks) });
+    return { store: createStore(api, storage), storage };
+  }
+
+  it("announces new duplicate songs once after a scan", async () => {
+    const { store } = storeScanning(withDupes);
+    await store.openFolder();
+    expect(store.duplicateNotice.value).toBe(1);
+
+    store.dismissDuplicateNotice();
+    await store.refresh();
+    expect(store.duplicateNotice.value).toBe(0);
+  });
+
+  it("does not announce when there are none, or for the saved library shown at startup", async () => {
+    const clean = storeScanning([makeTrack({ path: "/m/x.mp3" })]);
+    await clean.store.openFolder();
+    expect(clean.store.duplicateNotice.value).toBe(0);
+
+    const { api } = fakeApi({
+      cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: withDupes, scannedAtMs: 1 })),
+    });
+    const store = createStore(api, memory());
+    await store.init();
+    expect(store.duplicateGroups.value).toHaveLength(1);
+    expect(store.duplicateNotice.value).toBe(0);
+  });
+
+  it("remembers what it announced across restarts, but announces genuinely new groups", async () => {
+    const storage = memory();
+    const first = storeScanning(withDupes, storage);
+    await first.store.openFolder();
+
+    const second = storeScanning(withDupes, storage);
+    await second.store.openFolder();
+    expect(second.store.duplicateNotice.value).toBe(0);
+
+    const another = [
+      ...withDupes,
+      makeTrack({ path: "/m/z.mp3", title: "Zed" }),
+      makeTrack({ path: "/m/z 1.mp3", title: "Zed" }),
+    ];
+    const third = storeScanning(another, storage);
+    await third.store.openFolder();
+    expect(third.store.duplicateNotice.value).toBe(1);
+  });
+
+  it("a group marked Not a duplicate leaves the list and is never announced", async () => {
+    const { store } = storeScanning(withDupes);
+    await store.openFolder();
+    expect(store.duplicateGroups.value).toHaveLength(1);
+
+    store.ignoreDuplicate(store.duplicateGroups.value[0].key);
+    expect(store.duplicateGroups.value).toHaveLength(0);
+    expect(store.ignoredDuplicates.value.size).toBe(1);
+
+    store.resetIgnoredDuplicates();
+    expect(store.duplicateGroups.value).toHaveLength(1);
   });
 });

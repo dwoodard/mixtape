@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extraCopies, findDuplicates } from "./duplicates";
+import { extraCopies, findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
 import { makeTrack } from "./testing";
 
 const song = (path: string, overrides = {}) =>
@@ -73,5 +73,27 @@ describe("findDuplicates", () => {
     ]);
     expect(groups.map((g) => g.keep.title)).toEqual(["Alpha", "Zed"]);
     expect(extraCopies(groups)).toHaveLength(2);
+  });
+});
+
+describe("ignoring and announcing duplicates", () => {
+  const groups = findDuplicates([
+    song("/m/a.mp3", { title: "A" }),
+    song("/m/a 1.mp3", { title: "A" }),
+    song("/m/b.mp3", { title: "B" }),
+    song("/m/b 1.mp3", { title: "B" }),
+  ]);
+  const [first, second] = groups;
+
+  it("drops groups the user dismissed", () => {
+    expect(withoutIgnored(groups, new Set([first.key])).map((g) => g.key)).toEqual([second.key]);
+    expect(withoutIgnored(groups, new Set())).toHaveLength(2);
+  });
+
+  it("announces only groups that are new and not dismissed", () => {
+    expect(newDuplicateGroups(groups, new Set(), new Set())).toHaveLength(2);
+    expect(newDuplicateGroups(groups, new Set([first.key]), new Set()).map((g) => g.key)).toEqual([second.key]);
+    expect(newDuplicateGroups(groups, new Set(), new Set([second.key])).map((g) => g.key)).toEqual([first.key]);
+    expect(newDuplicateGroups(groups, new Set([first.key, second.key]), new Set())).toEqual([]);
   });
 });

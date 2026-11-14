@@ -59,3 +59,16 @@ export function findDuplicates(tracks: Track[]): DuplicateGroup[] {
 
 /** Every extra copy across all groups. */
 export const extraCopies = (groups: DuplicateGroup[]): Track[] => groups.flatMap((g) => g.extras);
+
+/** Groups the user has not dismissed ("Not a duplicate"). */
+export const withoutIgnored = (groups: DuplicateGroup[], ignored: ReadonlySet<string>): DuplicateGroup[] =>
+  groups.filter((g) => !ignored.has(g.key));
+
+/** Groups that have not been announced before and are not dismissed. */
+export function newDuplicateGroups(
+  groups: DuplicateGroup[],
+  seen: ReadonlySet<string>,
+  ignored: ReadonlySet<string>,
+): DuplicateGroup[] {
+  return groups.filter((g) => !seen.has(g.key) && !ignored.has(g.key));
+}

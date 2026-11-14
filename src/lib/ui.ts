@@ -75,3 +75,30 @@ export function persistedChoice<T extends string>(
   };
   return { choice, set };
 }
+
+/** A remembered set of strings (for example, things the user has dismissed). */
+export function persistedSet(key: string, storage?: FlagStorage) {
+  const store = storage ?? (typeof localStorage === "undefined" ? undefined : localStorage);
+  let initial: string[] = [];
+  try {
+    const parsed = JSON.parse(store?.getItem(key) ?? "[]");
+    if (Array.isArray(parsed)) initial = parsed.filter((v): v is string => typeof v === "string");
+  } catch {
+    // Missing, corrupt, or unavailable storage: start empty.
+  }
+  const items = ref<ReadonlySet<string>>(new Set(initial));
+  const replace = (next: Set<string>) => {
+    items.value = next;
+    try {
+      store?.setItem(key, JSON.stringify([...next]));
+    } catch {
+      // Not being able to remember is fine.
+    }
+  };
+  return {
+    items,
+    add: (...values: string[]) => replace(new Set([...items.value, ...values])),
+    remove: (value: string) => replace(new Set([...items.value].filter((v) => v !== value))),
+    clear: () => replace(new Set()),
+  };
+}

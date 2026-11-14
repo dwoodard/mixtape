@@ -1,5 +1,7 @@
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { tauriApi, type Api } from "./api";
+import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
+import { persistedSet, type FlagStorage } from "./ui";
 import type { CleanupReport, DuplicatePair, PlayerState, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 /** What the backend returns when a scan was cancelled. */
@@ -19,7 +21,7 @@ const emptyState = (): PlayerState => ({
 });
 
 /** UI state plus the actions that talk to the Rust player. */
-export function createStore(api: Api) {
+export function createStore(api: Api, storage?: FlagStorage) {
   const player = ref<PlayerState>(emptyState());
   const queue = ref<Track[]>([]);
   const library = ref<Track[]>([]);
@@ -33,6 +35,16 @@ export function createStore(api: Api) {
   /** Songs hidden from the library by the user (their files are untouched). */
   const removedCount = ref(0);
   const libraryError = ref<string | null>(null);
+  /** Duplicate groups the user marked "Not a duplicate", and ones already announced. */
+  const ignoredDuplicates = persistedSet("mixtape.ignoredDuplicates", storage);
+  const seenDuplicates = persistedSet("mixtape.seenDuplicates", storage);
+  /** How many new duplicate songs the last scan found (0 when nothing to announce). */
+  const duplicateNotice = ref(0);
+  /** Songs in the library more than once, minus the ones the user dismissed. */
+  const duplicateGroups = computed(() =>
+    withoutIgnored(findDuplicates(library.value), ignoredDuplicates.items.value),
+  );
+
   /** What the last "move extra copies to Trash" did, for the Duplicates tab to show. */
   const cleanupReport = ref<CleanupReport | null>(null);
   const scanProgress = ref<ScanProgress | null>(null);
@@ -79,6 +91,18 @@ export function createStore(api: Api) {
     return () => unlisten.forEach((fn) => fn());
   }
 
+  /** After a scan: tell the user about duplicates they have not seen yet, once. */
+  function announceDuplicates() {
+    const fresh = newDuplicateGroups(
+      findDuplicates(library.value),
+      seenDuplicates.items.value,
+      ignoredDuplicates.items.value,
+    );
+    if (fresh.length === 0) return;
+    duplicateNotice.value = fresh.length;
+    seenDuplicates.add(...fresh.map((g) => g.key));
+  }
+
   async function scan(path: string, load: () => Promise<Track[]>) {
     const id = ++scanId;
     scanning.value = true;
@@ -90,6 +114,7 @@ export function createStore(api: Api) {
       library.value = tracks;
       folder.value = path;
       scannedAt.value = Date.now();
+      announceDuplicates();
     } catch (e) {
       // A cancelled scan keeps the previous library and is not an error.
       if (id === scanId && String(e) !== SCAN_CANCELLED) scanError.value = String(e);
@@ -262,6 +287,12 @@ export function createStore(api: Api) {
     scannedAt,
     removedCount,
     libraryError,
+    duplicateGroups,
+    duplicateNotice,
+    ignoredDuplicates: ignoredDuplicates.items,
+    ignoreDuplicate: (key: string) => ignoredDuplicates.add(key),
+    resetIgnoredDuplicates: () => ignoredDuplicates.clear(),
+    dismissDuplicateNotice: () => (duplicateNotice.value = 0),
     playlists,
     playlistError,
     scanning,
