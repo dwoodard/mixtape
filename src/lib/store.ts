@@ -67,6 +67,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
   /** What the last "move extra copies to Trash" did, for the Duplicates tab to show. */
   const cleanupReport = ref<CleanupReport | null>(null);
   const scanProgress = ref<ScanProgress | null>(null);
+  const thinPanelOpen = ref(false);
   /** Identifies the latest scan so a cancelled older one cannot clobber its state. */
   let scanId = 0;
   /** Unknown (null) until the backend says which window mode this launch is in. */
@@ -460,6 +461,10 @@ export function createStore(api: Api, storage?: FlagStorage) {
     moveQueueTrack: (from: number, to: number) => api.moveQueueTrack(from, to),
     clearQueue: () => api.clearQueue(),
     quit: () => api.quit(),
+    resizeThin: (width: number) => api.resizeThin(width),
+    /** The thin bar's drop-down panel (queue and more). Nothing draws it yet. */
+    thinPanelOpen,
+    toggleThinPanel: () => (thinPanelOpen.value = !thinPanelOpen.value),
   };
 }
 

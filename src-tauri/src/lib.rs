@@ -647,6 +647,14 @@ fn toggle_window_mode(window: WebviewWindow, store: State<WindowStore>) -> Mode 
     mode
 }
 
+/// Widens or narrows the thin bar. Ignored in the large window.
+#[tauri::command]
+fn resize_thin(window: WebviewWindow, store: State<WindowStore>, width: f64) {
+    if store.mode() == Mode::Thin {
+        window::resize_thin(&window, width);
+    }
+}
+
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
@@ -845,6 +853,7 @@ pub fn run() {
             clear_queue,
             window_mode,
             toggle_window_mode,
+            resize_thin,
             quit_app,
         ])
         .build(tauri::generate_context!())

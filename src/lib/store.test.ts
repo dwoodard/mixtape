@@ -58,6 +58,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     setVolume: vi.fn(async () => {}),
     removeFromQueue: vi.fn(async () => {}),
     removeFromQueueDown: vi.fn(async () => {}),
+    resizeThin: vi.fn(async () => {}),
     clearQueue: vi.fn(async () => {}),
     toggleWindowMode: vi.fn(async () => "thin" as WindowMode),
     quit: vi.fn(async () => {}),
@@ -380,6 +381,24 @@ describe("play modes", () => {
     await store.stop();
     expect(api.enqueueNext).toHaveBeenCalledWith(tracks);
     expect(api.stop).toHaveBeenCalled();
+  });
+});
+
+describe("thin bar", () => {
+  it("passes the dragged width to the window", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.resizeThin(640);
+    expect(api.resizeThin).toHaveBeenCalledWith(640);
+  });
+
+  it("has one toggle for the drop-down panel, closed to begin with", () => {
+    const store = createStore(fakeApi().api);
+    expect(store.thinPanelOpen.value).toBe(false);
+    store.toggleThinPanel();
+    expect(store.thinPanelOpen.value).toBe(true);
+    store.toggleThinPanel();
+    expect(store.thinPanelOpen.value).toBe(false);
   });
 });
 

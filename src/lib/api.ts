@@ -56,6 +56,8 @@ export interface Api {
   removeFromQueueDown(index: number): Promise<void>;
   clearQueue(): Promise<void>;
   toggleWindowMode(): Promise<WindowMode>;
+  /** Sets the thin bar's width in logical pixels. The height never changes. */
+  resizeThin(width: number): Promise<void>;
   quit(): Promise<void>;
   onState(cb: (state: PlayerState) => void): Promise<Unlisten>;
   onQueue(cb: (queue: Track[]) => void): Promise<Unlisten>;
@@ -113,6 +115,7 @@ export const tauriApi: Api = {
   removeFromQueueDown: (index) => invoke("remove_from_queue_down", { index }),
   clearQueue: () => invoke("clear_queue"),
   toggleWindowMode: () => invoke("toggle_window_mode"),
+  resizeThin: (width) => invoke("resize_thin", { width }),
   quit: () => invoke("quit_app"),
   onState: (cb) => listen<PlayerState>("player-state", (e) => cb(e.payload)),
   onQueue: (cb) => listen<Track[]>("player-queue", (e) => cb(e.payload)),

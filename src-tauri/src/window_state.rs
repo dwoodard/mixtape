@@ -68,6 +68,43 @@ impl WindowState {
     }
 }
 
+/// The thin bar's fixed height, in logical pixels. Only its width can change.
+pub const THIN_HEIGHT: f64 = 24.0;
+/// The narrowest the thin bar goes, in logical pixels. Keep in step with the first tier in `src/lib/thinBar.ts`.
+pub const THIN_MIN_WIDTH: f64 = 120.0;
+/// The thin bar's width when nothing is saved.
+pub const THIN_DEFAULT_WIDTH: f64 = 480.0;
+
+/// Keeps a requested thin-bar width between the minimum and `max` (the screen width).
+/// A screen narrower than the minimum still gets the minimum.
+pub fn clamp_thin_width(width: f64, max: f64) -> f64 {
+    if !width.is_finite() {
+        return THIN_MIN_WIDTH;
+    }
+    width.min(max).max(THIN_MIN_WIDTH)
+}
+
+/// The thin bar's logical width to restore: the saved width (stored in physical
+/// pixels, so older saves keep loading) kept within the allowed range, or the
+/// default width when nothing is saved.
+pub fn thin_width(saved: Option<&Geometry>, scale_factor: f64, max: f64) -> f64 {
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 { scale_factor } else { 1.0 };
+    match saved {
+        Some(g) => clamp_thin_width(g.width as f64 / scale, max),
+        None => THIN_DEFAULT_WIDTH,
+    }
+}
+
+/// Where the left edge goes so a bar `width` pixels wide ends no further right than
+/// the monitor (`left` to `right`): unchanged if it already fits, otherwise shifted left.
+pub fn x_to_fit_right_edge(x: i32, width: u32, left: i32, right: i32) -> i32 {
+    let overflow = x as i64 + width as i64 - right as i64;
+    if overflow <= 0 {
+        return x;
+    }
+    ((x as i64 - overflow).max(left as i64)) as i32
+}
+
 /// True if enough of the window's top-left area is inside one of the monitors
 /// (given as geometries) that the user can still grab and move it. Guards
 /// against restoring onto a display that is no longer connected.
@@ -161,4 +198,53 @@ mod tests {
     fn unreachable_with_no_monitors() {
         assert!(!is_reachable(&geo(0, 0, 100, 100), &[]));
     }
+
+    #[test]
+    fn thin_width_defaults_to_480_when_nothing_is_saved() {
+        assert_eq!(thin_width(None, 2.0, 1728.0), 480.0);
+    }
+
+    #[test]
+    fn an_older_saved_thin_size_still_loads_as_the_same_width() {
+        // Saved by earlier versions: 960 physical pixels on a 2x display is the 480 point bar.
+        assert_eq!(thin_width(Some(&geo(28, 1942, 960, 48)), 2.0, 1728.0), 480.0);
+    }
+
+    #[test]
+    fn a_saved_wider_thin_bar_is_restored() {
+        assert_eq!(thin_width(Some(&geo(0, 0, 2400, 48)), 2.0, 1728.0), 1200.0);
+    }
+
+    #[test]
+    fn a_saved_width_outside_the_allowed_range_is_pulled_in() {
+        assert_eq!(thin_width(Some(&geo(0, 0, 60, 24)), 1.0, 1728.0), THIN_MIN_WIDTH);
+        assert_eq!(thin_width(Some(&geo(0, 0, 9000, 48)), 2.0, 1728.0), 1728.0);
+        assert_eq!(thin_width(Some(&geo(0, 0, 240, 48)), 2.0, 1728.0), 120.0, "the smallest bar loads as saved");
+    }
+
+    #[test]
+    fn an_unusable_scale_factor_is_treated_as_one() {
+        assert_eq!(thin_width(Some(&geo(0, 0, 700, 24)), 0.0, 1728.0), 700.0);
+        assert_eq!(thin_width(Some(&geo(0, 0, 700, 24)), f64::NAN, 1728.0), 700.0);
+    }
+
+    #[test]
+    fn clamping_keeps_width_between_the_minimum_and_the_screen() {
+        assert_eq!(clamp_thin_width(60.0, 1728.0), THIN_MIN_WIDTH);
+        assert_eq!(clamp_thin_width(120.0, 1728.0), 120.0);
+        assert_eq!(clamp_thin_width(121.0, 1728.0), 121.0);
+        assert_eq!(clamp_thin_width(900.0, 1728.0), 900.0);
+        assert_eq!(clamp_thin_width(5000.0, 1728.0), 1728.0);
+        assert_eq!(clamp_thin_width(5000.0, 100.0), THIN_MIN_WIDTH, "a tiny screen still gets the minimum");
+        assert_eq!(clamp_thin_width(f64::NAN, 1728.0), THIN_MIN_WIDTH);
+    }
+
+    #[test]
+    fn a_widened_bar_slides_left_to_stay_on_the_screen() {
+        assert_eq!(x_to_fit_right_edge(100, 800, 0, 1728), 100, "already fits");
+        assert_eq!(x_to_fit_right_edge(1200, 1000, 0, 1728), 728, "right edge lands on the screen edge");
+        assert_eq!(x_to_fit_right_edge(500, 1728, 0, 1728), 0, "full width starts at the left edge");
+        assert_eq!(x_to_fit_right_edge(500, 2000, 0, 1728), 0, "never past the left edge");
+    }
 }
+
