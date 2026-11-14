@@ -5,12 +5,47 @@ import { store } from "../lib/store";
 import { filterTracks } from "../lib/trackList";
 import { libraryView, type LibraryView } from "../lib/ui";
 import AlbumsView from "./AlbumsView.vue";
+import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import ArtistsView from "./ArtistsView.vue";
 import PlaylistsView from "./PlaylistsView.vue";
 import TrackPane from "./TrackPane.vue";
 
 const query = ref("");
 const filtered = computed(() => filterTracks(store.library.value, query.value));
+
+/** Library actions are rarely needed, so they live in a menu instead of the toolbar. */
+const menu = ref<{ x: number; y: number } | null>(null);
+let closedAt = 0;
+function closeMenu() {
+  menu.value = null;
+  closedAt = Date.now();
+}
+function openMenu(event: MouseEvent) {
+  // The press that closes an open menu also lands on this button: don't reopen it.
+  if (Date.now() - closedAt < 300) return;
+  const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  menu.value = { x: box.left, y: box.bottom + 4 };
+}
+const menuItems = computed<MenuItem[]>(() => {
+  const busy = store.scanning.value;
+  const items: MenuItem[] = [];
+  if (store.configuredFolder.value) {
+    items.push({ label: "Import library", action: () => store.importLibrary(), disabled: busy });
+  }
+  items.push({ label: "Open folder…", action: () => store.openFolder(), disabled: busy });
+  if (store.folder.value) {
+    items.push({ label: "Refresh (new and changed files)", action: () => store.refresh(), disabled: busy });
+  }
+  if (store.removedCount.value > 0) {
+    items.push({
+      label: `Restore removed songs (${store.removedCount.value})`,
+      action: () => store.restoreRemoved(),
+      disabled: busy,
+      separated: true,
+    });
+  }
+  return items;
+});
 
 const tabs: { id: LibraryView; label: string }[] = [
   { id: "tracks", label: "Tracks" },
@@ -44,30 +79,6 @@ const scanLabel = computed(() => {
     </div>
 
     <div class="toolbar">
-      <button
-        v-if="store.configuredFolder.value"
-        :disabled="store.scanning.value"
-        :title="store.configuredFolder.value"
-        @click="store.importLibrary()"
-      >
-        Import library
-      </button>
-      <button :disabled="store.scanning.value" @click="store.openFolder()">Open folder…</button>
-      <button
-        v-if="store.folder.value && !store.scanning.value"
-        :title="`Look for new or changed files in ${store.folder.value}`"
-        @click="store.refresh()"
-      >
-        Refresh
-      </button>
-      <button v-if="store.scanning.value" @click="store.cancelScan()">Cancel</button>
-      <button
-        v-if="store.removedCount.value > 0 && !store.scanning.value"
-        title="Bring back the songs you removed (rescans the folder)"
-        @click="store.restoreRemoved()"
-      >
-        Restore removed ({{ store.removedCount.value }})
-      </button>
       <input
         v-model="query"
         class="field filter"
@@ -80,15 +91,31 @@ const scanLabel = computed(() => {
         {{ filtered.length }} tracks<template v-if="store.scannedAt.value">
           · scanned {{ formatAgo(store.scannedAt.value, Date.now()) }}</template>
       </span>
+      <button v-if="store.scanning.value" @click="store.cancelScan()">Cancel</button>
+      <button
+        class="icon-btn more"
+        aria-label="Library actions"
+        aria-haspopup="menu"
+        title="Import, open a folder, refresh…"
+        @click="openMenu"
+      >
+        ⋯
+      </button>
     </div>
+    <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="closeMenu" />
 
     <p v-if="store.scanning.value" class="status" role="status">{{ scanLabel }}</p>
     <p v-if="store.scanError.value" class="error" role="alert">{{ store.scanError.value }}</p>
 
     <PlaylistsView v-if="libraryView === 'playlists'" />
-    <p v-else-if="store.library.value.length === 0" class="hint">
-      {{ store.scanning.value ? scanLabel : "Open a folder to load your music." }}
-    </p>
+    <div v-else-if="store.library.value.length === 0" class="hint">
+      <p>{{ store.scanning.value ? scanLabel : "Open a folder to load your music." }}</p>
+      <!-- First-run actions: shown only while there is nothing to browse. -->
+      <div v-if="!store.scanning.value" class="first-run">
+        <button v-if="store.configuredFolder.value" @click="store.importLibrary()">Import library</button>
+        <button @click="store.openFolder()">Open folder…</button>
+      </div>
+    </div>
     <TrackPane v-else-if="libraryView === 'tracks'" :tracks="filtered" removable />
     <AlbumsView v-else-if="libraryView === 'albums'" :tracks="filtered" />
     <ArtistsView v-else :tracks="filtered" />
@@ -102,9 +129,12 @@ const scanLabel = computed(() => {
 .tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); border-top: 1px solid var(--line); }
 .toolbar button { white-space: nowrap; }
+.more { width: 28px; height: 28px; font-size: 16px; line-height: 1; letter-spacing: 1px; flex: none; }
+.first-run { display: flex; gap: 8px; justify-content: center; }
 .filter { flex: 1; min-width: 120px; }
 .count { color: var(--muted); white-space: nowrap; font-size: 12px; }
 .status { margin: 0; padding: 5px 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); }
 .hint { color: var(--muted); text-align: center; margin: 48px 0; }
+.hint p { margin: 0 0 12px; }
 .error { margin: 0; padding: 6px 12px; background: #4a2328; color: #ffb4b4; font-size: 12px; }
 </style>
