@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod cache;
 pub mod config;
+pub mod cover;
 pub mod library;
 pub mod media;
 pub mod player;
@@ -14,6 +15,7 @@ pub mod window_state;
 use audio::RodioBackend;
 use cache::{CacheDir, LibraryCache};
 use config::Config;
+use cover::CoverCache;
 use media::{MediaCommand, MediaSession};
 use player::{Player, PlayerEvent, PlayerState};
 use playlists::{PlaylistStore, PlaylistSummary};
@@ -27,6 +29,13 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewWindow, WindowE
 use track::Track;
 use window::WindowStore;
 use window_state::Mode;
+
+/// Cover art requests, limited to a few at a time so opening an album grid
+/// does not read hundreds of files off a network share at once.
+struct CoverService {
+    cache: CoverCache,
+    pool: rayon::ThreadPool,
+}
 
 struct PlayerHandle(Arc<Mutex<Player>>);
 
@@ -376,9 +385,32 @@ fn setup_window(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol("cover", |ctx, request, responder| {
+            let service = ctx.app_handle().state::<Arc<CoverService>>().inner().clone();
+            let path = request.uri().path().to_string();
+            let worker = service.clone();
+            service.pool.spawn(move || {
+                let response = match worker.cache.serve(&path) {
+                    Some(jpeg) => tauri::http::Response::builder()
+                        .header("Content-Type", "image/jpeg")
+                        .header("Cache-Control", "public, max-age=86400")
+                        .body(jpeg),
+                    None => tauri::http::Response::builder().status(404).body(Vec::new()),
+                };
+                responder.respond(response.expect("valid response"));
+            });
+        })
         .setup(|app| {
             setup_player(app);
             app.manage(ScanControl::default());
+            app.manage(Arc::new(CoverService {
+                cache: CoverCache::new(app.path().app_cache_dir()?.join("covers")),
+                pool: rayon::ThreadPoolBuilder::new()
+                    .num_threads(4)
+                    .thread_name(|i| format!("mixtape-cover-{i}"))
+                    .build()
+                    .expect("cover thread pool"),
+            }));
             app.manage(PlaylistStore::new(app.path().app_data_dir()?.join("playlists.json")));
             app.manage(CacheDir(app.path().app_cache_dir()?.join("library")));
             setup_config(app)?;

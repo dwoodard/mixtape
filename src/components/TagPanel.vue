@@ -25,7 +25,7 @@ const rows = computed(() => {
 
 <template>
   <section class="tags panel" aria-label="Tags">
-    <h2 class="panel-title">Now playing tags <small>read-only</small></h2>
+    <h2 class="panel-title">Now playing tags</h2>
     <dl v-if="track" class="body">
       <template v-for="[label, value] in rows" :key="label">
         <dt>{{ label }}</dt>
@@ -38,7 +38,6 @@ const rows = computed(() => {
 
 <style scoped>
 .tags { flex: none; }
-.panel-title small { font-weight: 400; color: var(--muted); margin-left: 4px; }
 .body { padding: 8px 12px 10px; margin: 0; }
 dl { display: grid; grid-template-columns: 80px 1fr; gap: 3px 8px; }
 dt { color: var(--muted); }

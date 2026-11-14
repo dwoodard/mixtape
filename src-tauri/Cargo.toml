@@ -28,6 +28,8 @@ rayon = "1.12.0"
 souvlaki = "0.9.3"
 lofty = "0.25.5"
 fastrand = "2.5.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+percent-encoding = "2.3.2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { formatClock, formatTime } from "../lib/format";
 import { store } from "../lib/store";
+import CoverArt from "./CoverArt.vue";
 import SeekBar from "./SeekBar.vue";
 import VolumeControl from "./VolumeControl.vue";
 
@@ -16,6 +17,13 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
   <section class="deck panel" aria-label="Player">
     <h2 class="panel-title">Mixtape</h2>
     <div class="top">
+      <CoverArt
+        v-if="track"
+        class="art"
+        :path="track.path"
+        :hue-key="`${track.albumArtist || track.artist}\u0000${track.album}`"
+        :title="track.album || track.title"
+      />
       <div class="lcd clock" aria-label="Elapsed time">
         <span class="digits">{{ formatClock(p.positionMs) }}</span>
         <span class="total">/ {{ formatTime(p.durationMs) }}</span>
@@ -64,6 +72,7 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
 <style scoped>
 .deck { padding-bottom: 10px; }
 .top { display: flex; gap: 10px; padding: 10px 12px 6px; }
+.art { flex: none; width: 104px; height: 104px; }
 .clock { flex: 0 0 190px; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; padding: 6px 14px; }
 .digits { font-size: 46px; line-height: 1; font-weight: 200; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
 .total { font-size: 11px; color: var(--lcd-dim); font-variant-numeric: tabular-nums; }
