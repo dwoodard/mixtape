@@ -173,7 +173,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
   }
 
   /** Takes songs out of the library. Their files stay on disk and are not re-added by a refresh. */
-  async function removeFromLibrary(tracks: Track[]) {
+  async function removeFromLibrary(tracks: Pick<Track, "path">[]) {
     if (tracks.length === 0) return;
     libraryError.value = null;
     try {
@@ -209,8 +209,9 @@ export function createStore(api: Api, storage?: FlagStorage) {
   }
 
   /**
-   * Moves duplicate extras to the Trash (the backend checks each one first),
-   * then takes whatever was trashed or already gone out of the library and
+   * Moves duplicate extras to the Trash, or to a holding folder on drives
+   * without one (the backend checks each first), then takes whatever was
+   * moved or already gone out of the library and
    * the queue. Anything left alone stays in the library and is reported.
    */
   async function trashDuplicates(pairs: DuplicatePair[]) {
@@ -225,9 +226,9 @@ export function createStore(api: Api, storage?: FlagStorage) {
       return;
     }
     cleanupReport.value = report;
-    const gone = [...report.trashed, ...report.missing];
+    const gone = [...report.trashed, ...report.held, ...report.missing];
     if (gone.length === 0) return;
-    await removeFromLibrary(gone.map((path) => ({ path }) as Track));
+    await removeFromLibrary(gone.map((path) => ({ path })));
     const goneSet = new Set(gone);
     // Highest index first so earlier removals do not shift the later ones.
     const indexes = queue.value.flatMap((t, i) => (goneSet.has(t.path) ? [i] : [])).reverse();
@@ -235,7 +236,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
   }
 
   /** Shows the songs' files in Finder. */
-  async function revealInFinder(tracks: Track[]) {
+  async function revealInFinder(tracks: Pick<Track, "path">[]) {
     if (tracks.length === 0) return;
     libraryError.value = null;
     try {

@@ -25,7 +25,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     cachedLibrary: vi.fn(async () => null),
     removeFromLibrary: vi.fn(async () => {}),
     revealInFinder: vi.fn(async () => {}),
-    trashDuplicates: vi.fn(async () => ({ trashed: [], missing: [], skipped: [] })),
+    trashDuplicates: vi.fn(async () => ({ trashed: [], held: [], holdingFolder: null, missing: [], skipped: [] })),
     removedCount: vi.fn(async () => 0),
     restoreRemoved: vi.fn(async () => {}),
     enqueueNext: vi.fn(async () => {}),
@@ -595,6 +595,7 @@ describe("trashing duplicate copies", () => {
   it("hides what was trashed from the library and queue, and keeps what was left alone", async () => {
     const { api, store, listeners } = await loaded({
       trashed: ["/m/a 1.mp3"],
+      held: [],
       missing: [],
       skipped: [{ path: "/m/a 2.mp3", reason: "Different size from the copy being kept." }],
     });
@@ -610,7 +611,7 @@ describe("trashing duplicate copies", () => {
   });
 
   it("also clears extras that were already gone from disk", async () => {
-    const { api, store } = await loaded({ trashed: [], missing: ["/m/a 2.mp3"], skipped: [] });
+    const { api, store } = await loaded({ trashed: [], held: [], missing: ["/m/a 2.mp3"], skipped: [] });
     await store.trashDuplicates(pairs);
     expect(api.removeFromLibrary).toHaveBeenCalledWith(["/m/a 2.mp3"]);
   });
@@ -618,6 +619,7 @@ describe("trashing duplicate copies", () => {
   it("changes nothing in the library when everything was skipped", async () => {
     const { api, store } = await loaded({
       trashed: [],
+      held: [],
       missing: [],
       skipped: [{ path: "/m/a 1.mp3", reason: "Couldn't move to the Trash: no Trash" }],
     });
@@ -634,8 +636,24 @@ describe("trashing duplicate copies", () => {
     expect(store.library.value).toHaveLength(3);
   });
 
+  it("treats files moved to the holding folder like trashed ones", async () => {
+    const { api, store } = await loaded({
+      trashed: [],
+      held: ["/m/a 1.mp3", "/m/a 2.mp3"],
+      holdingFolder: "/m/.mixtape-duplicates/2026-01-01-000000",
+      missing: [],
+      skipped: [],
+    });
+
+    await store.trashDuplicates(pairs);
+
+    expect(api.removeFromLibrary).toHaveBeenCalledWith(["/m/a 1.mp3", "/m/a 2.mp3"]);
+    expect(store.library.value.map((t) => t.path)).toEqual(["/m/a.mp3"]);
+    expect(store.cleanupReport.value?.holdingFolder).toContain(".mixtape-duplicates");
+  });
+
   it("does nothing without pairs", async () => {
-    const { api, store } = await loaded({ trashed: [], missing: [], skipped: [] });
+    const { api, store } = await loaded({ trashed: [], held: [], missing: [], skipped: [] });
     await store.trashDuplicates([]);
     expect(api.trashDuplicates).not.toHaveBeenCalled();
   });

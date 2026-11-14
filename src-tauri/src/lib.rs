@@ -166,13 +166,31 @@ async fn remove_from_library(cache: State<'_, CacheDir>, paths: Vec<String>) -> 
     .map_err(|e| e.to_string())?
 }
 
-/// Moves the extra copies of duplicate songs to the Trash, after safety checks.
-/// Nothing is deleted outright: files the Trash can't take are left alone.
+/// Moves the extra copies of duplicate songs out of the library after safety
+/// checks: to the Trash, or, on drives without one, to a dated holding folder
+/// inside the library folder. Nothing is deleted outright.
 #[tauri::command]
-async fn trash_duplicates(pairs: Vec<cleanup::DuplicatePair>) -> Result<cleanup::CleanupReport, String> {
-    tauri::async_runtime::spawn_blocking(move || cleanup::trash_duplicates(&pairs, cleanup::move_to_trash))
-        .await
-        .map_err(|e| e.to_string())
+async fn trash_duplicates(
+    cache: State<'_, CacheDir>,
+    pairs: Vec<cleanup::DuplicatePair>,
+) -> Result<cleanup::CleanupReport, String> {
+    let root = cache.last_root();
+    tauri::async_runtime::spawn_blocking(move || {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let batch = root.as_ref().map(|r| r.join(cleanup::HOLDING_DIR).join(cleanup::utc_stamp(secs)));
+        let mut report = cleanup::trash_duplicates(&pairs, cleanup::move_to_trash, |path| match (&root, &batch) {
+            (Some(root), Some(batch)) => cleanup::move_to_holding(root, path, batch),
+            _ => Err("no library folder is loaded".to_string()),
+        });
+        if !report.held.is_empty() {
+            report.holding_folder = batch.map(|b| b.to_string_lossy().into_owned());
+        }
+        report
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Shows songs in Finder.

@@ -63,7 +63,12 @@ pub fn scan_folder_with(
     on_progress: impl Fn(ScanProgress) + Sync,
 ) -> Option<Vec<CachedTrack>> {
     let mut files = Vec::new();
-    for entry in WalkDir::new(root).follow_links(true).into_iter().filter_map(Result::ok) {
+    let walker = WalkDir::new(root)
+        .follow_links(true)
+        .into_iter()
+        // Duplicates moved aside by the clean-up are not part of the library.
+        .filter_entry(|e| !(e.file_type().is_dir() && e.file_name() == crate::cleanup::HOLDING_DIR));
+    for entry in walker.filter_map(Result::ok) {
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
@@ -266,6 +271,20 @@ mod tests {
 
         assert_eq!(tracks.len(), 1);
         assert!(tracks[0].track.path.ends_with("keep.wav"));
+    }
+
+    #[test]
+    fn the_duplicates_holding_folder_is_not_scanned() {
+        let dir = tempfile::tempdir().unwrap();
+        write_wav(&dir.path().join("keep.wav"), 0.2);
+        let held = dir.path().join(crate::cleanup::HOLDING_DIR).join("2026-01-01-000000/Artist");
+        std::fs::create_dir_all(&held).unwrap();
+        write_wav(&held.join("old copy.wav"), 0.2);
+
+        let tracks = scan_folder(dir.path());
+
+        assert_eq!(tracks.len(), 1);
+        assert!(tracks[0].path.ends_with("keep.wav"));
     }
 
     #[test]

@@ -47,8 +47,9 @@ async function trashExtras() {
     <div v-if="confirming" class="confirm" role="alertdialog" aria-label="Clean up duplicates">
       <span>
         {{ extras.length }} extra {{ extras.length === 1 ? "copy" : "copies" }}, keeping the ✓ ones.
-        <strong>Move to Trash</strong> takes the files off disk (recoverable from the Trash; anything the drive can't
-        trash is left alone). <strong>Hide</strong> only removes them from this library.
+        <strong>Move to Trash</strong> takes the files off disk and is recoverable. If the drive has no Trash (most
+        network drives), they go to a <code>.mixtape-duplicates</code> folder on that drive instead, for you to review
+        and delete yourself. <strong>Hide only</strong> just removes them from this library.
       </span>
       <button class="danger" @click="trashExtras()">Move to Trash</button>
       <button @click="removeExtras()">Hide only</button>
@@ -57,6 +58,15 @@ async function trashExtras() {
     <div v-if="store.cleanupReport.value" class="report" role="status">
       <p v-if="store.cleanupReport.value.trashed.length > 0">
         Moved {{ store.cleanupReport.value.trashed.length }} to the Trash.
+      </p>
+      <p v-if="store.cleanupReport.value.held.length > 0">
+        This drive has no Trash, so {{ store.cleanupReport.value.held.length }}
+        {{ store.cleanupReport.value.held.length === 1 ? "file was" : "files were" }} moved to a holding folder:
+        <code class="where-held">{{ store.cleanupReport.value.holdingFolder }}</code>
+        Check it, then delete the folder when you're sure.
+        <button @click="store.revealInFinder([{ path: store.cleanupReport.value.held[0] }])">
+          Reveal in Finder
+        </button>
       </p>
       <p v-if="store.cleanupReport.value.missing.length > 0">
         {{ store.cleanupReport.value.missing.length }} were already gone from disk, so they were just removed from the library.
@@ -109,9 +119,11 @@ async function trashExtras() {
 .summary { margin-right: auto; color: var(--muted); font-size: 12px; }
 .confirm { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel-3); border-bottom: 1px solid var(--line); font-size: 12px; }
 .confirm span { margin-right: auto; }
+.confirm code { font-size: 11px; }
 .danger { background: #8a2f36; border-color: #8a2f36; color: #fff; }
 .report { padding: 6px 10px; font-size: 12px; background: var(--panel-3); border-bottom: 1px solid var(--line); }
 .report p { margin: 0 0 2px; }
+.report code { user-select: text; -webkit-user-select: text; font-size: 11px; word-break: break-all; }
 .report .left { color: #ffb4b4; }
 .report ul { margin: 2px 0 6px; padding-left: 18px; color: var(--muted); }
 .report button { padding: 1px 8px; font-size: 12px; }

@@ -65,6 +65,10 @@ export interface DuplicatePair {
 export interface CleanupReport {
   /** Moved to the Trash. */
   trashed: string[];
+  /** Moved to a holding folder on the same drive instead (the drive has no Trash). */
+  held: string[];
+  /** That holding folder, when anything was held. */
+  holdingFolder: string | null;
   /** Were already gone from disk. */
   missing: string[];
   /** Left alone, with why. */

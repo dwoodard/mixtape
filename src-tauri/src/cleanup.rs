@@ -1,11 +1,14 @@
-//! Cleaning up duplicate files: moving the extra copies to the Trash, never
-//! deleting them outright.
+//! Cleaning up duplicate files: moving the extra copies to the Trash (or, on
+//! drives that have none, to a holding folder), never deleting them outright.
 
 use crate::track::is_audio_file;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Folder (inside the library folder) that extras are moved into on drives without a Trash.
+pub const HOLDING_DIR: &str = ".mixtape-duplicates";
 
 /// An extra copy and the copy that is being kept instead.
 #[derive(Debug, Clone, Deserialize)]
@@ -24,6 +27,10 @@ pub struct Skipped {
 pub struct CleanupReport {
     /// Moved to the Trash.
     pub trashed: Vec<String>,
+    /// Moved to the holding folder instead, because the drive has no Trash.
+    pub held: Vec<String>,
+    /// This run's holding folder, when anything was held.
+    pub holding_folder: Option<String>,
     /// Were already gone from disk.
     pub missing: Vec<String>,
     /// Left alone, with why.
@@ -33,11 +40,15 @@ pub struct CleanupReport {
 /// Moves each pair's extra copy to the Trash through `trash`, but only after
 /// checking it is safe: both are absolute audio paths, the kept copy exists
 /// and is not itself being removed, and both files are the same size.
-/// Anything that fails a check, or that `trash` cannot move, is left alone.
+/// If the Trash can't take a file (a network drive without one), `hold` is
+/// tried instead, and once the Trash has failed it is not tried again for the
+/// rest of the run. Anything neither can move is left alone.
 pub fn trash_duplicates(
     pairs: &[DuplicatePair],
     trash: impl Fn(&Path) -> Result<(), String>,
+    hold: impl Fn(&Path) -> Result<(), String>,
 ) -> CleanupReport {
+    let mut trash_unavailable = false;
     let keeping: HashSet<&str> = pairs.iter().map(|p| p.keep.as_str()).collect();
     let mut report = CleanupReport::default();
     let mut skip = |report: &mut CleanupReport, path: &str, reason: &str| {
@@ -77,12 +88,90 @@ pub fn trash_duplicates(
             skip(&mut report, &pair.extra, "Different size from the copy being kept.");
             continue;
         }
-        match trash(extra) {
-            Ok(()) => report.trashed.push(pair.extra.clone()),
-            Err(e) => skip(&mut report, &pair.extra, &format!("Couldn't move to the Trash: {e}")),
+        let trash_error = if trash_unavailable {
+            Some("this drive has no Trash".to_string())
+        } else {
+            match trash(extra) {
+                Ok(()) => {
+                    report.trashed.push(pair.extra.clone());
+                    continue;
+                }
+                Err(e) => {
+                    trash_unavailable = true;
+                    Some(e)
+                }
+            }
+        };
+        match hold(extra) {
+            Ok(()) => report.held.push(pair.extra.clone()),
+            Err(e) => {
+                let why = format!(
+                    "Couldn't move to the Trash ({}) or to the holding folder ({e}).",
+                    short_reason(&trash_error.unwrap_or_default())
+                );
+                skip(&mut report, &pair.extra, &why);
+            }
         }
     }
     report
+}
+
+/// A short, readable form of a system error: drops the Debug-style wrapper
+/// and keeps the sentence the system gave.
+pub fn short_reason(error: &str) -> String {
+    // e.g. `... failed: “a.mp3” couldn’t be moved to the trash because the volume “homes” doesn’t have one." }`
+    if let Some(at) = error.rfind("failed: ") {
+        return error[at + "failed: ".len()..]
+            .trim_end_matches(|c: char| c == '}' || c == '"' || c.is_whitespace())
+            .to_string();
+    }
+    error.to_string()
+}
+
+/// Seconds since the Unix epoch as `YYYY-MM-DD-HHMMSS` (UTC), for naming a holding folder.
+pub fn utc_stamp(epoch_secs: u64) -> String {
+    let days = (epoch_secs / 86_400) as i64;
+    let rem = epoch_secs % 86_400;
+    // Civil-from-days (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}-{:02}{:02}{:02}", rem / 3_600, rem % 3_600 / 60, rem % 60)
+}
+
+/// Where `path` goes inside `batch_dir` (a holding folder): the same path
+/// relative to the library `root`, so the structure can be put back. `None`
+/// if the file is not inside `root`.
+pub fn holding_destination(root: &Path, path: &Path, batch_dir: &Path) -> Option<PathBuf> {
+    path.strip_prefix(root).ok().map(|relative| batch_dir.join(relative))
+}
+
+/// Moves `path` into `batch_dir` on the same drive, keeping its place in the
+/// folder structure. Never overwrites: a name clash gets a numeric suffix.
+pub fn move_to_holding(root: &Path, path: &Path, batch_dir: &Path) -> Result<(), String> {
+    let destination = holding_destination(root, path, batch_dir)
+        .ok_or("the file is outside the library folder")?;
+    if let Some(dir) = destination.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let mut target = destination.clone();
+    let mut n = 1;
+    while target.exists() {
+        let stem = destination.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+        let name = match destination.extension().and_then(|e| e.to_str()) {
+            Some(ext) => format!("{stem} ({n}).{ext}"),
+            None => format!("{stem} ({n})"),
+        };
+        target = destination.with_file_name(name);
+        n += 1;
+    }
+    std::fs::rename(path, &target).map_err(|e| e.to_string())
 }
 
 /// Moves a file to the Trash using the system file manager. If the volume
@@ -120,10 +209,14 @@ mod tests {
             FakeTrash(RefCell::new(Vec::new()))
         }
         fn run(&self, pairs: &[DuplicatePair]) -> CleanupReport {
-            trash_duplicates(pairs, |p| {
-                self.0.borrow_mut().push(p.to_string_lossy().into_owned());
-                Ok(())
-            })
+            trash_duplicates(
+                pairs,
+                |p| {
+                    self.0.borrow_mut().push(p.to_string_lossy().into_owned());
+                    Ok(())
+                },
+                |_| Err("no holding folder".into()),
+            )
         }
     }
 
@@ -138,6 +231,89 @@ mod tests {
         move_to_trash(&path).expect("move to Trash");
 
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn falls_back_to_the_holding_folder_and_stops_trying_the_trash_after_it_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let keep = file(dir.path(), "a.mp3", 100);
+        let one = file(dir.path(), "a 1.mp3", 100);
+        let two = file(dir.path(), "a 2.mp3", 100);
+        let trash_calls = RefCell::new(0);
+        let held = RefCell::new(Vec::new());
+
+        let report = trash_duplicates(
+            &[pair(&keep, &one), pair(&keep, &two)],
+            |_| {
+                *trash_calls.borrow_mut() += 1;
+                Err("the volume doesn't have one".into())
+            },
+            |p| {
+                held.borrow_mut().push(p.to_string_lossy().into_owned());
+                Ok(())
+            },
+        );
+
+        assert_eq!(*trash_calls.borrow(), 1, "the Trash is tried once, then skipped");
+        assert_eq!(report.held, vec![one.clone(), two.clone()]);
+        assert_eq!(*held.borrow(), vec![one, two]);
+        assert!(report.trashed.is_empty() && report.skipped.is_empty());
+    }
+
+    #[test]
+    fn shortens_the_system_error_to_its_sentence() {
+        let raw = "Error during a `trash` operation: Unknown { description: \"While deleting x\", `trashItemAtURL` failed: “a.mp3” couldn’t be moved to the trash because the volume “homes” doesn’t have one.\" }";
+        assert_eq!(short_reason(raw), "“a.mp3” couldn’t be moved to the trash because the volume “homes” doesn’t have one.");
+        assert_eq!(short_reason("locked"), "locked");
+    }
+
+    #[test]
+    fn formats_a_utc_stamp() {
+        assert_eq!(utc_stamp(0), "1970-01-01-000000");
+        assert_eq!(utc_stamp(1_700_000_000), "2023-11-14-221320");
+        assert_eq!(utc_stamp(951_782_400), "2000-02-29-000000"); // a leap day
+    }
+
+    #[test]
+    fn holding_destination_keeps_the_folder_structure_and_rejects_outside_files() {
+        let root = Path::new("/Volumes/m/Music");
+        let batch = Path::new("/Volumes/m/Music/.mixtape-duplicates/2026-01-01-000000");
+        assert_eq!(
+            holding_destination(root, Path::new("/Volumes/m/Music/No Doubt/TK/a 1.mp3"), batch),
+            Some(batch.join("No Doubt/TK/a 1.mp3"))
+        );
+        assert_eq!(holding_destination(root, Path::new("/elsewhere/a.mp3"), batch), None);
+    }
+
+    #[test]
+    fn moves_a_file_into_the_holding_folder_without_overwriting_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("Artist/Album")).unwrap();
+        let extra = root.join("Artist/Album/a 1.mp3");
+        std::fs::write(&extra, b"extra").unwrap();
+        let batch = root.join(HOLDING_DIR).join("2026-01-01-000000");
+
+        move_to_holding(root, &extra, &batch).unwrap();
+
+        assert!(!extra.exists());
+        assert_eq!(std::fs::read(batch.join("Artist/Album/a 1.mp3")).unwrap(), b"extra");
+
+        // A second file with the same name lands next to it instead of replacing it.
+        std::fs::write(&extra, b"second").unwrap();
+        move_to_holding(root, &extra, &batch).unwrap();
+        assert_eq!(std::fs::read(batch.join("Artist/Album/a 1.mp3")).unwrap(), b"extra");
+        assert_eq!(std::fs::read(batch.join("Artist/Album/a 1 (1).mp3")).unwrap(), b"second");
+    }
+
+    #[test]
+    fn refuses_to_hold_a_file_outside_the_library_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let path = outside.path().join("a.mp3");
+        std::fs::write(&path, b"x").unwrap();
+        assert!(move_to_holding(root.path(), &path, &root.path().join(HOLDING_DIR).join("b")).is_err());
+        assert!(path.exists());
     }
 
     #[test]
@@ -229,10 +405,15 @@ mod tests {
         let keep = file(dir.path(), "a.mp3", 100);
         let extra = file(dir.path(), "a 1.mp3", 100);
 
-        let report = trash_duplicates(&[pair(&keep, &extra)], |_| Err("volume has no Trash".into()));
+        let report = trash_duplicates(
+            &[pair(&keep, &extra)],
+            |_| Err("volume has no Trash".into()),
+            |_| Err("read-only".into()),
+        );
 
-        assert!(report.trashed.is_empty());
+        assert!(report.trashed.is_empty() && report.held.is_empty());
         assert!(report.skipped[0].reason.contains("volume has no Trash"));
+        assert!(report.skipped[0].reason.contains("read-only"));
         assert!(Path::new(&extra).exists(), "the file must still be there");
     }
 
@@ -243,11 +424,14 @@ mod tests {
         let bad = file(dir.path(), "a 1.mp3", 100);
         let good = file(dir.path(), "a 2.mp3", 100);
 
-        let report = trash_duplicates(&[pair(&keep, &bad), pair(&keep, &good)], |p| {
-            if p.ends_with("a 1.mp3") { Err("locked".into()) } else { Ok(()) }
-        });
+        let report = trash_duplicates(
+            &[pair(&keep, &bad), pair(&keep, &good)],
+            |p| if p.ends_with("a 1.mp3") { Err("locked".into()) } else { Ok(()) },
+            |p| if p.ends_with("a 1.mp3") { Err("also locked".into()) } else { Ok(()) },
+        );
 
-        assert_eq!(report.trashed, vec![good]);
+        // The first failure means the Trash is not tried again, so the second goes to hold.
+        assert_eq!(report.held, vec![good]);
         assert_eq!(report.skipped.len(), 1);
     }
 }
