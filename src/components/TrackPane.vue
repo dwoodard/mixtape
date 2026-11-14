@@ -12,6 +12,7 @@ import {
 } from "../lib/selection";
 import { sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
+import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import TrackTable from "./TrackTable.vue";
 
 /** A list of tracks with sorting, multi-select, and play / play next / queue actions. */
@@ -27,6 +28,7 @@ const sortDirection = ref<SortDirection>("asc");
 const selection = ref<Selection>(emptySelection());
 const root = ref<HTMLElement | null>(null);
 const confirmingRemove = ref(false);
+const menu = ref<{ x: number; y: number } | null>(null);
 
 const rows = computed(() => sortTracks(props.tracks, sortKey.value, sortDirection.value));
 const order = computed(() => rows.value.map((t) => t.path));
@@ -58,6 +60,34 @@ function sortBy(key: SortKey) {
     sortDirection.value = "asc";
   }
 }
+
+/** Right-click: act on the selection, or select the row first if it is outside it. */
+function onRowMenu(index: number, event: MouseEvent) {
+  const path = rows.value[index].path;
+  if (!selection.value.paths.has(path)) {
+    selection.value = clickRow(emptySelection(), order.value, path, { shift: false, toggle: false });
+  }
+  menu.value = { x: event.clientX, y: event.clientY };
+}
+
+const menuItems = computed<MenuItem[]>(() => {
+  const songs = chosen.value;
+  const items: MenuItem[] = [
+    { label: "Play", action: () => store.playTracks(songs, 0) },
+    { label: "Play next", action: () => store.enqueueNext(songs) },
+    { label: "Add to queue", action: () => store.enqueue(songs) },
+    { label: "Reveal in Finder", action: () => store.revealInFinder(songs), separated: true },
+  ];
+  if (props.removable) {
+    items.push({
+      label: songs.length > 1 ? `Remove ${songs.length} songs from library…` : "Remove from library…",
+      action: () => (confirmingRemove.value = true),
+      danger: true,
+      separated: true,
+    });
+  }
+  return items;
+});
 
 function onRowClick(index: number, event: MouseEvent) {
   selection.value = clickRow(selection.value, order.value, rows.value[index].path, {
@@ -137,10 +167,12 @@ function onKey(event: KeyboardEvent) {
       :sort-key="sortKey"
       :sort-direction="sortDirection"
       @row-click="onRowClick"
+      @row-menu="onRowMenu"
       @play="(i) => store.playTracks(rows, i)"
       @enqueue="(t) => store.enqueue([t])"
       @sort="sortBy"
     />
+  <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="menu = null" />
   </div>
 </template>
 

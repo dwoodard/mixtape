@@ -3,8 +3,21 @@ import { computed, nextTick, ref } from "vue";
 import { formatTime } from "../lib/format";
 import { store } from "../lib/store";
 import { libraryView } from "../lib/ui";
+import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 
 const total = computed(() => store.queue.value.reduce((sum, t) => sum + t.durationMs, 0));
+
+const menu = ref<{ x: number; y: number; index: number } | null>(null);
+const menuItems = computed<MenuItem[]>(() => {
+  const index = menu.value?.index ?? -1;
+  const track = store.queue.value[index];
+  if (!track) return [];
+  return [
+    { label: "Play", action: () => store.playQueueIndex(index) },
+    { label: "Reveal in Finder", action: () => store.revealInFinder([track]) },
+    { label: "Remove from playlist", action: () => store.removeFromQueue(index), separated: true },
+  ];
+});
 
 const saving = ref(false);
 const name = ref("");
@@ -33,6 +46,7 @@ function cancel() {
 
 <template>
   <section class="queue panel" aria-label="Playlist">
+    <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="menu = null" />
     <h2 class="panel-title">Playlist</h2>
     <ol>
       <li
@@ -40,6 +54,7 @@ function cancel() {
         :key="`${i}-${t.path}`"
         :class="{ current: i === store.player.value.currentIndex }"
         @dblclick="store.playQueueIndex(i)"
+        @contextmenu.prevent="menu = { x: $event.clientX, y: $event.clientY, index: i }"
       >
         <span class="n">{{ i + 1 }}.</span>
         <span class="name ellipsis">{{ t.artist ? `${t.artist} - ${t.title}` : t.title }}</span>

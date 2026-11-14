@@ -14,6 +14,7 @@ const emit = defineEmits<{
   rowClick: [index: number, event: MouseEvent];
   play: [index: number];
   enqueue: [track: Track];
+  rowMenu: [index: number, event: MouseEvent];
   sort: [key: SortKey];
 }>();
 
@@ -52,6 +53,7 @@ const columns: { key: SortKey; label: string }[] = [
         :aria-selected="selected.has(t.path)"
         @click="emit('rowClick', i, $event)"
         @dblclick="emit('play', i)"
+        @contextmenu.prevent="emit('rowMenu', i, $event)"
       >
         <span class="num">{{ i + 1 }}.</span>
         <span class="cell ellipsis">{{ t.title }}</span>

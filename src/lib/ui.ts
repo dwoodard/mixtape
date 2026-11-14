@@ -33,3 +33,18 @@ export function persistedFlag(key: string, fallback: boolean, storage?: FlagStor
   };
   return { flag, set, toggle: () => set(!flag.value) };
 }
+
+/** Keeps a popup of `width` x `height` opened at (x, y) fully inside the window. */
+export function clampMenuPosition(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  margin = 4,
+): { x: number; y: number } {
+  const fit = (pos: number, size: number, limit: number) =>
+    Math.max(margin, Math.min(pos, limit - size - margin));
+  return { x: fit(x, width, viewportWidth), y: fit(y, height, viewportHeight) };
+}

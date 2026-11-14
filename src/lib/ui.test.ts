@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { persistedFlag, type FlagStorage } from "./ui";
+import { clampMenuPosition, persistedFlag, type FlagStorage } from "./ui";
 
 function memoryStorage(initial: Record<string, string> = {}): FlagStorage & { data: Record<string, string> } {
   const data = { ...initial };
@@ -45,5 +45,20 @@ describe("persistedFlag", () => {
     expect(flag.value).toBe(false);
     toggle();
     expect(flag.value).toBe(true);
+  });
+});
+
+describe("clampMenuPosition", () => {
+  it("leaves a menu that fits where it was opened", () => {
+    expect(clampMenuPosition(100, 120, 180, 200, 1100, 700)).toEqual({ x: 100, y: 120 });
+  });
+
+  it("pulls a menu back inside the right and bottom edges", () => {
+    expect(clampMenuPosition(1050, 650, 180, 200, 1100, 700)).toEqual({ x: 916, y: 496 });
+  });
+
+  it("never goes past the top-left margin, even for a menu larger than the window", () => {
+    expect(clampMenuPosition(-10, -10, 180, 200, 1100, 700)).toEqual({ x: 4, y: 4 });
+    expect(clampMenuPosition(0, 0, 2000, 2000, 1100, 700)).toEqual({ x: 4, y: 4 });
   });
 });
