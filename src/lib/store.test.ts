@@ -382,6 +382,64 @@ describe("play modes", () => {
   });
 });
 
+describe("playing one song from a list", () => {
+  const song = makeTrack({ path: "/m/one.mp3", title: "One" });
+  const queued = [makeTrack({ path: "/m/a.mp3", title: "A" }), makeTrack({ path: "/m/b.mp3", title: "B" })];
+
+  async function storeWith(state: Partial<PlayerState>, queue: Track[]) {
+    const { api, listeners } = fakeApi();
+    const store = createStore(api);
+    await store.init();
+    listeners.state[0](makePlayerState(state));
+    listeners.queue[0](queue);
+    return { api, store };
+  }
+
+  it("asks what to do only while something is loaded (playing or paused)", async () => {
+    expect((await storeWith({ status: "stopped" }, queued)).store.songNeedsChoice.value).toBe(false);
+    expect((await storeWith({ status: "playing", currentIndex: 0 }, queued)).store.songNeedsChoice.value).toBe(true);
+    expect((await storeWith({ status: "paused", currentIndex: 0 }, queued)).store.songNeedsChoice.value).toBe(true);
+  });
+
+  it("with nothing playing and an empty queue, the song becomes the queue and plays", async () => {
+    const { api, store } = await storeWith({ status: "stopped" }, []);
+    await store.playSong(song);
+    expect(api.playTracks).toHaveBeenCalledWith([song], 0);
+    expect(api.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("with nothing playing and a queue, the song goes on the end and plays, and the queue stays", async () => {
+    const { api, store } = await storeWith({ status: "stopped", currentIndex: 0 }, queued);
+    await store.playSong(song);
+    expect(api.enqueue).toHaveBeenCalledWith([song]);
+    expect(api.playIndex).toHaveBeenCalledWith(2);
+    expect(api.playTracks).not.toHaveBeenCalled();
+  });
+
+  it("play now puts the song right after the current one and starts it, keeping the rest", async () => {
+    const { api, store } = await storeWith({ status: "playing", currentIndex: 0 }, queued);
+    await store.playNow(song);
+    expect(api.enqueueNext).toHaveBeenCalledWith([song]);
+    expect(api.playIndex).toHaveBeenCalledWith(1);
+    expect(api.playTracks).not.toHaveBeenCalled();
+  });
+
+  it("play now waits for the insert before starting, so the index is the new song", async () => {
+    const calls: string[] = [];
+    const { api, listeners } = fakeApi({
+      enqueueNext: vi.fn(async () => void calls.push("insert")),
+      playIndex: vi.fn(async () => void calls.push("play")),
+    });
+    const store = createStore(api);
+    await store.init();
+    listeners.state[0](makePlayerState({ status: "paused", currentIndex: 1 }));
+    listeners.queue[0](queued);
+    await store.playNow(song);
+    expect(calls).toEqual(["insert", "play"]);
+    expect(api.playIndex).toHaveBeenCalledWith(2);
+  });
+});
+
 describe("startup", () => {
   it("has no window mode until the backend answers", async () => {
     let answer!: (m: WindowMode) => void;

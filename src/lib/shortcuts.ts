@@ -42,7 +42,7 @@ export const COMMANDS: readonly CommandDef[] = [
   { id: "discovery", title: "Switch between Player and Discovery", group: "Navigation", keys: cmd("d") },
   { id: "toggleMode", title: "Switch between thin bar and large window", group: "Navigation", keys: cmd("t", { shift: true }) },
 
-  { id: "play", title: "Play selected songs", group: "Selection", keys: { key: "Enter" }, local: true },
+  { id: "play", title: "Play selected songs (one song asks first while playing)", group: "Selection", keys: { key: "Enter" }, local: true },
   { id: "enqueue", title: "Add selected songs to the queue", group: "Selection", keys: cmd("Enter") },
   { id: "playNext", title: "Play selected songs next", group: "Selection", keys: cmd("Enter", { shift: true }) },
   { id: "editTags", title: "Edit tags of selected songs", group: "Selection", keys: cmd("e") },

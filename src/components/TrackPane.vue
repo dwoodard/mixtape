@@ -13,6 +13,7 @@ import {
 import { sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
 import { shortcutText } from "../lib/shortcuts";
+import { enterAction, songChoiceItems } from "../lib/songChoice";
 import { publishSelection, revealPath, tagEditPaths, withdrawSelection } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import TrackTable from "./TrackTable.vue";
@@ -130,6 +131,33 @@ const menuItems = computed<MenuItem[]>(() => {
   return items;
 });
 
+/**
+ * One song chosen with a double-click or Enter. With nothing playing it just plays;
+ * otherwise a small menu at its row asks what to do. Never touches the other rows.
+ */
+const choice = ref<{ x: number; y: number; track: Track } | null>(null);
+const choiceItems = computed<MenuItem[]>(() => {
+  const track = choice.value?.track;
+  return track ? songChoiceItems(track, store) : [];
+});
+
+function chooseSong(index: number) {
+  const track = rows.value[index];
+  if (!track) return;
+  if (!store.songNeedsChoice.value) {
+    void store.playSong(track);
+    return;
+  }
+  const row = root.value?.querySelector(`[data-index="${index}"]`)?.getBoundingClientRect();
+  const box = root.value?.getBoundingClientRect();
+  choice.value = { x: (row?.left ?? box?.left ?? 0) + 48, y: row?.bottom ?? box?.top ?? 0, track };
+}
+
+function closeChoice() {
+  choice.value = null;
+  root.value?.focus({ preventScroll: true });
+}
+
 function onRowClick(index: number, event: MouseEvent) {
   selection.value = clickRow(selection.value, order.value, rows.value[index].path, {
     shift: event.shiftKey,
@@ -157,8 +185,14 @@ function onKey(event: KeyboardEvent) {
     if (!props.sidewaysPlayback) emit("sideways", direction);
     else if (direction === 1) store.next();
     else store.prev();
-  } else if (event.key === "Enter" && target.value.length > 0) {
-    store.playTracks(target.value, 0);
+  } else if (event.key === "Enter") {
+    const action = enterAction(chosen.value.length);
+    if (action === "choose") {
+      event.preventDefault();
+      chooseSong(order.value.indexOf(chosen.value[0].path));
+    } else if (action === "play-selection") {
+      store.playTracks(chosen.value, 0);
+    }
   } else if ((event.key === "Delete" || event.key === "Backspace") && props.removable && chosen.value.length > 0) {
     event.preventDefault();
     confirmingRemove.value = true;
@@ -223,11 +257,12 @@ function onKey(event: KeyboardEvent) {
       :sort-direction="sortDirection"
       @row-click="onRowClick"
       @row-menu="onRowMenu"
-      @play="(i) => store.playTracks(rows, i)"
+      @play="chooseSong"
       @enqueue="(t) => store.enqueue([t])"
       @sort="sortBy"
     />
   <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="menu = null" />
+  <ContextMenu v-if="choice" :x="choice.x" :y="choice.y" :items="choiceItems" @close="closeChoice" />
   </div>
 </template>
 

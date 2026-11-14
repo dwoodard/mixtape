@@ -148,6 +148,31 @@ export function createStore(api: Api, storage?: FlagStorage) {
     await scan(path, () => api.scanFolder(path));
   }
 
+  /** True while a song is loaded (playing or paused): choosing a song then asks what to do with it. */
+  const songNeedsChoice = computed(() => player.value.status !== "stopped");
+
+  /**
+   * Plays one song when nothing is playing. An empty queue becomes just that song;
+   * otherwise the song goes on the end of the queue and starts, and the queue stays.
+   */
+  async function playSong(track: Track) {
+    const at = queue.value.length;
+    if (at === 0) return api.playTracks([track], 0);
+    await api.enqueue([track]);
+    return api.playIndex(at);
+  }
+
+  /**
+   * Starts one song now. It goes right after the current song, which stays directly
+   * above it in the queue, and the rest of the queue is untouched.
+   */
+  async function playNow(track: Track) {
+    const current = player.value.currentIndex;
+    const at = current === null ? queue.value.length : current + 1;
+    await api.enqueueNext([track]);
+    return api.playIndex(at);
+  }
+
   /** Takes songs out of the library. Their files stay on disk and are not re-added by a refresh. */
   async function removeFromLibrary(tracks: Pick<Track, "path">[]) {
     if (tracks.length === 0) return;
@@ -409,6 +434,9 @@ export function createStore(api: Api, storage?: FlagStorage) {
     toggleMode,
     /** Replaces the queue with `tracks` and starts at `index`. */
     playTracks: (tracks: Track[], index: number) => api.playTracks(tracks, index),
+    songNeedsChoice,
+    playSong,
+    playNow,
     enqueue: (tracks: Track[]) => api.enqueue(tracks),
     enqueueNext: (tracks: Track[]) => api.enqueueNext(tracks),
     stop: () => api.stop(),
