@@ -159,6 +159,17 @@ export function createStore(api: Api) {
     removedCount.value = await api.removedCount();
   }
 
+  /** Shows the songs' files in Finder. */
+  async function revealInFinder(tracks: Track[]) {
+    if (tracks.length === 0) return;
+    libraryError.value = null;
+    try {
+      await api.revealInFinder(tracks.map((t) => t.path));
+    } catch (e) {
+      libraryError.value = String(e);
+    }
+  }
+
   /** Forgets every removal and rescans so those songs come back. */
   async function restoreRemoved() {
     libraryError.value = null;
@@ -212,6 +223,7 @@ export function createStore(api: Api) {
     importLibrary,
     refresh,
     removeFromLibrary,
+    revealInFinder,
     restoreRemoved,
     refreshPlaylists,
     saveQueueAsPlaylist,

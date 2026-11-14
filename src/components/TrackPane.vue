@@ -106,6 +106,13 @@ function onKey(event: KeyboardEvent) {
       <button :disabled="target.length === 0" @click="store.enqueueNext(target)">Play next</button>
       <button :disabled="target.length === 0" @click="store.enqueue(target)">Add to queue</button>
       <button
+        :disabled="chosen.length === 0"
+        title="Show the selected files in Finder"
+        @click="store.revealInFinder(chosen)"
+      >
+        Reveal in Finder
+      </button>
+      <button
         v-if="removable"
         :disabled="chosen.length === 0"
         title="Select songs first. Their files are not deleted."

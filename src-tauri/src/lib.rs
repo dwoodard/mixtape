@@ -7,6 +7,7 @@ pub mod media;
 pub mod player;
 pub mod playlists;
 pub mod queue;
+pub mod reveal;
 pub mod session;
 pub mod track;
 pub mod window;
@@ -162,6 +163,14 @@ async fn remove_from_library(cache: State<'_, CacheDir>, paths: Vec<String>) -> 
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Shows songs in Finder.
+#[tauri::command]
+async fn reveal_in_finder(paths: Vec<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || reveal::reveal(&paths))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// How many tracks are currently removed from the loaded library.
@@ -468,6 +477,7 @@ pub fn run() {
             import_library,
             cached_library,
             remove_from_library,
+            reveal_in_finder,
             removed_count,
             restore_removed,
             cancel_scan,

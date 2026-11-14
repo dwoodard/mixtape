@@ -23,6 +23,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     cancelScan: vi.fn(async () => {}),
     cachedLibrary: vi.fn(async () => null),
     removeFromLibrary: vi.fn(async () => {}),
+    revealInFinder: vi.fn(async () => {}),
     removedCount: vi.fn(async () => 0),
     restoreRemoved: vi.fn(async () => {}),
     enqueueNext: vi.fn(async () => {}),
@@ -505,5 +506,24 @@ describe("removing from the library", () => {
     expect(api.restoreRemoved).toHaveBeenCalled();
     expect(api.scanFolder).toHaveBeenCalledWith("/m");
     expect(store.removedCount.value).toBe(0);
+  });
+});
+
+describe("reveal in Finder", () => {
+  it("sends the songs' paths", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.revealInFinder([makeTrack({ path: "/m/a.mp3" }), makeTrack({ path: "/m/b.mp3" })]);
+    expect(api.revealInFinder).toHaveBeenCalledWith(["/m/a.mp3", "/m/b.mp3"]);
+  });
+
+  it("does nothing for no songs and reports a failure", async () => {
+    const { api } = fakeApi({ revealInFinder: vi.fn(async () => Promise.reject("not mounted")) });
+    const store = createStore(api);
+    await store.revealInFinder([]);
+    expect(api.revealInFinder).not.toHaveBeenCalled();
+
+    await store.revealInFinder([makeTrack()]);
+    expect(store.libraryError.value).toBe("not mounted");
   });
 });
