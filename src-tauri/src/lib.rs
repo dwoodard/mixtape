@@ -61,6 +61,11 @@ impl imports::Runner for LazyYtDlp {
             .ok_or("MusicBrainz Picard isn't installed. In a terminal: brew install --cask musicbrainz-picard")?;
         importer::open_in_picard(&app, file)
     }
+    fn close_in_picard(&self, file: &std::path::Path) {
+        if let Some(app) = importer::find_picard() {
+            importer::remove_from_picard(&app, file);
+        }
+    }
     fn probe(&self, url: &str) -> Result<String, String> {
         imports::YtDlp::locate()?.probe(url)
     }
@@ -372,6 +377,8 @@ async fn import_add(
     .and_then(|r| r);
     match outcome {
         Ok(added) => {
+            // The working file is no longer needed in Picard.
+            manager.release_from_picard(id);
             manager.mark_added(id, &added.path, added.size);
             Ok(added.track)
         }

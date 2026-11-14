@@ -214,7 +214,7 @@ fn pretty_date(d: &str) -> String {
 /// title as the user copied it, used when it is more complete than `meta.title`.
 pub fn suggest(meta: &VideoMeta, title_hint: Option<&str>) -> Suggestion {
     let mut s = Suggestion::default();
-    let mut source = |field: &str, from: &str, sources: &mut BTreeMap<String, String>| {
+    let source = |field: &str, from: &str, sources: &mut BTreeMap<String, String>| {
         sources.insert(field.to_string(), from.to_string());
     };
 
@@ -546,15 +546,57 @@ pub fn find_picard() -> Option<PathBuf> {
         .filter(|p| p.exists())
 }
 
-/// Opens `file` in Picard (starting it if needed).
+/// Picard's command-line program inside the app bundle.
+fn picard_run(app: &Path) -> PathBuf {
+    app.join("Contents/MacOS/picard-run")
+}
+
+/// Is Picard running right now?
+pub fn picard_running() -> bool {
+    Command::new("pgrep")
+        .args(["-f", "MusicBrainz Picard.app/Contents/MacOS/picard-run"])
+        .output()
+        .map(|o| o.status.success() && !o.stdout.is_empty())
+        .unwrap_or(false)
+}
+
+/// Arguments that tell a running Picard to load `file` and come to the front.
+pub fn picard_load_args(file: &Path) -> Vec<std::ffi::OsString> {
+    vec!["-e".into(), "LOAD".into(), file.as_os_str().to_owned(), "-e".into(), "SHOW".into()]
+}
+
+/// Arguments that tell a running Picard to drop `file` from its lists.
+pub fn picard_remove_args(file: &Path) -> Vec<std::ffi::OsString> {
+    vec!["-e".into(), "REMOVE".into(), file.as_os_str().to_owned()]
+}
+
+/// Loads `file` in Picard. A running Picard is sent the file with its own
+/// command-line (`-e LOAD`), which is more reliable than asking macOS to open
+/// a document; if Picard isn't running it is started with the file.
 pub fn open_in_picard(app: &Path, file: &Path) -> Result<(), String> {
+    let run = picard_run(app);
+    if run.exists() && picard_running() {
+        let sent = Command::new(&run).args(picard_load_args(file)).output();
+        if sent.is_ok_and(|o| o.status.success()) {
+            return Ok(());
+        }
+    }
     let status = Command::new("open")
         .arg("-a")
         .arg(app)
+        .arg("--args")
         .arg(file)
         .status()
         .map_err(|e| format!("Couldn't start Picard: {e}"))?;
     if status.success() { Ok(()) } else { Err("Picard didn't open the file.".into()) }
+}
+
+/// Tells a running Picard to forget `file` (best effort: nothing to do if Picard isn't running).
+pub fn remove_from_picard(app: &Path, file: &Path) {
+    let run = picard_run(app);
+    if run.exists() && picard_running() {
+        let _ = Command::new(run).args(picard_remove_args(file)).output();
+    }
 }
 
 /// Finds a command-line tool even when the app was started from Finder and
@@ -572,6 +614,16 @@ mod tests {
     use super::*;
 
     // ---- links
+
+    #[test]
+    fn picard_commands_load_the_file_and_show_the_window_or_remove_it() {
+        let f = Path::new("/Users/me/Library/Application Support/com.dustin.mixtape/imports/2/a b.mp3");
+        let load: Vec<_> = picard_load_args(f).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(load, vec!["-e", "LOAD", "/Users/me/Library/Application Support/com.dustin.mixtape/imports/2/a b.mp3", "-e", "SHOW"]);
+        let remove: Vec<_> = picard_remove_args(f).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(remove[..2], ["-e", "REMOVE"]);
+        assert_eq!(remove.len(), 3, "the path stays one argument even with spaces");
+    }
 
     #[test]
     fn splits_a_pasted_title_and_link() {

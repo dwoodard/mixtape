@@ -5,7 +5,7 @@
 
 use crate::importer::{
     classify_link, destination, extract_link, find_picard, find_tool, open_in_picard, parse_meta, parse_playlist, parse_progress, place, proposal_from_track,
-    suggest, LinkKind, Progress, Proposal,
+    remove_from_picard, suggest, LinkKind, Progress, Proposal,
 };
 use crate::library::CachedTrack;
 use crate::track::{is_audio_file, read_track};
@@ -119,6 +119,8 @@ pub trait Runner: Send + Sync {
     fn picard(&self) -> Option<String>;
     /// Opens a file in Picard.
     fn open_in_picard(&self, file: &Path) -> Result<(), String>;
+    /// Tells Picard to forget a file (best effort).
+    fn close_in_picard(&self, file: &Path);
     /// Downloads and converts, passing each output line to `line`.
     fn fetch(&self, url: &str, format: &str, dir: &Path, line: &mut dyn FnMut(&str), kill: &KillSwitch) -> Result<(), String>;
 }
@@ -175,6 +177,12 @@ impl Runner for YtDlp {
     fn open_in_picard(&self, file: &Path) -> Result<(), String> {
         let app = find_picard().ok_or("MusicBrainz Picard isn't installed. In a terminal: brew install --cask musicbrainz-picard")?;
         open_in_picard(&app, file)
+    }
+
+    fn close_in_picard(&self, file: &Path) {
+        if let Some(app) = find_picard() {
+            remove_from_picard(&app, file);
+        }
     }
 
     fn probe(&self, url: &str) -> Result<String, String> {
@@ -699,9 +707,23 @@ impl Imports {
         });
     }
 
+    /// Takes a song's working file out of Picard once we are done with it, so
+    /// Picard isn't left holding a file that is about to be deleted.
+    pub fn release_from_picard(&self, id: u64) {
+        let file = {
+            let state = self.inner.state.lock().unwrap();
+            state.items.iter().find(|i| i.id == id).filter(|i| i.picard != PicardState::None).and_then(|i| i.staged.clone())
+        };
+        if let Some(file) = file {
+            let this = self.clone();
+            std::thread::spawn(move || this.inner.runner.close_in_picard(&file));
+        }
+    }
+
     /// Stops a running fetch if there is one, deletes the staged file, and
     /// drops the item. A song already added to the library stays there.
     pub fn remove(&self, id: u64) {
+        self.release_from_picard(id);
         let (switch, staged_dir) = {
             let mut state = self.inner.state.lock().unwrap();
             state.cancelled.insert(id);
@@ -759,6 +781,7 @@ mod tests {
         picard: Option<String>,
         opened: Arc<Mutex<Vec<PathBuf>>>,
         open_result: Result<(), String>,
+        closed: Arc<Mutex<Vec<PathBuf>>>,
         /// Write a real, readable mp3 instead of placeholder bytes.
         real_audio: bool,
     }
@@ -781,6 +804,7 @@ mod tests {
                 picard: Some("/Applications/MusicBrainz Picard.app".into()),
                 opened: Arc::new(Mutex::new(Vec::new())),
                 open_result: Ok(()),
+                closed: Arc::new(Mutex::new(Vec::new())),
                 real_audio: false,
             }
         }
@@ -793,6 +817,9 @@ mod tests {
         fn open_in_picard(&self, file: &Path) -> Result<(), String> {
             self.opened.lock().unwrap().push(file.to_path_buf());
             self.open_result.clone()
+        }
+        fn close_in_picard(&self, file: &Path) {
+            self.closed.lock().unwrap().push(file.to_path_buf());
         }
         fn probe(&self, _url: &str) -> Result<String, String> {
             self.probe.clone()
@@ -1137,6 +1164,39 @@ mod tests {
         wait_until(&h.imports, "moved", |i| i[0].stage == Stage::Failed);
         let error = h.imports.list()[0].error.clone().unwrap();
         assert!(error.contains("moved") && error.contains("Move files") && error.contains("Refresh library"), "{error}");
+    }
+
+    #[test]
+    fn removing_or_finishing_a_song_that_was_in_picard_takes_it_out_of_picard() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let closed = fake.closed.clone();
+        let (h, id) = ready_song(fake);
+        h.imports.open_in_picard(id).unwrap();
+        let renamed = picard_saves(&h.staging(id), "04 People Are Strange.mp3", &picard_tags());
+        wait_until(&h.imports, "picard saved", |i| i[0].picard == PicardState::Saved);
+
+        h.imports.release_from_picard(id);
+        h.imports.remove(id);
+
+        let start = Instant::now();
+        while closed.lock().unwrap().is_empty() && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let closed = closed.lock().unwrap();
+        assert!(!closed.is_empty());
+        assert!(closed.iter().all(|p| *p == renamed), "the renamed file is the one Picard has: {closed:?}");
+    }
+
+    #[test]
+    fn songs_never_sent_to_picard_are_not_reported_to_it() {
+        let fake = Fake::ok();
+        let closed = fake.closed.clone();
+        let (h, id) = ready_song(fake);
+        h.imports.release_from_picard(id);
+        h.imports.remove(id);
+        std::thread::sleep(Duration::from_millis(80));
+        assert!(closed.lock().unwrap().is_empty());
     }
 
     #[test]

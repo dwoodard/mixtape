@@ -61,7 +61,7 @@ pub fn trash_duplicates(
     let mut trash_unavailable = false;
     let keeping: HashSet<&str> = pairs.iter().map(|p| p.keep.as_str()).collect();
     let mut report = CleanupReport::default();
-    let mut skip = |report: &mut CleanupReport, path: &str, reason: &str| {
+    let skip = |report: &mut CleanupReport, path: &str, reason: &str| {
         report.skipped.push(Skipped { path: path.to_string(), reason: reason.to_string() });
     };
 
