@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { describePlaybackError } from "../lib/format";
 import { store } from "../lib/store";
 import { appMode } from "../lib/ui";
-import DiscoveryView from "./DiscoveryView.vue";
+import DiscoverySlot from "../prototype/DiscoverySlot.vue"; // PROTOTYPE (discovery-import)
 import LibraryPanel from "./LibraryPanel.vue";
 import PlayerDeck from "./PlayerDeck.vue";
 import QueueList from "./QueueList.vue";
@@ -34,7 +34,7 @@ const problem = computed(() => {
       <button @click="store.dismissError()">Dismiss</button>
     </div>
     <p v-else-if="store.player.value.error" class="error" role="alert">{{ store.player.value.error }}</p>
-    <DiscoveryView v-if="appMode === 'discovery'" />
+    <DiscoverySlot v-if="appMode === 'discovery'" />
     <main v-else>
       <LibraryPanel />
       <aside>

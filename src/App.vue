@@ -3,7 +3,9 @@ import { onMounted, onUnmounted } from "vue";
 import LargeView from "./components/LargeView.vue";
 import ThinBar from "./components/ThinBar.vue";
 import { store } from "./lib/store";
+import PrototypeControls from "./prototype/PrototypeControls.vue"; // PROTOTYPE (discovery-import)
 
+const isDev = import.meta.env.DEV; // PROTOTYPE controls only exist in dev builds
 let cleanup: (() => void) | undefined;
 onMounted(async () => {
   cleanup = await store.init();
@@ -15,4 +17,5 @@ onUnmounted(() => cleanup?.());
   <!-- Nothing until the mode is known, so the wrong layout never flashes in. -->
   <ThinBar v-if="store.mode.value === 'thin'" />
   <LargeView v-else-if="store.mode.value === 'large'" />
+  <PrototypeControls v-if="isDev" />
 </template>

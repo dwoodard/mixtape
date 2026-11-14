@@ -1,0 +1,273 @@
+// PROTOTYPE (discovery-import): fake import pipeline. No network, no files, nothing real is written.
+import { computed, ref } from "vue";
+import type { Track } from "../lib/types";
+
+export type Source = "youtube-video" | "youtube-playlist" | "spotify-track" | "spotify-playlist" | "spotify-album" | "unknown";
+
+/** What kind of link was pasted. Real logic, worth keeping if this direction is chosen. */
+export function classifyLink(raw: string): { source: Source; id: string | null } {
+  const url = raw.trim();
+  let m = url.match(/(?:youtube\.com\/watch\?(?:.*&)?v=|youtu\.be\/)([\w-]{6,})/i);
+  if (m) return { source: "youtube-video", id: m[1] };
+  m = url.match(/youtube\.com\/playlist\?(?:.*&)?list=([\w-]+)/i);
+  if (m) return { source: "youtube-playlist", id: m[1] };
+  m = url.match(/open\.spotify\.com\/(track|playlist|album)\/(\w+)/i);
+  if (m) return { source: `spotify-${m[1].toLowerCase()}` as Source, id: m[2] };
+  return { source: "unknown", id: null };
+}
+
+/** What a user typically copies from YouTube: the video title, then the link. */
+export const EXAMPLE = `The Dead South - People Are Strange [Official Music Video]
+https://www.youtube.com/watch?v=v4YQJ6KuWvQ`;
+
+/** Splits pasted text into the link and whatever else came with it (usually the video title). */
+export function extractLink(text: string): { url: string; hint: string } {
+  const m = text.match(/https?:\/\/\S+/i);
+  if (!m) return { url: text.trim(), hint: "" };
+  return { url: m[0], hint: text.replace(m[0], "").replace(/\s+/g, " ").trim() };
+}
+
+const NOISE =
+  /\s*[\[(][^\])]*\b(official|video|audio|lyrics?|lyric video|visuali[sz]er|hd|4k|remaster(?:ed)?|music|live|clip)\b[^\])]*[\])]/gi;
+
+/** "The Dead South - People Are Strange [Official Music Video]" -> artist + title. */
+export function parseVideoTitle(raw: string): { artist: string; title: string } {
+  const cleaned = raw.replace(NOISE, "").replace(/\s*[|｜]\s*.*$/, "").replace(/\s+/g, " ").trim();
+  const split = cleaned.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+  return split ? { artist: split[1].trim(), title: split[2].trim() } : { artist: "", title: cleaned };
+}
+
+export const SOURCE_LABEL: Record<Source, string> = {
+  "youtube-video": "YouTube video",
+  "youtube-playlist": "YouTube playlist",
+  "spotify-track": "Spotify track",
+  "spotify-playlist": "Spotify playlist",
+  "spotify-album": "Spotify album",
+  unknown: "Unrecognized link",
+};
+
+export type Stage = "queued" | "fetching" | "converting" | "ready" | "added";
+export const STAGES: Stage[] = ["fetching", "converting", "ready", "added"];
+export const STAGE_LABEL: Record<Stage, string> = {
+  queued: "Queued",
+  fetching: "Fetching audio",
+  converting: "Converting (ffmpeg)",
+  ready: "Ready to review",
+  added: "Added",
+};
+
+export interface Proposal {
+  title: string;
+  artist: string;
+  album: string;
+  year: string;
+  track: string;
+  genre: string;
+}
+
+export interface ImportBatch {
+  id: number;
+  /** What was pasted, in words. */
+  label: string;
+  source: Source;
+}
+
+export interface ImportItem {
+  id: number;
+  batchId: number;
+  source: Source;
+  url: string;
+  stage: Stage;
+  progress: number;
+  proposal: Proposal;
+  /** 0-1: how sure the (fake) lookup is. */
+  confidence: number;
+  from: "MusicBrainz" | "Guessed from the video title";
+  duplicateOf: string | null;
+  /** The video's own title, when we were given it. */
+  videoTitle: string;
+}
+
+export type Format = "mp3 320k" | "m4a (aac)" | "flac";
+export const FORMATS: Format[] = ["mp3 320k", "m4a (aac)", "flac"];
+
+const CANNED: Proposal[] = [
+  { title: "Without Me", artist: "Eminem", album: "The Eminem Show", year: "2002", track: "9", genre: "Hip-Hop" },
+  { title: "Spiderwebs", artist: "No Doubt", album: "Tragic Kingdom", year: "1995", track: "1", genre: "Ska" },
+  { title: "Back in Black", artist: "AC/DC", album: "Back in Black", year: "1980", track: "6", genre: "Rock" },
+  { title: "My Calling", artist: "AJR", album: "Living Room", year: "2015", track: "5", genre: "Pop" },
+  { title: "Houdini", artist: "Eminem", album: "The Death of Slim Shady", year: "2024", track: "1", genre: "Hip-Hop" },
+  { title: "Take On Me", artist: "a-ha", album: "Hunting High and Low", year: "1985", track: "2", genre: "Synth-pop" },
+];
+
+const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+
+/** Mimics a lookup: some links resolve confidently, some only get a guess from the title. */
+function fakeProposal(seed: string, index = 0): { proposal: Proposal; confidence: number; from: ImportItem["from"] } {
+  const base = CANNED[(hash(seed) + index) % CANNED.length];
+  const sure = (hash(seed) + index) % 3 !== 0;
+  return sure
+    ? { proposal: { ...base }, confidence: 0.92, from: "MusicBrainz" }
+    : { proposal: { ...base, album: "", year: "", track: "", genre: "" }, confidence: 0.45, from: "Guessed from the video title" };
+}
+
+export interface SpotifyTrack {
+  title: string;
+  artist: string;
+  album: string;
+}
+
+/** A fake Spotify playlist: a few real-looking tracks. Ownership is checked against the real library. */
+export function fakeSpotifyTracks(id: string): SpotifyTrack[] {
+  return [0, 1, 2, 3, 4].map((i) => {
+    const p = CANNED[(hash(id) + i) % CANNED.length];
+    return { title: p.title, artist: p.artist, album: p.album };
+  });
+}
+
+const norm = (s: string) => s.trim().toLowerCase();
+
+/** An item the user should look at before adding: unsure match, missing tags, or already owned. */
+export function needsAttention(item: ImportItem): boolean {
+  const p = item.proposal;
+  return item.confidence < 0.8 || !p.album || !p.year || item.duplicateOf !== null;
+}
+
+/** The library song that is the same recording, if any (read-only use of real data). */
+export function findOwned(library: Track[], title: string, artist: string): Track | null {
+  return library.find((t) => norm(t.title) === norm(title) && norm(t.artist) === norm(artist)) ?? null;
+}
+
+let nextId = 1;
+
+/** The fake pipeline: add links, watch items advance through the stages, add them to the (pretend) library. */
+export function createImports(getLibrary: () => Track[]) {
+  const items = ref<ImportItem[]>([]);
+  const batches = ref<ImportBatch[]>([]);
+  const format = ref<Format>("mp3 320k");
+  const notice = ref<string | null>(null);
+  const spotify = ref<{ source: Source; id: string; tracks: SpotifyTrack[] } | null>(null);
+
+  function advance(item: ImportItem) {
+    const timer = setInterval(() => {
+      item.progress += 18 + Math.random() * 14;
+      if (item.progress >= 100) {
+        item.progress = 0;
+        if (item.stage === "fetching") item.stage = "converting";
+        else if (item.stage === "converting") {
+          item.stage = "ready";
+          item.progress = 100;
+          clearInterval(timer);
+        }
+      }
+    }, 280);
+  }
+
+  function newBatch(label: string, source: Source): number {
+    const id = nextId++;
+    batches.value.push({ id, label, source });
+    return id;
+  }
+
+  function enqueue(
+    source: Source,
+    url: string,
+    seed: string,
+    index = 0,
+    batchId = 0,
+    given?: { proposal: Proposal; confidence: number; from: ImportItem["from"]; videoTitle: string },
+  ) {
+    const { proposal, confidence, from } = given ?? fakeProposal(seed, index);
+    const owned = findOwned(getLibrary(), proposal.title, proposal.artist);
+    const item: ImportItem = {
+      id: nextId++,
+      batchId,
+      source,
+      url,
+      stage: "fetching",
+      progress: 0,
+      proposal,
+      confidence,
+      from,
+      duplicateOf: owned ? owned.path : null,
+      videoTitle: given?.videoTitle ?? "",
+    };
+    items.value.push(item);
+    advance(items.value[items.value.length - 1]);
+    return item;
+  }
+
+  /** Returns a message when the link can't be used. */
+  function addLink(text: string): string | null {
+    const { url: raw, hint } = extractLink(text);
+    const { source, id } = classifyLink(raw);
+    notice.value = null;
+    if (source === "unknown" || !id) return "That doesn't look like a YouTube or Spotify link.";
+    if (source === "youtube-video") {
+      // With the video title we can make a real guess; without it, fall back to the fake lookup.
+      const parsed = hint ? parseVideoTitle(hint) : null;
+      const given = parsed
+        ? {
+            proposal: { title: parsed.title, artist: parsed.artist, album: "", year: "", track: "", genre: "" },
+            confidence: parsed.artist ? 0.5 : 0.3,
+            from: "Guessed from the video title" as const,
+            videoTitle: hint,
+          }
+        : undefined;
+      enqueue(source, raw, id, 0, newBatch(hint || `YouTube video ${id}`, source), given);
+    }
+    else if (source === "youtube-playlist") {
+      const batch = newBatch(`YouTube playlist ${id.slice(0, 8)}…`, source);
+      [0, 1, 2, 3].forEach((i) => enqueue("youtube-video", raw, id, i, batch));
+    }
+    else if (source === "spotify-track") spotify.value = { source, id, tracks: fakeSpotifyTracks(id).slice(0, 1) };
+    else spotify.value = { source, id, tracks: fakeSpotifyTracks(id) };
+    return null;
+  }
+
+  /** Spotify has no audio to take: find the missing songs elsewhere (here: pretend YouTube). */
+  function fetchMissing() {
+    if (!spotify.value) return;
+    const batch = newBatch(`Missing from ${SOURCE_LABEL[spotify.value.source].toLowerCase()}`, spotify.value.source);
+    spotify.value.tracks
+      .filter((t) => !findOwned(getLibrary(), t.title, t.artist))
+      .forEach((t, i) => enqueue("youtube-video", `https://youtu.be/${t.title}`, t.title + t.artist, i, batch));
+  }
+
+  const missing = computed(() =>
+    spotify.value ? spotify.value.tracks.filter((t) => !findOwned(getLibrary(), t.title, t.artist)) : [],
+  );
+  const ready = computed(() => items.value.filter((i) => i.stage === "ready"));
+  const added = computed(() => items.value.filter((i) => i.stage === "added"));
+
+  function addToLibrary(item: ImportItem) {
+    if (item.stage === "ready") item.stage = "added";
+  }
+  const addAllReady = () => ready.value.forEach(addToLibrary);
+  const remove = (item: ImportItem) => (items.value = items.value.filter((i) => i !== item));
+  const reset = () => {
+    items.value = [];
+    batches.value = [];
+    spotify.value = null;
+    notice.value = null;
+  };
+
+  /** Where the file would land, to show the structure the library keeps. */
+  const destination = (item: ImportItem) => {
+    const p = item.proposal;
+    const ext = format.value.startsWith("mp3") ? "mp3" : format.value.startsWith("m4a") ? "m4a" : "flac";
+    const track = p.track ? `${p.track.padStart(2, "0")} ` : "";
+    return `${p.artist || "Unknown Artist"}/${p.album || "Unknown Album"}/${track}${p.title || "Untitled"}.${ext}`;
+  };
+
+  /** Does the library already have this artist / this album? (read-only use of real data) */
+  const library = {
+    hasArtist: (artist: string) => getLibrary().some((t) => norm(t.artist) === norm(artist) || norm(t.albumArtist) === norm(artist)),
+    hasAlbum: (artist: string, album: string) =>
+      getLibrary().some((t) => (norm(t.artist) === norm(artist) || norm(t.albumArtist) === norm(artist)) && norm(t.album) === norm(album)),
+  };
+
+  return { items, batches, library, format, notice, spotify, missing, ready, added, addLink, fetchMissing, addToLibrary, addAllReady, remove, reset, destination };
+}
+
+export type Imports = ReturnType<typeof createImports>;
