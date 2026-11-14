@@ -118,6 +118,8 @@ export interface ImportItem {
   /** Where it will go, relative to the library folder. */
   destination: string | null;
   addedPath: string | null;
+  /** none: not sent to Picard. waiting: open there. saved: tags are Picard's (read-only here). */
+  picard: "none" | "waiting" | "saved";
 }
 
 export type ImportEvent = { kind: "item"; value: ImportItem } | { kind: "removed"; value: number };
@@ -125,6 +127,8 @@ export type ImportEvent = { kind: "item"; value: ImportItem } | { kind: "removed
 export interface ToolStatus {
   ytDlp: string | null;
   ffmpeg: string | null;
+  /** Where MusicBrainz Picard is installed, if it is. */
+  picard: string | null;
 }
 
 export type TagsPatch = Partial<ImportProposal>;

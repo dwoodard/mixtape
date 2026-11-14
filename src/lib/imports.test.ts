@@ -23,6 +23,7 @@ function item(overrides: Partial<ImportItem> = {}): ImportItem {
     format: "mp3",
     destination: "Artist/Album/Song.mp3",
     addedPath: null,
+    picard: "none",
     ...overrides,
   };
 }
@@ -37,11 +38,12 @@ function setup(library: Track[] = [], apiOverrides: Partial<Api> = {}, storage =
   const added: Track[] = [];
   const removed: string[] = [];
   const api = {
-    importTools: vi.fn(async () => ({ ytDlp: "/y", ffmpeg: "/f" })),
+    importTools: vi.fn(async () => ({ ytDlp: "/y", ffmpeg: "/f", picard: "/p" })),
     importList: vi.fn(async () => []),
     importAddLink: vi.fn(async () => {}),
     importSetTags: vi.fn(async (_id: number, patch: object) => item({ proposal: { ...item().proposal, ...patch } })),
     importAdd: vi.fn(async () => makeTrack({ path: "/lib/Artist/Album/Song.mp3" })),
+    importOpenInPicard: vi.fn(async () => {}),
     importUndo: vi.fn(async () => "/lib/Artist/Album/Song.mp3"),
     importRemove: vi.fn(async () => {}),
     onImportEvent: vi.fn(async (cb: (e: ImportEvent) => void) => ((push = cb), () => {})),
@@ -158,6 +160,30 @@ describe("adding and undoing", () => {
     await imports.init();
     push(itemEvent(item({ id: 1 })));
     await imports.setTags(1, { album: "Served Live" });
+    expect(imports.items.value[0].proposal.album).toBe("Served Live");
+  });
+});
+
+describe("Picard", () => {
+  it("asks the backend to open the song in Picard", async () => {
+    const { imports, api } = setup();
+    await imports.openInPicard(4);
+    expect(api.importOpenInPicard).toHaveBeenCalledWith(4);
+    expect(imports.itemErrors.value[4]).toBeUndefined();
+  });
+
+  it("shows why Picard could not be opened, on that song", async () => {
+    const { imports } = setup([], { importOpenInPicard: vi.fn(async () => Promise.reject("MusicBrainz Picard isn't installed.")) });
+    await imports.openInPicard(4);
+    expect(imports.itemErrors.value[4]).toContain("isn't installed");
+  });
+
+  it("takes the tags Picard wrote when the backend reports them", async () => {
+    const { imports, push } = setup();
+    await imports.init();
+    push(itemEvent(item({ id: 1 })));
+    push(itemEvent(item({ id: 1, picard: "saved", confidence: 1, proposal: { ...item().proposal, album: "Served Live" } })));
+    expect(imports.items.value[0].picard).toBe("saved");
     expect(imports.items.value[0].proposal.album).toBe("Served Live");
   });
 });

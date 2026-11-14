@@ -11,7 +11,8 @@ const label = computed(() => {
     case "probing": return "Looking it up…";
     case "fetching": return `Fetching ${Math.round(props.item.progress * 100)}%`;
     case "converting": return `Converting to ${props.item.format}…`;
-    case "ready": return "Ready to review";
+    case "ready":
+      return props.item.picard === "waiting" ? "Waiting for Picard…" : props.item.picard === "saved" ? "Tagged in Picard" : "Ready to review";
     case "added": return "Added";
     case "failed": return "Failed";
   }

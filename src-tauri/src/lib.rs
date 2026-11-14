@@ -53,6 +53,14 @@ struct ImportsHandle(imports::Imports);
 struct LazyYtDlp;
 
 impl imports::Runner for LazyYtDlp {
+    fn picard(&self) -> Option<String> {
+        importer::find_picard().map(|p| p.display().to_string())
+    }
+    fn open_in_picard(&self, file: &std::path::Path) -> Result<(), String> {
+        let app = importer::find_picard()
+            .ok_or("MusicBrainz Picard isn't installed. In a terminal: brew install --cask musicbrainz-picard")?;
+        importer::open_in_picard(&app, file)
+    }
     fn probe(&self, url: &str) -> Result<String, String> {
         imports::YtDlp::locate()?.probe(url)
     }
@@ -282,13 +290,14 @@ async fn write_tags(
 struct ToolStatus {
     yt_dlp: Option<String>,
     ffmpeg: Option<String>,
+    picard: Option<String>,
 }
 
 /// Whether the tools the import pipeline needs are installed.
 #[tauri::command]
 fn import_tools() -> ToolStatus {
     let found = |n: &str| importer::find_tool(n).map(|p| p.display().to_string());
-    ToolStatus { yt_dlp: found("yt-dlp"), ffmpeg: found("ffmpeg") }
+    ToolStatus { yt_dlp: found("yt-dlp"), ffmpeg: found("ffmpeg"), picard: importer::find_picard().map(|p| p.display().to_string()) }
 }
 
 #[tauri::command]
@@ -308,6 +317,12 @@ fn import_set_tags(
     patch: imports::TagsPatch,
 ) -> Result<imports::ImportItem, String> {
     imports.0.set_tags(id, patch)
+}
+
+/// Opens the song in MusicBrainz Picard; its tags are read back once it is saved there.
+#[tauri::command]
+fn import_open_in_picard(imports: State<ImportsHandle>, id: u64) -> Result<(), String> {
+    imports.0.open_in_picard(id)
 }
 
 #[tauri::command]
@@ -331,12 +346,14 @@ async fn import_add(
     id: u64,
 ) -> Result<Track, String> {
     let root = library_root(&cache, &config)?;
-    let (staged, proposal) = imports.0.take_for_add(id)?;
+    let (staged, proposal, retag) = imports.0.take_for_add(id)?;
     let cache = cache.inner().clone();
     let manager = imports.0.clone();
     let root_for_job = root.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let added = importer::add_to_library(&staged, &proposal, &root_for_job)?;
+        // Follow the folders the library already has.
+        let library = cache.load(&root_for_job).map(|c| c.tracks).unwrap_or_default();
+        let added = importer::add_to_library(&staged, &proposal, &root_for_job, &library, retag)?;
         if let Ok(meta) = std::fs::metadata(&added.path) {
             let modified_ms = meta
                 .modified()
@@ -677,9 +694,18 @@ pub fn run() {
             app.manage(CleanupBusy::default());
             {
                 let emit_handle = app.handle().clone();
+                let library_handle = app.handle().clone();
                 app.manage(ImportsHandle(imports::Imports::new(
                     app.path().app_data_dir()?.join("imports"),
                     Box::new(LazyYtDlp),
+                    Box::new(move || {
+                        // Read when needed, so it always reflects the library as it is now.
+                        let cache = library_handle.state::<CacheDir>();
+                        let config = library_handle.state::<Config>();
+                        let root = cache.last_root().or_else(|| config.music_folder.clone());
+                        let tracks = root.as_ref().and_then(|r| cache.load(r)).map(|c| c.tracks).unwrap_or_default();
+                        imports::LibraryView { root, tracks }
+                    }),
                     Box::new(move |event| {
                         let _ = emit_handle.emit("import-event", event);
                     }),
@@ -723,6 +749,7 @@ pub fn run() {
             import_list,
             import_add_link,
             import_set_tags,
+            import_open_in_picard,
             import_add,
             import_undo,
             import_remove,

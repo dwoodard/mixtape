@@ -27,7 +27,10 @@ watch(
 );
 
 const owned = computed(() => (props.item ? findOwned(store.library.value, props.item.proposal.title, props.item.proposal.artist) : null));
-const editable = computed(() => props.item?.stage === "ready");
+// Tags Picard wrote are Picard's: they are changed there, not here.
+const editable = computed(() => props.item?.stage === "ready" && props.item.picard !== "saved");
+const picardInstalled = computed(() => imports.tools.value?.picard != null);
+const libraryName = computed(() => (store.folder.value ?? "").split("/").filter(Boolean).pop() ?? "");
 
 const source = (item: ImportItem, key: ImportField) => {
   if (!item.proposal[key].trim()) return "not found yet";
@@ -55,6 +58,25 @@ const alternatives = (item: ImportItem, key: ImportField) => (item.alternatives[
       <p v-if="item.videoTitle" class="muted vt" :title="item.url">Video: {{ item.videoTitle }}<template v-if="item.channel"> · {{ item.channel }}</template></p>
       <ul v-if="item.notes.length" class="notes"><li v-for="n in item.notes" :key="n">{{ n }}</li></ul>
 
+      <section v-if="item.stage === 'ready'" class="picard" aria-label="MusicBrainz Picard">
+        <template v-if="item.picard === 'waiting'">
+          <p class="wait" role="status">Waiting for you to save in Picard…</p>
+          <p class="muted">Look the song up in Picard and press Save. The tags here update by themselves.</p>
+        </template>
+        <template v-else-if="item.picard === 'saved'">
+          <p class="done" role="status">✓ Tagged by MusicBrainz Picard</p>
+          <p class="muted">These tags are Picard's, so they're read-only here and are added to your library exactly as Picard saved them.</p>
+          <button class="tiny" @click="imports.openInPicard(item.id)">Open in Picard again</button>
+        </template>
+        <template v-else-if="picardInstalled">
+          <button @click="imports.openInPicard(item.id)">Tag in Picard…</button>
+          <p class="muted">Opens this song in MusicBrainz Picard for a proper lookup. Save it there and come back.</p>
+        </template>
+        <p v-else class="muted">
+          For accurate album and track tags, install MusicBrainz Picard: <code>brew install --cask musicbrainz-picard</code>
+        </p>
+      </section>
+
       <div v-for="f in fields" :key="f.key" class="f">
         <label>
           {{ f.label }}
@@ -75,7 +97,11 @@ const alternatives = (item: ImportItem, key: ImportField) => (item.alternatives[
       </div>
 
       <p v-if="owned" class="dup">Already in your library:<br /><code>{{ fileName(owned.path) }}</code></p>
-      <p v-if="item.destination" class="muted">Will be added as<br /><code>{{ item.destination }}</code></p>
+      <p v-if="item.stage === 'added' && item.addedPath" class="added">Added to<br /><code>{{ item.addedPath }}</code></p>
+      <p v-else-if="item.destination" class="muted">
+        Will be added to<br /><code>{{ libraryName ? `${libraryName}/` : "" }}{{ item.destination }}</code>
+        <template v-if="!libraryName"><br />(Open or import a library folder first.)</template>
+      </p>
       <p v-if="imports.itemErrors.value[item.id]" class="err" role="alert">{{ imports.itemErrors.value[item.id] }}</p>
 
       <div class="row">
@@ -105,6 +131,12 @@ const alternatives = (item: ImportItem, key: ImportField) => (item.alternatives[
 .alts { display: flex; gap: 4px; flex-wrap: wrap; }
 .chip { padding: 0 8px; font-size: 10px; border-radius: 999px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dup { color: #ffb4b4; font-size: 12px; margin: 0; }
+.picard { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: var(--panel-3); border: 1px solid var(--line); border-radius: 8px; }
+.picard .muted { margin: 0; }
+.wait { margin: 0; color: #f0c674; font-size: 12px; }
+.done { margin: 0; color: #8fd7a0; font-size: 12px; }
+.added { margin: 0; color: #6fb1f0; font-size: 12px; }
+.tiny { padding: 0 8px; font-size: 11px; align-self: flex-start; }
 .err { color: #ffb4b4; font-size: 12px; margin: 0; }
 code { font-size: 11px; user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
 .row { display: flex; gap: 6px; }

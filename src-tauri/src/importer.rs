@@ -3,12 +3,14 @@
 //! belongs in the library, and adding it safely. The pure parts live here so
 //! they can be tested without the network or a running yt-dlp.
 
+use crate::library::CachedTrack;
 use crate::tags::{write_tags, TagEdit};
 use crate::track::{read_track, Track};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 // ---------------------------------------------------------------- links
 
@@ -306,6 +308,89 @@ pub fn destination(root: &Path, p: &Proposal, ext: &str) -> PathBuf {
     root.join(artist).join(album).join(format!("{number}{title}.{ext}"))
 }
 
+/// A name reduced to its letters and digits, so `AC/DC`, `AC_DC` and `ac dc`
+/// all compare equal. Used to recognize folders that already exist.
+fn fold(name: &str) -> String {
+    name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+fn artist_key(album_artist: &str, artist: &str) -> String {
+    fold(if album_artist.trim().is_empty() { artist } else { album_artist })
+}
+
+/// The most common value in `items` (first seen wins a tie).
+fn most_common<T: PartialEq + Clone>(items: Vec<T>) -> Option<T> {
+    let mut counted: Vec<(T, usize)> = Vec::new();
+    for item in items {
+        match counted.iter_mut().find(|(v, _)| *v == item) {
+            Some((_, n)) => *n += 1,
+            None => counted.push((item, 1)),
+        }
+    }
+    counted.into_iter().fold(None, |best: Option<(T, usize)>, c| match best {
+        Some(b) if b.1 >= c.1 => Some(b),
+        _ => Some(c),
+    }).map(|(v, _)| v)
+}
+
+/// Where a song belongs in the library. Follows what is already there: if the
+/// library has songs by this artist, the new one goes in the same artist
+/// folder (however it is spelled on disk, `AC_DC` for `AC/DC`), and if it has
+/// this album, in the same album folder. Only an artist or album the library
+/// has never seen gets a new folder, named from the tags.
+pub fn place(root: &Path, p: &Proposal, ext: &str, library: &[CachedTrack]) -> PathBuf {
+    let default = destination(root, p, ext);
+    let file_name = default.file_name().map(PathBuf::from).unwrap_or_default();
+    let key = artist_key(&p.album_artist, &p.artist);
+    if key.is_empty() {
+        return default;
+    }
+
+    // Songs of this artist in the library, as path pieces under the root.
+    let theirs: Vec<Vec<String>> = library
+        .iter()
+        .filter(|c| artist_key(&c.track.album_artist, &c.track.artist) == key)
+        .filter_map(|c| Path::new(&c.track.path).strip_prefix(root).ok().map(|r| r.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>()))
+        // Skip hidden folders such as the duplicates holding folder.
+        .filter(|parts| parts.len() >= 2 && !parts[0].starts_with('.'))
+        .collect();
+    let Some(artist_folder) = most_common(theirs.iter().map(|parts| parts[0].clone()).collect()) else {
+        return default;
+    };
+    let artist_dir = root.join(&artist_folder);
+
+    // An album folder the artist already has: second path piece when the song sits one level deeper.
+    let album_key = fold(&p.album);
+    let album_folder = if album_key.is_empty() {
+        None
+    } else {
+        most_common(
+            theirs
+                .iter()
+                .filter(|parts| parts.len() >= 3 && parts[0] == artist_folder && fold(&parts[1]) == album_key)
+                .map(|parts| parts[1].clone())
+                .collect(),
+        )
+    };
+    let album_dir = album_folder.unwrap_or_else(|| {
+        Some(sanitize_component(&p.album)).filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown Album".into())
+    });
+    artist_dir.join(album_dir).join(file_name)
+}
+
+/// A proposal read back from a tagged file (what Picard wrote).
+pub fn proposal_from_track(t: &Track) -> Proposal {
+    Proposal {
+        title: t.title.clone(),
+        artist: t.artist.clone(),
+        album: t.album.clone(),
+        album_artist: t.album_artist.clone(),
+        year: t.year.map(|y| y.to_string()).unwrap_or_default(),
+        track: t.track_number.map(|n| n.to_string()).unwrap_or_default(),
+        genre: t.genre.clone(),
+    }
+}
+
 /// The tag edit that writes every field of a proposal (empty fields clear).
 pub fn to_edit(p: &Proposal) -> TagEdit {
     TagEdit {
@@ -341,16 +426,18 @@ fn free_name(target: PathBuf) -> PathBuf {
         .expect("an unused name exists")
 }
 
-/// Puts a staged file into the library: tags are written to a working copy
-/// (the staged file stays as it was, so the add can be undone), the copy is
-/// transferred to the library under a temporary name and checked, then moved
-/// into place. Never overwrites an existing file.
-pub fn add_to_library(staged: &Path, proposal: &Proposal, root: &Path) -> Result<Added, String> {
+/// Puts a staged file into the library at the place [`place`] chooses. Tags
+/// are written to a working copy (the staged file stays as it was, so the add
+/// can be undone), unless `retag` is false because another program such as
+/// Picard already wrote them. The copy is transferred to the library under a
+/// temporary name and checked, then moved into place. Never overwrites an
+/// existing file.
+pub fn add_to_library(staged: &Path, proposal: &Proposal, root: &Path, library: &[CachedTrack], retag: bool) -> Result<Added, String> {
     if !root.is_dir() {
         return Err(format!("{} is not available. Is the drive mounted?", root.display()));
     }
     let ext = staged.extension().and_then(|e| e.to_str()).ok_or("The fetched file has no extension.")?;
-    let dest = free_name(destination(root, proposal, ext));
+    let dest = free_name(place(root, proposal, ext, library));
     let dir = dest.parent().ok_or("No destination folder.")?.to_path_buf();
 
     // 1. Tag a local working copy next to the staged file.
@@ -359,9 +446,11 @@ pub fn add_to_library(staged: &Path, proposal: &Proposal, root: &Path) -> Result
     let cleanup = |p: &Path| {
         let _ = std::fs::remove_file(p);
     };
-    if let Err(e) = write_tags(&work, &to_edit(proposal)) {
-        cleanup(&work);
-        return Err(e);
+    if retag {
+        if let Err(e) = write_tags(&work, &to_edit(proposal)) {
+            cleanup(&work);
+            return Err(e);
+        }
     }
 
     // 2. Transfer to the library under a temporary name, verify, then rename.
@@ -439,6 +528,33 @@ pub fn parse_progress(line: &str) -> Option<Progress> {
         "FILE" => Some(Progress::File(line.trim().strip_prefix("FILE|")?.to_string())),
         _ => None,
     }
+}
+
+/// MusicBrainz Picard's bundle id, used to find the app wherever it is installed.
+const PICARD_BUNDLE_ID: &str = "org.musicbrainz.Picard";
+
+/// Where MusicBrainz Picard is installed, if it is.
+pub fn find_picard() -> Option<PathBuf> {
+    let found = Command::new("mdfind")
+        .arg(format!("kMDItemCFBundleIdentifier == '{PICARD_BUNDLE_ID}'"))
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|text| text.lines().next().map(PathBuf::from));
+    found
+        .or_else(|| Some(PathBuf::from("/Applications/MusicBrainz Picard.app")))
+        .filter(|p| p.exists())
+}
+
+/// Opens `file` in Picard (starting it if needed).
+pub fn open_in_picard(app: &Path, file: &Path) -> Result<(), String> {
+    let status = Command::new("open")
+        .arg("-a")
+        .arg(app)
+        .arg(file)
+        .status()
+        .map_err(|e| format!("Couldn't start Picard: {e}"))?;
+    if status.success() { Ok(()) } else { Err("Picard didn't open the file.".into()) }
 }
 
 /// Finds a command-line tool even when the app was started from Finder and
@@ -716,7 +832,7 @@ mod tests {
         let staged = staged(work.path());
         let original = std::fs::read(&staged).unwrap();
 
-        let added = add_to_library(&staged, &proposal(), lib.path()).unwrap();
+        let added = add_to_library(&staged, &proposal(), lib.path(), &[], true).unwrap();
 
         assert_eq!(added.path, lib.path().join("The Dead South/Served Live/04 People Are Strange.mp3"));
         assert_eq!((added.track.title.as_str(), added.track.artist.as_str(), added.track.album.as_str()), ("People Are Strange", "The Dead South", "Served Live"));
@@ -747,7 +863,7 @@ mod tests {
         let staged = staged(work.path());
         let _ = std::process::Command::new("xattr").args(["-w", "com.apple.quarantine", "0081;00000000;Test;"]).arg(&staged).status();
 
-        let added = add_to_library(&staged, &proposal(), &root).expect("add into the real folder");
+        let added = add_to_library(&staged, &proposal(), &root, &[], true).expect("add into the real folder");
         assert!(added.path.exists());
         assert_eq!(read_track(&added.path).unwrap().title, "People Are Strange");
 
@@ -757,14 +873,159 @@ mod tests {
         let _ = std::fs::remove_dir(&root);
     }
 
+    // ---- placement follows the library
+
+    fn lib_track(path: &str, artist: &str, album: &str, album_artist: &str) -> CachedTrack {
+        CachedTrack {
+            modified_ms: 1,
+            size: 1,
+            track: Track {
+                path: path.into(),
+                title: "t".into(),
+                artist: artist.into(),
+                album: album.into(),
+                album_artist: album_artist.into(),
+                track_number: None,
+                disc_number: None,
+                year: None,
+                genre: String::new(),
+                duration_ms: 1000,
+            },
+        }
+    }
+
+    fn song(artist: &str, album: &str) -> Proposal {
+        Proposal { title: "New Song".into(), artist: artist.into(), album: album.into(), track: "3".into(), ..Default::default() }
+    }
+
+    const ROOT: &str = "/Volumes/homes/dwoodard/music/Music";
+
+    fn at(rel: &str) -> String {
+        format!("{ROOT}/{rel}")
+    }
+
+    #[test]
+    fn an_artist_the_library_spells_differently_keeps_its_existing_folder() {
+        let library = [lib_track(&at("AC_DC/Back in Black/01 Hells Bells.mp3"), "AC/DC", "Back in Black", "")];
+        let placed = place(Path::new(ROOT), &song("AC/DC", "Highway to Hell"), "mp3", &library);
+        assert_eq!(placed, PathBuf::from(at("AC_DC/Highway to Hell/03 New Song.mp3")));
+    }
+
+    #[test]
+    fn an_album_the_library_already_has_keeps_its_existing_folder_and_spelling() {
+        let library = [lib_track(&at("No Doubt/Tragic Kingdom/01 Spiderwebs.mp3"), "No Doubt", "Tragic Kingdom", "")];
+        let placed = place(Path::new(ROOT), &song("no doubt", "TRAGIC KINGDOM"), "mp3", &library);
+        assert_eq!(placed, PathBuf::from(at("No Doubt/Tragic Kingdom/03 New Song.mp3")));
+        // A punctuation-only difference is still the same album.
+        let placed = place(Path::new(ROOT), &song("No Doubt", "Tragic  Kingdom!"), "mp3", &library);
+        assert_eq!(placed, PathBuf::from(at("No Doubt/Tragic Kingdom/03 New Song.mp3")));
+    }
+
+    #[test]
+    fn a_new_artist_or_album_gets_folders_named_from_the_tags() {
+        let library = [lib_track(&at("AJR/Neotheater/01 x.mp3"), "AJR", "Neotheater", "")];
+        assert_eq!(place(Path::new(ROOT), &song("Eminem", "The Eminem Show"), "mp3", &library), PathBuf::from(at("Eminem/The Eminem Show/03 New Song.mp3")));
+        // Known artist, album never seen: under the artist's folder.
+        assert_eq!(place(Path::new(ROOT), &song("AJR", "Living Room"), "mp3", &library), PathBuf::from(at("AJR/Living Room/03 New Song.mp3")));
+        // No album at all.
+        assert_eq!(place(Path::new(ROOT), &song("AJR", ""), "mp3", &library), PathBuf::from(at("AJR/Unknown Album/03 New Song.mp3")));
+    }
+
+    #[test]
+    fn no_artist_means_the_default_unknown_folders_even_if_the_library_has_unknown_songs() {
+        let library = [lib_track(&at("Unknown Artist/Unknown Album/a.wav"), "", "", "")];
+        assert_eq!(place(Path::new(ROOT), &song("", ""), "mp3", &library), PathBuf::from(at("Unknown Artist/Unknown Album/03 New Song.mp3")));
+    }
+
+    #[test]
+    fn when_an_artist_is_split_across_folders_the_most_used_one_wins() {
+        let library = [
+            lib_track(&at("Eminem/Show/1.mp3"), "Eminem", "Show", ""),
+            lib_track(&at("Eminem/Show/2.mp3"), "Eminem", "Show", ""),
+            lib_track(&at("Slim Shady/Other/3.mp3"), "Eminem", "Other", ""),
+        ];
+        assert_eq!(place(Path::new(ROOT), &song("Eminem", "New"), "mp3", &library), PathBuf::from(at("Eminem/New/03 New Song.mp3")));
+    }
+
+    #[test]
+    fn songs_outside_the_library_folder_and_in_hidden_folders_are_ignored() {
+        let library = [
+            lib_track("/somewhere/else/Eminem/Show/1.mp3", "Eminem", "Show", ""),
+            lib_track(&at(".mixtape-duplicates/2026/Eminem/Show/2.mp3"), "Eminem", "Show", ""),
+        ];
+        assert_eq!(place(Path::new(ROOT), &song("Eminem", "Show"), "mp3", &library), PathBuf::from(at("Eminem/Show/03 New Song.mp3")));
+    }
+
+    #[test]
+    fn the_album_artist_decides_the_artist_folder() {
+        let library = [lib_track(&at("Various Artists/Hits/1.mp3"), "Guest One", "Hits", "Various Artists")];
+        let p = Proposal { album_artist: "Various Artists".into(), ..song("Guest Two", "Hits") };
+        assert_eq!(place(Path::new(ROOT), &p, "mp3", &library), PathBuf::from(at("Various Artists/Hits/03 New Song.mp3")));
+    }
+
+    #[test]
+    fn a_stray_song_directly_in_an_artist_folder_marks_the_artist_but_not_an_album() {
+        let library = [lib_track(&at("No Doubt/10 Don't Speak.mp3"), "No Doubt", "Tragic Kingdom", "")];
+        // The stray file is not an album folder, so the album gets its own folder inside the artist's.
+        assert_eq!(place(Path::new(ROOT), &song("No Doubt", "Tragic Kingdom"), "mp3", &library), PathBuf::from(at("No Doubt/Tragic Kingdom/03 New Song.mp3")));
+    }
+
+    #[test]
+    fn folding_ignores_case_punctuation_and_spacing() {
+        assert_eq!(fold("AC/DC"), fold("AC_DC"));
+        assert_eq!(fold("Guns N' Roses"), fold("guns n roses"));
+        assert_eq!(fold("Björk"), fold("björk"));
+        assert_ne!(fold("AC/DC"), fold("ABBA"));
+        assert_eq!(fold("!!!"), "");
+    }
+
+    #[test]
+    fn adding_uses_the_library_s_existing_folders() {
+        let work = tempfile::tempdir().unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        let existing = lib.path().join("The_Dead_South/Served Live/01 Old.mp3");
+        let library = [lib_track(existing.to_str().unwrap(), "The Dead South", "Served Live", "")];
+
+        let added = add_to_library(&staged(work.path()), &proposal(), lib.path(), &library, true).unwrap();
+
+        assert_eq!(added.path, lib.path().join("The_Dead_South/Served Live/04 People Are Strange.mp3"));
+        assert!(!lib.path().join("The Dead South").exists(), "no look-alike folder is created");
+    }
+
+    #[test]
+    fn without_retagging_the_file_goes_in_byte_for_byte_and_keeps_its_own_tags() {
+        let work = tempfile::tempdir().unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        let staged = staged(work.path());
+        // Tags another program (Picard) wrote: different from what the proposal says.
+        let by_picard = Proposal { title: "People Are Strange".into(), artist: "The Dead South".into(), album: "From Picard".into(), year: "2019".into(), track: "2".into(), genre: "Bluegrass".into(), ..Default::default() };
+        write_tags(&staged, &to_edit(&by_picard)).unwrap();
+        let before = std::fs::read(&staged).unwrap();
+        let stale = Proposal { album: "Stale Guess".into(), ..by_picard.clone() };
+
+        let added = add_to_library(&staged, &stale, lib.path(), &[], false).unwrap();
+
+        assert_eq!(std::fs::read(&added.path).unwrap(), before, "not rewritten");
+        assert_eq!(added.track.album, "From Picard");
+    }
+
+    #[test]
+    fn a_proposal_can_be_read_back_from_a_tagged_track() {
+        let t = Track { path: "/x.mp3".into(), title: "T".into(), artist: "A".into(), album: "B".into(), album_artist: "AA".into(), track_number: Some(3), disc_number: None, year: Some(1999), genre: "G".into(), duration_ms: 1 };
+        let p = proposal_from_track(&t);
+        assert_eq!((p.title.as_str(), p.artist.as_str(), p.album.as_str(), p.album_artist.as_str(), p.year.as_str(), p.track.as_str(), p.genre.as_str()), ("T", "A", "B", "AA", "1999", "3", "G"));
+        let none = proposal_from_track(&Track { year: None, track_number: None, ..t });
+        assert_eq!((none.year.as_str(), none.track.as_str()), ("", ""));
+    }
+
     #[test]
     fn never_overwrites_an_existing_file() {
         let work = tempfile::tempdir().unwrap();
         let lib = tempfile::tempdir().unwrap();
         let staged = staged(work.path());
 
-        let first = add_to_library(&staged, &proposal(), lib.path()).unwrap();
-        let second = add_to_library(&staged, &proposal(), lib.path()).unwrap();
+        let first = add_to_library(&staged, &proposal(), lib.path(), &[], true).unwrap();
+        let second = add_to_library(&staged, &proposal(), lib.path(), &[], true).unwrap();
 
         assert_ne!(first.path, second.path);
         assert!(second.path.to_string_lossy().ends_with("04 People Are Strange (2).mp3"));
@@ -775,7 +1036,7 @@ mod tests {
     fn an_unavailable_library_folder_is_reported_and_nothing_is_created() {
         let work = tempfile::tempdir().unwrap();
         let staged = staged(work.path());
-        let err = add_to_library(&staged, &proposal(), Path::new("/Volumes/not-mounted/Music")).unwrap_err();
+        let err = add_to_library(&staged, &proposal(), Path::new("/Volumes/not-mounted/Music"), &[], true).unwrap_err();
         assert!(err.contains("not available"));
     }
 
@@ -786,7 +1047,7 @@ mod tests {
         let staged = staged(work.path());
         let bad = Proposal { year: "nineteen".into(), ..proposal() };
 
-        assert!(add_to_library(&staged, &bad, lib.path()).is_err());
+        assert!(add_to_library(&staged, &bad, lib.path(), &[], true).is_err());
 
         assert!(walk(lib.path()).iter().all(|p| p.is_dir() && p == lib.path() || p.extension().is_none()));
         assert!(!lib.path().join("The Dead South/Served Live").join("04 People Are Strange.mp3").exists());
@@ -797,7 +1058,7 @@ mod tests {
     fn undo_removes_the_added_file_and_the_folders_it_emptied_but_not_the_library() {
         let work = tempfile::tempdir().unwrap();
         let lib = tempfile::tempdir().unwrap();
-        let added = add_to_library(&staged(work.path()), &proposal(), lib.path()).unwrap();
+        let added = add_to_library(&staged(work.path()), &proposal(), lib.path(), &[], true).unwrap();
 
         remove_added(lib.path(), &added.path, added.size).unwrap();
 
@@ -810,9 +1071,9 @@ mod tests {
     fn undo_keeps_folders_that_still_have_other_songs() {
         let work = tempfile::tempdir().unwrap();
         let lib = tempfile::tempdir().unwrap();
-        let a = add_to_library(&staged(work.path()), &proposal(), lib.path()).unwrap();
+        let a = add_to_library(&staged(work.path()), &proposal(), lib.path(), &[], true).unwrap();
         let other = Proposal { title: "Another".into(), track: "5".into(), ..proposal() };
-        let b = add_to_library(&staged(work.path()), &other, lib.path()).unwrap();
+        let b = add_to_library(&staged(work.path()), &other, lib.path(), &[], true).unwrap();
 
         remove_added(lib.path(), &a.path, a.size).unwrap();
 
@@ -823,7 +1084,7 @@ mod tests {
     fn undo_leaves_a_file_that_changed_and_refuses_paths_outside_the_library() {
         let work = tempfile::tempdir().unwrap();
         let lib = tempfile::tempdir().unwrap();
-        let added = add_to_library(&staged(work.path()), &proposal(), lib.path()).unwrap();
+        let added = add_to_library(&staged(work.path()), &proposal(), lib.path(), &[], true).unwrap();
 
         assert!(remove_added(lib.path(), &added.path, added.size + 1).unwrap_err().contains("changed"));
         assert!(added.path.exists());

@@ -122,6 +122,16 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     }
   }
 
+  /** Opens the song in MusicBrainz Picard; its tags come back here once it is saved there. */
+  async function openInPicard(id: number) {
+    setItemError(id, null);
+    try {
+      await api.importOpenInPicard(id);
+    } catch (e) {
+      setItemError(id, String(e));
+    }
+  }
+
   async function undo(id: number) {
     setItemError(id, null);
     try {
@@ -164,6 +174,7 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     addLink,
     setTags,
     add,
+    openInPicard,
     undo,
     remove,
     addMany,

@@ -4,8 +4,12 @@
 //! tested without a network.
 
 use crate::importer::{
-    classify_link, destination, extract_link, find_tool, parse_meta, parse_playlist, parse_progress, suggest, LinkKind, Progress, Proposal,
+    classify_link, destination, extract_link, find_picard, find_tool, open_in_picard, parse_meta, parse_playlist, parse_progress, place, proposal_from_track,
+    suggest, LinkKind, Progress, Proposal,
 };
+use crate::library::CachedTrack;
+use crate::track::{is_audio_file, read_track};
+use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, BufReader};
@@ -31,6 +35,18 @@ pub enum Stage {
     Failed,
 }
 
+/// Whether the song has been handed to MusicBrainz Picard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PicardState {
+    /// Not sent to Picard: tags come from YouTube and the user.
+    None,
+    /// Open in Picard; waiting for it to be saved there.
+    Waiting,
+    /// Saved in Picard: the tags below are what Picard wrote and are not rewritten.
+    Saved,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportItem {
@@ -52,6 +68,7 @@ pub struct ImportItem {
     /// Where it will go, relative to the library folder.
     pub destination: Option<String>,
     pub added_path: Option<String>,
+    pub picard: PicardState,
     #[serde(skip)]
     staged: Option<PathBuf>,
     #[serde(skip)]
@@ -98,6 +115,10 @@ pub trait Runner: Send + Sync {
     fn probe(&self, url: &str) -> Result<String, String>;
     /// yt-dlp's flat JSON listing of a playlist.
     fn playlist(&self, url: &str) -> Result<String, String>;
+    /// Where MusicBrainz Picard is installed, if it is.
+    fn picard(&self) -> Option<String>;
+    /// Opens a file in Picard.
+    fn open_in_picard(&self, file: &Path) -> Result<(), String>;
     /// Downloads and converts, passing each output line to `line`.
     fn fetch(&self, url: &str, format: &str, dir: &Path, line: &mut dyn FnMut(&str), kill: &KillSwitch) -> Result<(), String>;
 }
@@ -147,6 +168,15 @@ impl YtDlp {
 }
 
 impl Runner for YtDlp {
+    fn picard(&self) -> Option<String> {
+        find_picard().map(|p| p.display().to_string())
+    }
+
+    fn open_in_picard(&self, file: &Path) -> Result<(), String> {
+        let app = find_picard().ok_or("MusicBrainz Picard isn't installed. In a terminal: brew install --cask musicbrainz-picard")?;
+        open_in_picard(&app, file)
+    }
+
     fn probe(&self, url: &str) -> Result<String, String> {
         self.capture(&["--skip-download", "--no-warnings", "--no-playlist", "-j", "--", url])
     }
@@ -219,6 +249,15 @@ impl Runner for YtDlp {
 
 type Emit = Box<dyn Fn(&ImportEvent) + Send + Sync>;
 
+/// What the library looks like right now, so songs are placed to match it.
+#[derive(Default)]
+pub struct LibraryView {
+    pub root: Option<PathBuf>,
+    pub tracks: Vec<CachedTrack>,
+}
+
+type LibraryProvider = Box<dyn Fn() -> LibraryView + Send + Sync>;
+
 struct State {
     items: Vec<ImportItem>,
     switches: HashMap<u64, Arc<KillSwitch>>,
@@ -232,7 +271,10 @@ struct Inner {
     state: Mutex<State>,
     staging: PathBuf,
     runner: Box<dyn Runner>,
+    library: LibraryProvider,
     emit: Emit,
+    /// How often the staging folder is checked while a song is open in Picard.
+    poll: Duration,
     slots: (Mutex<usize>, Condvar),
 }
 
@@ -249,7 +291,11 @@ fn extension_of(format: &str) -> &str {
 impl Imports {
     /// Starts empty. Anything left in `staging` from an earlier run is
     /// cleared, because items live only while the app is open.
-    pub fn new(staging: PathBuf, runner: Box<dyn Runner>, emit: Emit) -> Imports {
+    pub fn new(staging: PathBuf, runner: Box<dyn Runner>, library: LibraryProvider, emit: Emit) -> Imports {
+        Imports::with_poll(staging, runner, library, emit, Duration::from_secs(1))
+    }
+
+    pub fn with_poll(staging: PathBuf, runner: Box<dyn Runner>, library: LibraryProvider, emit: Emit, poll: Duration) -> Imports {
         let _ = std::fs::remove_dir_all(&staging);
         let _ = std::fs::create_dir_all(&staging);
         Imports {
@@ -257,7 +303,9 @@ impl Imports {
                 state: Mutex::new(State { items: Vec::new(), switches: HashMap::new(), cancelled: HashSet::new(), adding: HashSet::new(), next_id: 1 }),
                 staging,
                 runner,
+                library,
                 emit,
+                poll,
                 slots: (Mutex::new(0), Condvar::new()),
             }),
         }
@@ -265,6 +313,18 @@ impl Imports {
 
     pub fn list(&self) -> Vec<ImportItem> {
         self.inner.state.lock().unwrap().items.clone()
+    }
+
+    /// Where this song would go, relative to the library folder, following
+    /// the folders the library already has.
+    fn preview(&self, proposal: &Proposal, ext: &str) -> String {
+        let view = (self.inner.library)();
+        match view.root {
+            Some(root) => place(&root, proposal, ext, &view.tracks).strip_prefix(&root).map(|p| p.to_path_buf()).unwrap_or_default(),
+            None => destination(Path::new(""), proposal, ext),
+        }
+        .to_string_lossy()
+        .into_owned()
     }
 
     fn emit_item(&self, item: &ImportItem) {
@@ -307,6 +367,7 @@ impl Imports {
             format: extension_of(format).to_string(),
             destination: None,
             added_path: None,
+            picard: PicardState::None,
             staged: None,
             added_size: 0,
         };
@@ -402,11 +463,12 @@ impl Imports {
             Err(e) => return self.fail(id, e),
         };
         let suggestion = suggest(&meta, Some(hint));
+        let preview = self.preview(&suggestion.proposal, &format);
         self.update(id, |i| {
             i.video_title = if hint.is_empty() { meta.title.clone() } else { hint.to_string() };
             i.channel = meta.channel.clone();
             i.duration_secs = meta.duration_secs;
-            i.destination = Some(destination(Path::new(""), &suggestion.proposal, &i.format).to_string_lossy().into_owned());
+            i.destination = Some(preview);
             i.proposal = suggestion.proposal.clone();
             i.sources = suggestion.sources.clone();
             i.alternatives = suggestion.alternatives.clone();
@@ -461,32 +523,133 @@ impl Imports {
         }
     }
 
-    /// Applies the user's tag edits. Edited fields are marked as such.
+    /// Applies the user's tag edits. Edited fields are marked as such. Once
+    /// Picard has saved the song its tags are Picard's and cannot be edited here.
     pub fn set_tags(&self, id: u64, patch: TagsPatch) -> Result<ImportItem, String> {
-        self.update(id, |i| {
-            let mut set = |field: &str, slot: &mut String, value: Option<String>| {
-                if let Some(v) = value {
-                    if *slot != v {
-                        *slot = v;
-                        i.sources.insert(field.to_string(), "edited by you".to_string());
-                    }
+        let (mut proposal, ext, picard) = {
+            let state = self.inner.state.lock().unwrap();
+            let item = state.items.iter().find(|i| i.id == id).ok_or("That item is gone.")?;
+            (item.proposal.clone(), item.format.clone(), item.picard)
+        };
+        if picard == PicardState::Saved {
+            return Err("These tags come from Picard. To change them, edit and save in Picard.".into());
+        }
+        let mut changed: Vec<&str> = Vec::new();
+        let mut set = |field: &'static str, slot: &mut String, value: Option<String>| {
+            if let Some(v) = value {
+                if *slot != v {
+                    *slot = v;
+                    changed.push(field);
                 }
-            };
-            set("title", &mut i.proposal.title, patch.title);
-            set("artist", &mut i.proposal.artist, patch.artist);
-            set("album", &mut i.proposal.album, patch.album);
-            set("albumArtist", &mut i.proposal.album_artist, patch.album_artist);
-            set("year", &mut i.proposal.year, patch.year);
-            set("track", &mut i.proposal.track, patch.track);
-            set("genre", &mut i.proposal.genre, patch.genre);
-            i.destination = Some(destination(Path::new(""), &i.proposal, &i.format).to_string_lossy().into_owned());
+            }
+        };
+        set("title", &mut proposal.title, patch.title);
+        set("artist", &mut proposal.artist, patch.artist);
+        set("album", &mut proposal.album, patch.album);
+        set("albumArtist", &mut proposal.album_artist, patch.album_artist);
+        set("year", &mut proposal.year, patch.year);
+        set("track", &mut proposal.track, patch.track);
+        set("genre", &mut proposal.genre, patch.genre);
+        let preview = self.preview(&proposal, &ext);
+        self.update(id, |i| {
+            i.proposal = proposal;
+            for field in changed {
+                i.sources.insert(field.to_string(), "edited by you".to_string());
+            }
+            i.destination = Some(preview);
             i.clone()
         })
         .ok_or_else(|| "That item is gone.".to_string())
     }
 
+    /// Hands the staged song to MusicBrainz Picard and starts watching for it
+    /// to be saved there. Picard may rename the file when it saves, so the
+    /// song's whole staging folder is watched, not one file name.
+    pub fn open_in_picard(&self, id: u64) -> Result<(), String> {
+        let (dir, staged) = {
+            let state = self.inner.state.lock().unwrap();
+            let item = state.items.iter().find(|i| i.id == id).ok_or("That item is gone.")?;
+            if item.stage != Stage::Ready {
+                return Err("The song isn't ready yet.".into());
+            }
+            (self.inner.staging.join(id.to_string()), item.staged.clone().ok_or("The song has no file yet.")?)
+        };
+        let baseline = newest_audio(&dir).ok_or("The fetched file is missing.")?;
+        self.inner.runner.open_in_picard(&staged)?;
+        self.update(id, |i| i.picard = PicardState::Waiting);
+
+        let this = self.clone();
+        std::thread::spawn(move || this.watch_picard(id, dir, baseline));
+        Ok(())
+    }
+
+    /// Polls the song's staging folder until Picard has saved (changed or
+    /// renamed the file) or taken it away, the song is removed, or half an
+    /// hour passes.
+    fn watch_picard(&self, id: u64, dir: PathBuf, baseline: Fingerprint) {
+        let polls = (Duration::from_secs(30 * 60).as_millis() / self.inner.poll.as_millis().max(1)) as u64;
+        let mut missing = 0;
+        for _ in 0..polls {
+            std::thread::sleep(self.inner.poll);
+            let waiting = self.inner.state.lock().unwrap().items.iter().find(|i| i.id == id).map(|i| i.picard);
+            if waiting != Some(PicardState::Waiting) {
+                return;
+            }
+            match newest_audio(&dir) {
+                None => {
+                    // Allow a moment for a rename to finish before deciding it was moved away.
+                    missing += 1;
+                    if missing >= 3 {
+                        self.fail(
+                            id,
+                            "Picard moved the song out of its working folder. If it moved it into your library, use Refresh library. \
+                             Otherwise, in Picard's Options → File Naming turn off “Move files”, then bring the link in again."
+                                .into(),
+                        );
+                        return;
+                    }
+                }
+                Some(now) if now != baseline => {
+                    self.picard_saved(id, now.path);
+                    return;
+                }
+                Some(_) => missing = 0,
+            }
+        }
+        self.update(id, |i| {
+            if i.picard == PicardState::Waiting {
+                i.picard = PicardState::None;
+            }
+        });
+    }
+
+    /// Picard saved the song: take its tags as they are now on the file.
+    fn picard_saved(&self, id: u64, path: PathBuf) {
+        let Some(track) = read_track(&path) else {
+            return self.fail(id, "Picard saved the song but its tags couldn't be read.".into());
+        };
+        let proposal = proposal_from_track(&track);
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("mp3").to_string();
+        let preview = self.preview(&proposal, &ext);
+        self.update(id, |i| {
+            i.sources = [("title", &proposal.title), ("artist", &proposal.artist), ("album", &proposal.album), ("albumArtist", &proposal.album_artist), ("year", &proposal.year), ("track", &proposal.track), ("genre", &proposal.genre)]
+                .into_iter()
+                .filter(|(_, v)| !v.trim().is_empty())
+                .map(|(k, _)| (k.to_string(), "MusicBrainz Picard".to_string()))
+                .collect();
+            i.alternatives.clear();
+            i.notes = vec!["Tags written by MusicBrainz Picard.".to_string()];
+            i.confidence = 1.0;
+            i.proposal = proposal;
+            i.destination = Some(preview);
+            i.format = ext;
+            i.staged = Some(path);
+            i.picard = PicardState::Saved;
+        });
+    }
+
     /// What adding needs, once the item is ready.
-    pub fn take_for_add(&self, id: u64) -> Result<(PathBuf, Proposal), String> {
+    pub fn take_for_add(&self, id: u64) -> Result<(PathBuf, Proposal, bool), String> {
         let mut state = self.inner.state.lock().unwrap();
         if state.adding.contains(&id) {
             return Err("This song is already being added.".into());
@@ -494,7 +657,8 @@ impl Imports {
         let item = state.items.iter().find(|i| i.id == id).ok_or("That item is gone.")?;
         match (item.stage, &item.staged) {
             (Stage::Ready, Some(path)) => {
-                let taken = (path.clone(), item.proposal.clone());
+                // Tags Picard wrote are left exactly as they are.
+                let taken = (path.clone(), item.proposal.clone(), item.picard != PicardState::Saved);
                 state.adding.insert(id);
                 Ok(taken)
             }
@@ -552,6 +716,28 @@ impl Imports {
     }
 }
 
+/// What a staged file looked like when last checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Fingerprint {
+    path: PathBuf,
+    size: u64,
+    modified: Option<SystemTime>,
+}
+
+/// The newest audio file in a song's staging folder.
+fn newest_audio(dir: &Path) -> Option<Fingerprint> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && is_audio_file(p) && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+        .filter_map(|path| {
+            let meta = std::fs::metadata(&path).ok()?;
+            Some(Fingerprint { size: meta.len(), modified: meta.modified().ok(), path })
+        })
+        .max_by_key(|f| f.modified)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,6 +756,11 @@ mod tests {
         running: Arc<AtomicUsize>,
         peak: Arc<AtomicUsize>,
         delay: Duration,
+        picard: Option<String>,
+        opened: Arc<Mutex<Vec<PathBuf>>>,
+        open_result: Result<(), String>,
+        /// Write a real, readable mp3 instead of placeholder bytes.
+        real_audio: bool,
     }
 
     impl Fake {
@@ -587,11 +778,22 @@ mod tests {
                 running: Arc::new(AtomicUsize::new(0)),
                 peak: Arc::new(AtomicUsize::new(0)),
                 delay: Duration::ZERO,
+                picard: Some("/Applications/MusicBrainz Picard.app".into()),
+                opened: Arc::new(Mutex::new(Vec::new())),
+                open_result: Ok(()),
+                real_audio: false,
             }
         }
     }
 
     impl Runner for Fake {
+        fn picard(&self) -> Option<String> {
+            self.picard.clone()
+        }
+        fn open_in_picard(&self, file: &Path) -> Result<(), String> {
+            self.opened.lock().unwrap().push(file.to_path_buf());
+            self.open_result.clone()
+        }
         fn probe(&self, _url: &str) -> Result<String, String> {
             self.probe.clone()
         }
@@ -607,7 +809,11 @@ mod tests {
             }
             if self.make_file {
                 let path = dir.join(format!("x.{format}"));
-                std::fs::write(&path, b"audio").unwrap();
+                if self.real_audio {
+                    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone.mp3"), &path).unwrap();
+                } else {
+                    std::fs::write(&path, b"audio").unwrap();
+                }
                 line(&format!("FILE|{}", path.display()));
             }
             self.running.fetch_sub(1, Ordering::SeqCst);
@@ -618,15 +824,32 @@ mod tests {
     struct Harness {
         imports: Imports,
         events: Arc<Mutex<Vec<ImportEvent>>>,
-        _dir: tempfile::TempDir,
+        dir: tempfile::TempDir,
+    }
+
+    impl Harness {
+        /// The song's own staging folder.
+        fn staging(&self, id: u64) -> PathBuf {
+            self.dir.path().join("staging").join(id.to_string())
+        }
     }
 
     fn harness(fake: Fake) -> Harness {
+        harness_with_library(fake, || LibraryView::default())
+    }
+
+    fn harness_with_library(fake: Fake, library: impl Fn() -> LibraryView + Send + Sync + 'static) -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
-        let imports = Imports::new(dir.path().join("staging"), Box::new(fake), Box::new(move |e| sink.lock().unwrap().push(e.clone())));
-        Harness { imports, events, _dir: dir }
+        let imports = Imports::with_poll(
+            dir.path().join("staging"),
+            Box::new(fake),
+            Box::new(library),
+            Box::new(move |e| sink.lock().unwrap().push(e.clone())),
+            Duration::from_millis(15),
+        );
+        Harness { imports, events, dir }
     }
 
     fn wait_until(imports: &Imports, what: &str, ok: impl Fn(&[ImportItem]) -> bool) {
@@ -764,6 +987,175 @@ mod tests {
         assert!(h.imports.take_for_add(id).is_ok(), "can be added again after an undo");
     }
 
+    // ---- Picard
+
+    fn ready_song(fake: Fake) -> (Harness, u64) {
+        let h = harness(fake);
+        h.imports.add_link("The Dead South - People Are Strange [Official Music Video]\nhttps://youtu.be/abcdefghijk", "mp3").unwrap();
+        wait_until(&h.imports, "ready", |i| i.first().is_some_and(|x| x.stage == Stage::Ready));
+        let id = h.imports.list()[0].id;
+        (h, id)
+    }
+
+    /// What Picard does on Save with the user's settings: write tags into the file and rename it in place.
+    fn picard_saves(dir: &Path, new_name: &str, tags: &Proposal) -> PathBuf {
+        let old = newest_audio(dir).unwrap().path;
+        crate::tags::write_tags(&old, &crate::importer::to_edit(tags)).unwrap();
+        let new = dir.join(new_name);
+        std::fs::rename(&old, &new).unwrap();
+        new
+    }
+
+    fn picard_tags() -> Proposal {
+        Proposal { title: "People Are Strange".into(), artist: "The Dead South".into(), album: "Served Live".into(), year: "2018".into(), track: "4".into(), genre: "Bluegrass".into(), album_artist: "The Dead South".into() }
+    }
+
+    #[test]
+    fn opening_in_picard_launches_it_with_the_staged_file_and_waits() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let opened = fake.opened.clone();
+        let (h, id) = ready_song(fake);
+
+        h.imports.open_in_picard(id).unwrap();
+
+        assert_eq!(h.imports.list()[0].picard, PicardState::Waiting);
+        let opened = opened.lock().unwrap();
+        assert_eq!(opened.len(), 1);
+        assert!(opened[0].starts_with(h.staging(id)));
+        // Nothing changed yet, so it keeps waiting and the tags are still the YouTube guess.
+        std::thread::sleep(Duration::from_millis(80));
+        assert_eq!(h.imports.list()[0].picard, PicardState::Waiting);
+        assert_eq!(h.imports.list()[0].proposal.album, "");
+    }
+
+    #[test]
+    fn when_picard_saves_and_renames_the_file_its_tags_are_read_back_and_locked() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let (h, id) = ready_song(fake);
+        h.imports.open_in_picard(id).unwrap();
+
+        let renamed = picard_saves(&h.staging(id), "04 People Are Strange.mp3", &picard_tags());
+
+        wait_until(&h.imports, "picard saved", |i| i[0].picard == PicardState::Saved);
+        let item = &h.imports.list()[0];
+        assert_eq!((item.proposal.album.as_str(), item.proposal.year.as_str(), item.proposal.track.as_str(), item.proposal.genre.as_str()), ("Served Live", "2018", "4", "Bluegrass"));
+        assert_eq!(item.sources["album"], "MusicBrainz Picard");
+        assert_eq!(item.sources["year"], "MusicBrainz Picard");
+        assert_eq!(item.confidence, 1.0);
+        assert!(item.notes.iter().any(|n| n.contains("Picard")));
+        assert!(item.alternatives.is_empty());
+        assert_eq!(item.destination.as_deref(), Some("The Dead South/Served Live/04 People Are Strange.mp3"));
+        // The renamed file is the one that will be added, and Picard's tags are not rewritten.
+        let (staged, _, retag) = h.imports.take_for_add(id).unwrap();
+        assert_eq!(staged, renamed);
+        assert!(!retag);
+        // The tags are Picard's now.
+        assert!(h.imports.set_tags(id, TagsPatch { album: Some("Mine".into()), ..Default::default() }).unwrap_err().contains("Picard"));
+    }
+
+    #[test]
+    fn a_save_that_only_changes_the_tags_is_noticed_too() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let (h, id) = ready_song(fake);
+        h.imports.open_in_picard(id).unwrap();
+        // Picard with renaming turned off: same file name, new content.
+        let file = newest_audio(&h.staging(id)).unwrap().path;
+        std::thread::sleep(Duration::from_millis(30));
+        crate::tags::write_tags(&file, &crate::importer::to_edit(&picard_tags())).unwrap();
+
+        wait_until(&h.imports, "picard saved", |i| i[0].picard == PicardState::Saved);
+        assert_eq!(h.imports.list()[0].proposal.album, "Served Live");
+    }
+
+    #[test]
+    fn the_destination_follows_the_library_s_existing_folders() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let root = PathBuf::from("/Volumes/music/Music");
+        let existing = crate::library::CachedTrack {
+            modified_ms: 1,
+            size: 1,
+            track: crate::track::Track {
+                path: "/Volumes/music/Music/The_Dead_South/Served Live/01 Old.mp3".into(),
+                title: "Old".into(),
+                artist: "The Dead South".into(),
+                album: "Served Live".into(),
+                album_artist: String::new(),
+                track_number: Some(1),
+                disc_number: None,
+                year: None,
+                genre: String::new(),
+                duration_ms: 1,
+            },
+        };
+        let (r2, e2) = (root.clone(), existing.clone());
+        let h = harness_with_library(fake, move || LibraryView { root: Some(r2.clone()), tracks: vec![e2.clone()] });
+        h.imports.add_link("The Dead South - People Are Strange\nhttps://youtu.be/abcdefghijk", "mp3").unwrap();
+        wait_until(&h.imports, "ready", |i| i.first().is_some_and(|x| x.stage == Stage::Ready));
+        let id = h.imports.list()[0].id;
+
+        // Album unknown yet: the artist's existing folder is used.
+        assert_eq!(h.imports.list()[0].destination.as_deref(), Some("The_Dead_South/Unknown Album/People Are Strange.mp3"));
+
+        // After Picard names the album, it lands in the album folder the library already has.
+        h.imports.open_in_picard(id).unwrap();
+        picard_saves(&h.staging(id), "04 People Are Strange.mp3", &picard_tags());
+        wait_until(&h.imports, "picard saved", |i| i[0].picard == PicardState::Saved);
+        assert_eq!(h.imports.list()[0].destination.as_deref(), Some("The_Dead_South/Served Live/04 People Are Strange.mp3"));
+    }
+
+    #[test]
+    fn opening_is_refused_when_the_song_is_not_ready_or_picard_fails_to_open() {
+        let (h, id) = ready_song(Fake::ok());
+        h.imports.remove(id);
+        assert!(h.imports.open_in_picard(id).is_err());
+
+        let mut fake = Fake::ok();
+        fake.open_result = Err("Picard didn't open the file.".into());
+        let (h, id) = ready_song(fake);
+        assert!(h.imports.open_in_picard(id).unwrap_err().contains("didn't open"));
+        assert_eq!(h.imports.list()[0].picard, PicardState::None, "no waiting for a launch that failed");
+
+        let h = harness(Fake::ok());
+        h.imports.add_link("https://youtu.be/abcdefghijk", "mp3").unwrap();
+        // Still fetching or just finished: either way a missing item id is an error.
+        assert!(h.imports.open_in_picard(999).is_err());
+    }
+
+    #[test]
+    fn if_picard_moves_the_file_away_the_song_fails_with_advice() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let (h, id) = ready_song(fake);
+        h.imports.open_in_picard(id).unwrap();
+
+        std::fs::remove_file(newest_audio(&h.staging(id)).unwrap().path).unwrap();
+
+        wait_until(&h.imports, "moved", |i| i[0].stage == Stage::Failed);
+        let error = h.imports.list()[0].error.clone().unwrap();
+        assert!(error.contains("moved") && error.contains("Move files") && error.contains("Refresh library"), "{error}");
+    }
+
+    #[test]
+    fn removing_a_song_stops_its_watcher_quietly() {
+        let mut fake = Fake::ok();
+        fake.real_audio = true;
+        let (h, id) = ready_song(fake);
+        h.imports.open_in_picard(id).unwrap();
+        h.imports.remove(id);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(h.imports.list().is_empty());
+    }
+
+    #[test]
+    fn songs_not_sent_to_picard_are_retagged_when_added() {
+        let (h, id) = ready_song(Fake::ok());
+        assert!(h.imports.take_for_add(id).unwrap().2);
+    }
+
     #[test]
     fn a_song_cannot_be_added_twice_at_once_and_can_be_retried_after_a_failure() {
         let h = harness(Fake::ok());
@@ -786,7 +1178,7 @@ mod tests {
         h.imports.add_link("https://youtu.be/abcdefghijk", "mp3").unwrap();
         wait_until(&h.imports, "ready", |i| i.first().is_some_and(|x| x.stage == Stage::Ready));
         let id = h.imports.list()[0].id;
-        let (staged, _) = h.imports.take_for_add(id).unwrap();
+        let (staged, _, _) = h.imports.take_for_add(id).unwrap();
         assert!(staged.exists());
 
         h.imports.remove(id);
@@ -803,7 +1195,7 @@ mod tests {
         std::fs::create_dir_all(staging.join("7")).unwrap();
         std::fs::write(staging.join("7/old.mp3"), b"x").unwrap();
 
-        let _ = Imports::new(staging.clone(), Box::new(Fake::ok()), Box::new(|_| {}));
+        let _ = Imports::new(staging.clone(), Box::new(Fake::ok()), Box::new(LibraryView::default), Box::new(|_| {}));
 
         assert!(!staging.join("7/old.mp3").exists());
         assert!(staging.is_dir());
@@ -821,6 +1213,7 @@ mod tests {
         let imports = Imports::new(
             dir.path().join("staging"),
             Box::new(YtDlp::locate().expect("yt-dlp and ffmpeg installed")),
+            Box::new(LibraryView::default),
             Box::new(move |e| sink.lock().unwrap().push(e.clone())),
         );
 
@@ -844,12 +1237,22 @@ mod tests {
 
         // Add it to a library.
         let lib = tempfile::tempdir().unwrap();
-        let (staged, proposal) = imports.take_for_add(item.id).unwrap();
+        let (staged, proposal, _) = imports.take_for_add(item.id).unwrap();
         let tagged = Proposal { artist: "jawed".into(), album: "YouTube".into(), ..proposal };
-        let added = crate::importer::add_to_library(&staged, &tagged, lib.path()).unwrap();
+        let added = crate::importer::add_to_library(&staged, &tagged, lib.path(), &[], true).unwrap();
         assert_eq!(added.path, lib.path().join("jawed/YouTube/Me at the zoo.mp3"));
         assert_eq!((added.track.title.as_str(), added.track.artist.as_str(), added.track.year), ("Me at the zoo", "jawed", Some(2005)));
         assert!((18_000..=21_000).contains(&added.track.duration_ms), "{}", added.track.duration_ms);
+    }
+
+    /// Checks the installed Picard is found (does not launch it).
+    /// Run with `cargo test -- --ignored real_picard`.
+    #[test]
+    #[ignore]
+    fn real_picard_is_found_where_it_is_installed() {
+        let app = find_picard().expect("MusicBrainz Picard installed");
+        assert!(app.to_string_lossy().ends_with("Picard.app"), "{app:?}");
+        assert!(app.join("Contents/Info.plist").exists());
     }
 
     #[test]

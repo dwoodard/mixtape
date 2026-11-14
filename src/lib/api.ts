@@ -26,6 +26,7 @@ export interface Api {
   importAddLink(text: string, format: string): Promise<void>;
   importSetTags(id: number, patch: TagsPatch): Promise<ImportItem>;
   importAdd(id: number): Promise<Track>;
+  importOpenInPicard(id: number): Promise<void>;
   importUndo(id: number): Promise<string>;
   importRemove(id: number): Promise<void>;
   onImportEvent(cb: (event: ImportEvent) => void): Promise<Unlisten>;
@@ -80,6 +81,7 @@ export const tauriApi: Api = {
   importAddLink: (text, format) => invoke("import_add_link", { text, format }),
   importSetTags: (id, patch) => invoke("import_set_tags", { id, patch }),
   importAdd: (id) => invoke("import_add", { id }),
+  importOpenInPicard: (id) => invoke("import_open_in_picard", { id }),
   importUndo: (id) => invoke("import_undo", { id }),
   importRemove: (id) => invoke("import_remove", { id }),
   onImportEvent: (cb) => listen<ImportEvent>("import-event", (e) => cb(e.payload)),
