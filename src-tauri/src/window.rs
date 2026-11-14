@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{LogicalSize, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-const THIN_SIZE: (f64, f64) = (520.0, 84.0);
+const THIN_SIZE: (f64, f64) = (720.0, 44.0);
 const LARGE_SIZE: (f64, f64) = (1100.0, 700.0);
 const LARGE_MIN: (f64, f64) = (760.0, 480.0);
 
@@ -108,19 +108,33 @@ fn apply(window: &WebviewWindow, mode: Mode, saved: Option<Geometry>) {
     }
 
     let reachable = saved.filter(|g| is_reachable(g, &monitors(window)));
-    match reachable {
-        Some(g) => {
+    match (mode, reachable) {
+        // The thin bar has a fixed size, so only its position is restored.
+        // This also ignores sizes saved by older versions.
+        (Mode::Thin, saved) => {
+            let _ = window.set_size(LogicalSize::new(THIN_SIZE.0, THIN_SIZE.1));
+            match saved {
+                Some(g) => {
+                    let _ = window.set_position(PhysicalPosition::new(g.x, g.y));
+                }
+                None => place_visible(window),
+            }
+        }
+        (Mode::Large, Some(g)) => {
             let _ = window.set_size(PhysicalSize::new(g.width, g.height));
             let _ = window.set_position(PhysicalPosition::new(g.x, g.y));
         }
-        None => {
-            let (w, h) = if mode == Mode::Thin { THIN_SIZE } else { LARGE_SIZE };
-            let _ = window.set_size(LogicalSize::new(w, h));
-            // Keep the current top-left if it is visible, otherwise center.
-            let on_screen = capture(window).is_some_and(|g| is_reachable(&g, &monitors(window)));
-            if !on_screen {
-                let _ = window.center();
-            }
+        (Mode::Large, None) => {
+            let _ = window.set_size(LogicalSize::new(LARGE_SIZE.0, LARGE_SIZE.1));
+            place_visible(window);
         }
+    }
+}
+
+/// Keeps the current top-left if it is on a monitor, otherwise centers.
+fn place_visible(window: &WebviewWindow) {
+    let on_screen = capture(window).is_some_and(|g| is_reachable(&g, &monitors(window)));
+    if !on_screen {
+        let _ = window.center();
     }
 }
