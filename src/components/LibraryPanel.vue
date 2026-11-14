@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { formatAgo } from "../lib/format";
 import { store } from "../lib/store";
+import { tip, shortcutText } from "../lib/shortcuts";
 import { filterTracks } from "../lib/trackList";
 import { libraryQuery, libraryView, showInLibrary, type LibraryView } from "../lib/ui";
 import AlbumsView from "./AlbumsView.vue";
@@ -33,9 +34,14 @@ const menuItems = computed<MenuItem[]>(() => {
   if (store.configuredFolder.value) {
     items.push({ label: "Import library", action: () => store.importLibrary(), disabled: busy });
   }
-  items.push({ label: "Open folder…", action: () => store.openFolder(), disabled: busy });
+  items.push({ label: "Open folder…", action: () => store.openFolder(), disabled: busy, shortcut: shortcutText("openFolder") });
   if (store.folder.value) {
-    items.push({ label: "Refresh (new and changed files)", action: () => store.refresh(), disabled: busy });
+    items.push({
+      label: "Refresh (new and changed files)",
+      action: () => store.refresh(),
+      disabled: busy,
+      shortcut: shortcutText("refresh"),
+    });
   }
   if (store.removedCount.value > 0) {
     items.push({
@@ -55,12 +61,14 @@ function reviewDuplicates() {
   libraryView.value = "duplicates";
 }
 // The tab only exists while there is something to clean up.
-const tabs = computed<{ id: LibraryView; label: string }[]>(() => [
-  { id: "tracks", label: "Tracks" },
-  { id: "albums", label: "Albums" },
-  { id: "artists", label: "Artists" },
-  { id: "playlists", label: "Playlists" },
-  ...(duplicateCount.value > 0 ? [{ id: "duplicates" as const, label: `Duplicates (${duplicateCount.value})` }] : []),
+const tabs = computed<{ id: LibraryView; label: string; tip: string }[]>(() => [
+  { id: "tracks", label: "Tracks", tip: tip("Show Tracks", "viewTracks") },
+  { id: "albums", label: "Albums", tip: tip("Show Albums", "viewAlbums") },
+  { id: "artists", label: "Artists", tip: tip("Show Artists", "viewArtists") },
+  { id: "playlists", label: "Playlists", tip: tip("Show Playlists", "viewPlaylists") },
+  ...(duplicateCount.value > 0
+    ? [{ id: "duplicates" as const, label: `Duplicates (${duplicateCount.value})`, tip: tip("Show Duplicates", "viewDuplicates") }]
+    : []),
 ]);
 // Once the last duplicate is gone, leave the tab instead of showing an empty one.
 watch(duplicateCount, (n) => {
@@ -85,6 +93,7 @@ const scanLabel = computed(() => {
         role="tab"
         :aria-selected="libraryView === t.id"
         :class="{ on: libraryView === t.id }"
+        :title="t.tip"
         @click="libraryView = t.id"
       >
         {{ t.label }}
@@ -93,8 +102,10 @@ const scanLabel = computed(() => {
 
     <div class="toolbar">
       <input
+        id="library-filter"
         v-model="query"
         class="field filter"
+        :title="tip('Filter the library', 'focusSearch')"
         type="search"
         placeholder="Filter"
         aria-label="Filter library"

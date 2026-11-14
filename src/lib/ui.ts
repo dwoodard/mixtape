@@ -1,4 +1,5 @@
 import { ref } from "vue";
+import type { Track } from "./types";
 
 export type LibraryView = "tracks" | "albums" | "artists" | "playlists" | "duplicates";
 
@@ -125,3 +126,23 @@ export function showInLibrary(track: { path: string; title: string }) {
   libraryQuery.value = track.title;
   revealPath.value = track.path;
 }
+
+/** Songs picked in the song list that is showing, so shortcuts and the command palette can act on them. */
+export const selectedSongs = ref<Track[]>([]);
+let selectionOwner: symbol | null = null;
+/** A song list publishes its selection. The last list to publish owns it. */
+export function publishSelection(owner: symbol, songs: Track[]) {
+  selectionOwner = owner;
+  selectedSongs.value = songs;
+}
+/** A song list going away withdraws its selection, unless another list has taken over. */
+export function withdrawSelection(owner: symbol) {
+  if (selectionOwner !== owner) return;
+  selectionOwner = null;
+  selectedSongs.value = [];
+}
+
+export const paletteOpen = ref(false);
+export const helpOpen = ref(false);
+/** The queue's "save as playlist" name form is open. */
+export const savingQueue = ref(false);

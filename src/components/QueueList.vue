@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { formatTime } from "../lib/format";
 import { finalIndex, insertionIndex } from "../lib/reorder";
 import { imports, store } from "../lib/store";
-import { libraryView } from "../lib/ui";
+import { tip } from "../lib/shortcuts";
+import { libraryView, savingQueue } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 
 const total = computed(() => store.queue.value.reduce((sum, t) => sum + t.durationMs, 0));
@@ -77,16 +78,17 @@ function startDrag(index: number, event: PointerEvent) {
 }
 onBeforeUnmount(() => endDrag(false));
 
-const saving = ref(false);
+// Shared, so the Cmd+S shortcut and the command palette can open the form.
+const saving = savingQueue;
 const name = ref("");
 const nameInput = ref<HTMLInputElement | null>(null);
 
-async function startSaving() {
-  saving.value = true;
+watch(saving, async (open) => {
+  if (!open) return;
   store.playlistError.value = null;
   await nextTick();
   nameInput.value?.focus();
-}
+});
 
 async function save() {
   if (await store.saveQueueAsPlaylist(name.value)) {
@@ -108,9 +110,9 @@ function cancel() {
     <h2 class="panel-title">Playlist</h2>
     <div class="tools">
       <span class="total">{{ store.queue.value.length }} {{ store.queue.value.length === 1 ? "track" : "tracks" }} · {{ formatTime(total) }}</span>
-      <button :disabled="store.queue.value.length === 0" @click="startSaving()">Save…</button>
+      <button :title="tip('Save the queue as a playlist', 'saveQueue')" :disabled="store.queue.value.length === 0" @click="saving = true">Save…</button>
       <button title="Open saved playlists" @click="libraryView = 'playlists'">Load…</button>
-      <button :disabled="store.queue.value.length === 0" @click="store.clearQueue()">Clear</button>
+      <button :title="tip('Clear the queue', 'clearQueue')" :disabled="store.queue.value.length === 0" @click="store.clearQueue()">Clear</button>
     </div>
     <form v-if="saving" class="save" @submit.prevent="save" @keydown.esc="cancel">
       <input ref="nameInput" v-model="name" class="field" placeholder="Playlist name" aria-label="Playlist name" />

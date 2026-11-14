@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { formatTime, trackLabel } from "../lib/format";
+import { tip } from "../lib/shortcuts";
 import { store } from "../lib/store";
 import SeekBar from "./SeekBar.vue";
 import TransportButtons from "./TransportButtons.vue";
@@ -24,7 +25,7 @@ const time = computed(
       @seek="store.seek"
     />
     <VolumeControl class="volume" :volume="store.player.value.volume" @change="store.setVolume" />
-    <button class="icon-btn" aria-label="Expand to large window" title="Expand" @click="store.toggleMode()">
+    <button class="icon-btn" aria-label="Expand to large window" :title="tip('Expand', 'toggleMode')" @click="store.toggleMode()">
       <svg viewBox="0 0 16 16"><path d="M9 2h5v5l-2-2-3 3-1-1 3-3zM7 14H2V9l2 2 3-3 1 1-3 3z" /></svg>
     </button>
     <button class="icon-btn" aria-label="Quit" title="Quit" @click="store.quit()">

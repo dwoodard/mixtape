@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { imports, store } from "../lib/store";
 import {
   clickRow,
@@ -12,7 +12,8 @@ import {
 } from "../lib/selection";
 import { sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
-import { revealPath, tagEditPaths } from "../lib/ui";
+import { shortcutText } from "../lib/shortcuts";
+import { publishSelection, revealPath, tagEditPaths, withdrawSelection } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import TrackTable from "./TrackTable.vue";
 
@@ -39,6 +40,11 @@ const target = computed(() => (chosen.value.length > 0 ? chosen.value : rows.val
 const label = computed(() =>
   chosen.value.length > 0 ? `${chosen.value.length} selected` : `All ${rows.value.length}`,
 );
+
+// Shortcuts and the command palette act on whatever is selected here.
+const owner = Symbol("track-pane");
+watch(chosen, (songs) => publishSelection(owner, songs), { immediate: true });
+onBeforeUnmount(() => withdrawSelection(owner));
 
 // Opening a view hands it the keyboard, so the arrows work without clicking a row first.
 onMounted(() => props.autofocus && nextTick(() => root.value?.focus({ preventScroll: true })));
@@ -93,18 +99,24 @@ const picardMenuItem = (songs: Track[]): MenuItem => {
     label: missing ? "Open in MusicBrainz Picard (not installed)" : "Open in MusicBrainz Picard",
     action: () => store.openInPicard(songs),
     disabled: missing,
+    shortcut: shortcutText("picard"),
   };
 };
 
 const menuItems = computed<MenuItem[]>(() => {
   const songs = chosen.value;
   const items: MenuItem[] = [
-    { label: "Play", action: () => store.playTracks(songs, 0) },
-    { label: "Play next", action: () => store.enqueueNext(songs) },
-    { label: "Add to queue", action: () => store.enqueue(songs) },
-    { label: "Edit tags…", action: () => (tagEditPaths.value = songs.map((t) => t.path)), separated: true },
+    { label: "Play", action: () => store.playTracks(songs, 0), shortcut: shortcutText("play") },
+    { label: "Play next", action: () => store.enqueueNext(songs), shortcut: shortcutText("playNext") },
+    { label: "Add to queue", action: () => store.enqueue(songs), shortcut: shortcutText("enqueue") },
+    {
+      label: "Edit tags…",
+      action: () => (tagEditPaths.value = songs.map((t) => t.path)),
+      separated: true,
+      shortcut: shortcutText("editTags"),
+    },
     picardMenuItem(songs),
-    { label: "Reveal in Finder", action: () => store.revealInFinder(songs) },
+    { label: "Reveal in Finder", action: () => store.revealInFinder(songs), shortcut: shortcutText("reveal") },
   ];
   if (props.removable) {
     items.push({
@@ -112,6 +124,7 @@ const menuItems = computed<MenuItem[]>(() => {
       action: () => (confirmingRemove.value = true),
       danger: true,
       separated: true,
+      shortcut: shortcutText("remove"),
     });
   }
   return items;

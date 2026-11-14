@@ -9,6 +9,8 @@ export interface MenuItem {
   danger?: boolean;
   /** Draws a divider above this item. */
   separated?: boolean;
+  /** Shown at the right edge, such as "⌘E". */
+  shortcut?: string;
 }
 
 const props = defineProps<{ x: number; y: number; items: MenuItem[] }>();
@@ -83,7 +85,8 @@ function choose(item: MenuItem) {
         :disabled="item.disabled"
         @click="choose(item)"
       >
-        {{ item.label }}
+        <span>{{ item.label }}</span>
+        <kbd v-if="item.shortcut">{{ item.shortcut }}</kbd>
       </button>
     </template>
   </div>
@@ -101,7 +104,9 @@ function choose(item: MenuItem) {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 .menu button {
-  display: block;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
   width: 100%;
   text-align: left;
   border: none;
@@ -112,5 +117,6 @@ function choose(item: MenuItem) {
 .menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--accent); color: var(--accent-text); outline: none; }
 .menu button.danger { color: #ff8a8a; }
 .menu button.danger:hover:not(:disabled), .menu button.danger:focus-visible { background: #8a2f36; color: #fff; }
+kbd { font-family: inherit; font-size: 11px; opacity: 0.6; }
 hr { border: none; border-top: 1px solid var(--line); margin: 4px 2px; }
 </style>
