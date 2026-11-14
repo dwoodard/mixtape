@@ -197,6 +197,12 @@ impl Player {
         (self.emit)(PlayerEvent::Position(target));
     }
 
+    /// Seeks forward or backward from the current position.
+    pub fn seek_relative(&mut self, delta_ms: i64) {
+        let target = (self.position_ms as i64 + delta_ms).max(0) as u64;
+        self.seek(target);
+    }
+
     pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume.clamp(0.0, 1.0);
         self.backend.set_volume(self.volume);
@@ -495,6 +501,19 @@ mod tests {
         h.player.seek(999_999);
         assert!(h.calls().contains(&Call::Seek(180_000)));
         assert_eq!(h.player.state().position_ms, 180_000);
+    }
+
+    #[test]
+    fn relative_seek_moves_from_current_position_and_floors_at_zero() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        let token = h.token();
+        h.player.handle_backend_event(BackendEvent::Position { token, position_ms: 20_000 });
+
+        h.player.seek_relative(10_000);
+        assert_eq!(h.player.state().position_ms, 30_000);
+        h.player.seek_relative(-100_000);
+        assert_eq!(h.player.state().position_ms, 0);
     }
 
     #[test]

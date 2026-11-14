@@ -13,8 +13,10 @@
     "windows": [
       {
         "title": "Mixtape",
-        "width": 800,
-        "height": 600
+        "width": 1100,
+        "height": 700,
+        "label": "main",
+        "visible": false
       }
     ],
     "security": {
