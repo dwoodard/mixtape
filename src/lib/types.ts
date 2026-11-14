@@ -66,7 +66,7 @@ export interface CleanupReport {
   /** Moved to the Trash. */
   trashed: string[];
   /** Moved to a holding folder on the same drive instead (the drive has no Trash). */
-  held: string[];
+  held: { path: string; movedTo: string }[];
   /** That holding folder, when anything was held. */
   holdingFolder: string | null;
   /** Were already gone from disk. */

@@ -49,6 +49,8 @@ export function createStore(api: Api, storage?: FlagStorage) {
   /** What the last tag write did, per file, for the editor to show. */
   const tagResults = ref<TagWriteResult[] | null>(null);
   const writingTags = ref(false);
+  /** True while a duplicate clean-up is running (it must not be started twice). */
+  const cleaningUp = ref(false);
 
   /** What the last "move extra copies to Trash" did, for the Duplicates tab to show. */
   const cleanupReport = ref<CleanupReport | null>(null);
@@ -221,17 +223,21 @@ export function createStore(api: Api, storage?: FlagStorage) {
    */
   async function trashDuplicates(pairs: DuplicatePair[]) {
     if (pairs.length === 0) return;
+    if (cleaningUp.value) return;
     libraryError.value = null;
     cleanupReport.value = null;
+    cleaningUp.value = true;
     let report: CleanupReport;
     try {
       report = await api.trashDuplicates(pairs);
     } catch (e) {
       libraryError.value = String(e);
       return;
+    } finally {
+      cleaningUp.value = false;
     }
     cleanupReport.value = report;
-    const gone = [...report.trashed, ...report.held, ...report.missing];
+    const gone = [...report.trashed, ...report.held.map((h) => h.path), ...report.missing];
     if (gone.length === 0) return;
     await removeFromLibrary(gone.map((path) => ({ path })));
     const goneSet = new Set(gone);
@@ -337,6 +343,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
     writingTags,
     trashDuplicates,
     cleanupReport,
+    cleaningUp,
     removeUnplayable,
     dismissError: () => api.dismissError(),
     revealInFinder,

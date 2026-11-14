@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extraCopies, findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
+import { extraCopies, findDuplicates, newDuplicateGroups, withKeeper, withoutIgnored } from "./duplicates";
 import { makeTrack } from "./testing";
 
 const song = (path: string, overrides = {}) =>
@@ -95,5 +95,39 @@ describe("ignoring and announcing duplicates", () => {
     expect(newDuplicateGroups(groups, new Set([first.key]), new Set()).map((g) => g.key)).toEqual([second.key]);
     expect(newDuplicateGroups(groups, new Set(), new Set([second.key])).map((g) => g.key)).toEqual([first.key]);
     expect(newDuplicateGroups(groups, new Set([first.key, second.key]), new Set())).toEqual([]);
+  });
+});
+
+describe("choosing which copy to keep", () => {
+  it("prefers the copy in the album's own folder over a shorter stray path", () => {
+    const groups = findDuplicates([
+      song("/Music/No Doubt/10 Don't Speak.mp3", { title: "Don't Speak" }),
+      song("/Music/No Doubt/Tragic Kingdom/10 Don't Speak.mp3", { title: "Don't Speak" }),
+    ]);
+    expect(groups[0].keep.path).toBe("/Music/No Doubt/Tragic Kingdom/10 Don't Speak.mp3");
+  });
+
+  it("still prefers an original over a numbered copy even when the copy is in the album folder", () => {
+    const groups = findDuplicates([
+      song("/Music/Stray/a.mp3"),
+      song("/Music/Tragic Kingdom/a.mp3"),
+      song("/Music/Tragic Kingdom/a copy.mp3"),
+    ]);
+    expect(groups[0].keep.path).toBe("/Music/Tragic Kingdom/a.mp3");
+    expect(groups[0].extras.map((t) => t.path).sort()).toEqual(["/Music/Stray/a.mp3", "/Music/Tragic Kingdom/a copy.mp3"]);
+  });
+
+  it("withKeeper swaps the chosen copy in and the old keeper out", () => {
+    const [group] = findDuplicates([song("/m/a.mp3"), song("/m/a 1.mp3"), song("/m/a 2.mp3")]);
+    const swapped = withKeeper(group, "/m/a 2.mp3");
+    expect(swapped.keep.path).toBe("/m/a 2.mp3");
+    expect(swapped.extras.map((t) => t.path).sort()).toEqual(["/m/a 1.mp3", "/m/a.mp3"]);
+    expect(swapped.extras).toHaveLength(group.extras.length);
+  });
+
+  it("withKeeper leaves the group alone for the current keeper or an unknown path", () => {
+    const [group] = findDuplicates([song("/m/a.mp3"), song("/m/a 1.mp3")]);
+    expect(withKeeper(group, group.keep.path)).toBe(group);
+    expect(withKeeper(group, "/nope.mp3")).toBe(group);
   });
 });

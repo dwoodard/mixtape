@@ -40,6 +40,10 @@ struct CoverService {
     pool: rayon::ThreadPool,
 }
 
+/// Set while a duplicate clean-up runs, so only one can run at a time.
+#[derive(Default)]
+struct CleanupBusy(Arc<AtomicBool>);
+
 struct PlayerHandle(Arc<Mutex<Player>>);
 
 /// Lets the exit handler write the session before the process ends.
@@ -173,8 +177,14 @@ async fn remove_from_library(cache: State<'_, CacheDir>, paths: Vec<String>) -> 
 #[tauri::command]
 async fn trash_duplicates(
     cache: State<'_, CacheDir>,
+    busy: State<'_, CleanupBusy>,
     pairs: Vec<cleanup::DuplicatePair>,
 ) -> Result<cleanup::CleanupReport, String> {
+    // A second click (or window) while one is running would race the first over the same files.
+    if busy.0.swap(true, Ordering::SeqCst) {
+        return Err("A clean-up is already running.".into());
+    }
+    let busy_flag = busy.0.clone();
     let root = cache.last_root();
     tauri::async_runtime::spawn_blocking(move || {
         let secs = std::time::SystemTime::now()
@@ -188,10 +198,14 @@ async fn trash_duplicates(
         if !report.held.is_empty() {
             report.holding_folder = batch.map(|b| b.to_string_lossy().into_owned());
         }
+        busy_flag.store(false, Ordering::SeqCst);
         report
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| {
+        busy.0.store(false, Ordering::SeqCst);
+        e.to_string()
+    })
 }
 
 #[derive(Serialize)]
@@ -527,6 +541,7 @@ pub fn run() {
         .setup(|app| {
             setup_player(app);
             app.manage(ScanControl::default());
+            app.manage(CleanupBusy::default());
             app.manage(Arc::new(CoverService {
                 cache: CoverCache::new(app.path().app_cache_dir()?.join("covers")),
                 pool: rayon::ThreadPoolBuilder::new()

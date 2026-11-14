@@ -3,7 +3,7 @@ import type { Api } from "./api";
 import { createStore } from "./store";
 import type { FlagStorage } from "./ui";
 import { makePlayerState, makeTrack } from "./testing";
-import type { PlayerState, ScanProgress, Track, WindowMode } from "./types";
+import type { CleanupReport, PlayerState, ScanProgress, Track, WindowMode } from "./types";
 
 function fakeApi(overrides: Partial<Api> = {}) {
   const listeners = {
@@ -640,7 +640,10 @@ describe("trashing duplicate copies", () => {
   it("treats files moved to the holding folder like trashed ones", async () => {
     const { api, store } = await loaded({
       trashed: [],
-      held: ["/m/a 1.mp3", "/m/a 2.mp3"],
+      held: [
+        { path: "/m/a 1.mp3", movedTo: "/m/.mixtape-duplicates/x/a 1.mp3" },
+        { path: "/m/a 2.mp3", movedTo: "/m/.mixtape-duplicates/x/a 2.mp3" },
+      ],
       holdingFolder: "/m/.mixtape-duplicates/2026-01-01-000000",
       missing: [],
       skipped: [],
@@ -651,6 +654,23 @@ describe("trashing duplicate copies", () => {
     expect(api.removeFromLibrary).toHaveBeenCalledWith(["/m/a 1.mp3", "/m/a 2.mp3"]);
     expect(store.library.value.map((t) => t.path)).toEqual(["/m/a.mp3"]);
     expect(store.cleanupReport.value?.holdingFolder).toContain(".mixtape-duplicates");
+  });
+
+  it("ignores a second clean-up while one is running", async () => {
+    let finish!: (r: object) => void;
+    const { api, store } = await loaded(
+      {},
+      { trashDuplicates: vi.fn(() => new Promise<CleanupReport>((resolve) => (finish = resolve as never))) },
+    );
+
+    const first = store.trashDuplicates(pairs);
+    await vi.waitFor(() => expect(store.cleaningUp.value).toBe(true));
+    await store.trashDuplicates(pairs);
+    expect(api.trashDuplicates).toHaveBeenCalledTimes(1);
+
+    finish({ trashed: [], held: [], holdingFolder: null, missing: [], skipped: [] });
+    await first;
+    expect(store.cleaningUp.value).toBe(false);
   });
 
   it("does nothing without pairs", async () => {

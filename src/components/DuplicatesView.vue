@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { extraCopies } from "../lib/duplicates";
+import { extraCopies, withKeeper } from "../lib/duplicates";
 import { fileName } from "../lib/format";
 import { store } from "../lib/store";
 
-const groups = computed(() => store.duplicateGroups.value);
+// The user can pick a different copy to keep in any group; that choice applies to the clean-up.
+const chosen = ref<Record<string, string>>({});
+const groups = computed(() =>
+  store.duplicateGroups.value.map((g) => (chosen.value[g.key] ? withKeeper(g, chosen.value[g.key]) : g)),
+);
 const extras = computed(() => extraCopies(groups.value));
 const confirming = ref(false);
 // A different set of duplicates (after a rescan or a removal) cancels a pending confirmation.
 watch(extras, () => (confirming.value = false));
+const keepThis = (key: string, path: string) => (chosen.value = { ...chosen.value, [key]: path });
 
 const folder = (path: string) => path.slice(0, path.length - fileName(path).length).replace(/\/$/, "");
 
@@ -40,7 +45,7 @@ async function trashExtras() {
       >
         Reset dismissed ({{ store.ignoredDuplicates.value.size }})
       </button>
-      <button v-if="!confirming" :disabled="extras.length === 0" @click="confirming = true">
+      <button v-if="!confirming" :disabled="extras.length === 0 || store.cleaningUp.value" @click="confirming = true">
         Clean up {{ extras.length }} extra {{ extras.length === 1 ? "copy" : "copies" }}…
       </button>
     </div>
@@ -51,7 +56,7 @@ async function trashExtras() {
         network drives), they go to a <code>.mixtape-duplicates</code> folder on that drive instead, for you to review
         and delete yourself. <strong>Hide only</strong> just removes them from this library.
       </span>
-      <button class="danger" @click="trashExtras()">Move to Trash</button>
+      <button class="danger" :disabled="store.cleaningUp.value" @click="trashExtras()">Move to Trash</button>
       <button @click="removeExtras()">Hide only</button>
       <button @click="confirming = false">Cancel</button>
     </div>
@@ -64,7 +69,7 @@ async function trashExtras() {
         {{ store.cleanupReport.value.held.length === 1 ? "file was" : "files were" }} moved to a holding folder:
         <code class="where-held">{{ store.cleanupReport.value.holdingFolder }}</code>
         Check it, then delete the folder when you're sure.
-        <button @click="store.revealInFinder([{ path: store.cleanupReport.value.held[0] }])">
+        <button @click="store.revealInFinder([{ path: store.cleanupReport.value.held[0].movedTo }])">
           Reveal in Finder
         </button>
       </p>
@@ -106,6 +111,7 @@ async function trashExtras() {
         <div class="file keep" :title="g.keep.path"><span class="mark">✓</span>{{ fileName(g.keep.path) }}<span class="where ellipsis">{{ folder(g.keep.path) }}</span></div>
         <div v-for="e in g.extras" :key="e.path" class="file extra" :title="e.path">
           <span class="mark">–</span>{{ fileName(e.path) }}<span class="where ellipsis">{{ folder(e.path) }}</span>
+          <button class="reveal" title="Keep this copy instead" @click="keepThis(g.key, e.path)">Keep this one</button>
         </div>
       </li>
       <li v-if="groups.length === 0" class="empty">No duplicates found.</li>
@@ -138,6 +144,7 @@ async function trashExtras() {
 .keep { color: var(--text); }
 .keep .mark { color: #6fd08a; }
 .extra { color: var(--muted); }
+.file .reveal { flex: none; }
 .where { margin-left: auto; opacity: 0.6; min-width: 0; direction: rtl; text-align: left; }
 .empty { color: var(--muted); padding: 16px; text-align: center; }
 </style>

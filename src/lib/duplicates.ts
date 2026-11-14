@@ -42,9 +42,15 @@ export function findDuplicates(tracks: Track[]): DuplicateGroup[] {
       const original = s.replace(COPY_MARKER, "");
       return original !== s && stems.has(original);
     };
+    // A copy sitting in a folder named after the album is where the song belongs.
+    const inAlbumFolder = (m: Track) => {
+      const parent = m.path.split("/").slice(-2, -1)[0] ?? "";
+      return m.album !== "" && parent.toLowerCase() === m.album.toLowerCase();
+    };
     const ranked = [...members].sort(
       (a, b) =>
         Number(isCopy(a)) - Number(isCopy(b)) ||
+        Number(!inAlbumFolder(a)) - Number(!inAlbumFolder(b)) ||
         a.path.length - b.path.length ||
         a.path.localeCompare(b.path),
     );
@@ -71,4 +77,16 @@ export function newDuplicateGroups(
   ignored: ReadonlySet<string>,
 ): DuplicateGroup[] {
   return groups.filter((g) => !seen.has(g.key) && !ignored.has(g.key));
+}
+
+/** The same group with `path` as the copy to keep (the old keeper becomes an extra). Unknown paths change nothing. */
+export function withKeeper(group: DuplicateGroup, path: string): DuplicateGroup {
+  if (group.keep.path === path) return group;
+  const chosen = group.extras.find((e) => e.path === path);
+  if (!chosen) return group;
+  return {
+    ...group,
+    keep: chosen,
+    extras: [group.keep, ...group.extras.filter((e) => e.path !== path)],
+  };
 }

@@ -23,12 +23,22 @@ pub struct Skipped {
     pub reason: String,
 }
 
+/// A file moved to the holding folder, and where it went.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldFile {
+    /// Where it was (and where the library knew it).
+    pub path: String,
+    pub moved_to: String,
+}
+
 #[derive(Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CleanupReport {
     /// Moved to the Trash.
     pub trashed: Vec<String>,
     /// Moved to the holding folder instead, because the drive has no Trash.
-    pub held: Vec<String>,
+    pub held: Vec<HeldFile>,
     /// This run's holding folder, when anything was held.
     pub holding_folder: Option<String>,
     /// Were already gone from disk.
@@ -46,7 +56,7 @@ pub struct CleanupReport {
 pub fn trash_duplicates(
     pairs: &[DuplicatePair],
     trash: impl Fn(&Path) -> Result<(), String>,
-    hold: impl Fn(&Path) -> Result<(), String>,
+    hold: impl Fn(&Path) -> Result<PathBuf, String>,
 ) -> CleanupReport {
     let mut trash_unavailable = false;
     let keeping: HashSet<&str> = pairs.iter().map(|p| p.keep.as_str()).collect();
@@ -103,7 +113,10 @@ pub fn trash_duplicates(
             }
         };
         match hold(extra) {
-            Ok(()) => report.held.push(pair.extra.clone()),
+            Ok(moved_to) => report.held.push(HeldFile {
+                path: pair.extra.clone(),
+                moved_to: moved_to.to_string_lossy().into_owned(),
+            }),
             Err(e) => {
                 let why = format!(
                     "Couldn't move to the Trash ({}) or to the holding folder ({e}).",
@@ -154,7 +167,10 @@ pub fn holding_destination(root: &Path, path: &Path, batch_dir: &Path) -> Option
 
 /// Moves `path` into `batch_dir` on the same drive, keeping its place in the
 /// folder structure. Never overwrites: a name clash gets a numeric suffix.
-pub fn move_to_holding(root: &Path, path: &Path, batch_dir: &Path) -> Result<(), String> {
+pub fn move_to_holding(root: &Path, path: &Path, batch_dir: &Path) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Err("the file is gone".into());
+    }
     let destination = holding_destination(root, path, batch_dir)
         .ok_or("the file is outside the library folder")?;
     if let Some(dir) = destination.parent() {
@@ -171,7 +187,8 @@ pub fn move_to_holding(root: &Path, path: &Path, batch_dir: &Path) -> Result<(),
         target = destination.with_file_name(name);
         n += 1;
     }
-    std::fs::rename(path, &target).map_err(|e| e.to_string())
+    std::fs::rename(path, &target).map_err(|e| e.to_string())?;
+    Ok(target)
 }
 
 /// Moves a file to the Trash using the system file manager. If the volume
@@ -250,12 +267,13 @@ mod tests {
             },
             |p| {
                 held.borrow_mut().push(p.to_string_lossy().into_owned());
-                Ok(())
+                Ok(PathBuf::from("/held").join(p.file_name().unwrap()))
             },
         );
 
         assert_eq!(*trash_calls.borrow(), 1, "the Trash is tried once, then skipped");
-        assert_eq!(report.held, vec![one.clone(), two.clone()]);
+        assert_eq!(report.held.iter().map(|h| h.path.clone()).collect::<Vec<_>>(), vec![one.clone(), two.clone()]);
+        assert_eq!(report.held[0].moved_to, "/held/a 1.mp3");
         assert_eq!(*held.borrow(), vec![one, two]);
         assert!(report.trashed.is_empty() && report.skipped.is_empty());
     }
@@ -294,8 +312,9 @@ mod tests {
         std::fs::write(&extra, b"extra").unwrap();
         let batch = root.join(HOLDING_DIR).join("2026-01-01-000000");
 
-        move_to_holding(root, &extra, &batch).unwrap();
+        let moved = move_to_holding(root, &extra, &batch).unwrap();
 
+        assert_eq!(moved, batch.join("Artist/Album/a 1.mp3"));
         assert!(!extra.exists());
         assert_eq!(std::fs::read(batch.join("Artist/Album/a 1.mp3")).unwrap(), b"extra");
 
@@ -304,6 +323,14 @@ mod tests {
         move_to_holding(root, &extra, &batch).unwrap();
         assert_eq!(std::fs::read(batch.join("Artist/Album/a 1.mp3")).unwrap(), b"extra");
         assert_eq!(std::fs::read(batch.join("Artist/Album/a 1 (1).mp3")).unwrap(), b"second");
+    }
+
+    #[test]
+    fn a_missing_file_is_refused_without_leaving_empty_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch = dir.path().join(HOLDING_DIR).join("b");
+        assert!(move_to_holding(dir.path(), &dir.path().join("Artist/gone.mp3"), &batch).is_err());
+        assert!(!dir.path().join(HOLDING_DIR).exists());
     }
 
     #[test]
@@ -427,11 +454,11 @@ mod tests {
         let report = trash_duplicates(
             &[pair(&keep, &bad), pair(&keep, &good)],
             |p| if p.ends_with("a 1.mp3") { Err("locked".into()) } else { Ok(()) },
-            |p| if p.ends_with("a 1.mp3") { Err("also locked".into()) } else { Ok(()) },
+            |p| if p.ends_with("a 1.mp3") { Err("also locked".into()) } else { Ok(p.to_path_buf()) },
         );
 
         // The first failure means the Trash is not tried again, so the second goes to hold.
-        assert_eq!(report.held, vec![good]);
+        assert_eq!(report.held.iter().map(|h| h.path.clone()).collect::<Vec<_>>(), vec![good]);
         assert_eq!(report.skipped.len(), 1);
     }
 }
