@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { store } from "../lib/store";
 import {
   clickRow,
   emptySelection,
+  moveSelection,
   pruneSelection,
   selectAll,
   selectedTracks,
@@ -19,6 +20,7 @@ const props = defineProps<{ tracks: Track[] }>();
 const sortKey = ref<SortKey>("default");
 const sortDirection = ref<SortDirection>("asc");
 const selection = ref<Selection>(emptySelection());
+const root = ref<HTMLElement | null>(null);
 
 const rows = computed(() => sortTracks(props.tracks, sortKey.value, sortDirection.value));
 const order = computed(() => rows.value.map((t) => t.path));
@@ -28,6 +30,9 @@ const target = computed(() => (chosen.value.length > 0 ? chosen.value : rows.val
 const label = computed(() =>
   chosen.value.length > 0 ? `${chosen.value.length} selected` : `All ${rows.value.length}`,
 );
+
+// Opening a view hands it the keyboard, so the arrows work without clicking a row first.
+onMounted(() => root.value?.focus({ preventScroll: true }));
 
 watch(order, (paths) => (selection.value = pruneSelection(selection.value, paths)));
 
@@ -48,7 +53,16 @@ function onRowClick(index: number, event: MouseEvent) {
 }
 
 function onKey(event: KeyboardEvent) {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    // The arrows move the selection, not the scroll bar.
+    event.preventDefault();
+    const moved = moveSelection(selection.value, order.value, event.key === "ArrowDown" ? 1 : -1, event.shiftKey);
+    if (!moved) return;
+    selection.value = moved.selection;
+    nextTick(() =>
+      root.value?.querySelector(`[data-index="${moved.index}"]`)?.scrollIntoView({ block: "nearest" }),
+    );
+  } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
     event.preventDefault();
     selection.value = selectAll(order.value);
   } else if (event.key === "Enter" && target.value.length > 0) {
@@ -60,7 +74,7 @@ function onKey(event: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="pane" tabindex="0" @keydown="onKey">
+  <div ref="root" class="pane" tabindex="0" @keydown="onKey">
     <div class="actions">
       <span class="what" role="status">{{ label }}</span>
       <button :disabled="target.length === 0" @click="store.playTracks(target, 0)">Play</button>

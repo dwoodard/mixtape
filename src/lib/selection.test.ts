@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clickRow, emptySelection, pruneSelection, selectAll, selectedTracks } from "./selection";
+import { clickRow, emptySelection, moveSelection, pruneSelection, selectAll, selectedTracks } from "./selection";
 import { makeTrack } from "./testing";
 
 const rows = ["a", "b", "c", "d", "e"];
@@ -65,5 +65,59 @@ describe("pruneSelection", () => {
   it("returns the same object when nothing changed", () => {
     const sel = selectAll(rows);
     expect(pruneSelection(sel, rows)).toBe(sel);
+  });
+});
+
+describe("moveSelection", () => {
+  const down = (sel = emptySelection(), extend = false) => moveSelection(sel, rows, 1, extend)!;
+  const up = (sel = emptySelection(), extend = false) => moveSelection(sel, rows, -1, extend)!;
+
+  it("with nothing selected, down picks the first row and up the last", () => {
+    expect(down().index).toBe(0);
+    expect(up().index).toBe(4);
+  });
+
+  it("moves a single selection one row at a time", () => {
+    let result = down();
+    result = down(result.selection);
+    expect([...result.selection.paths]).toEqual(["b"]);
+    result = up(result.selection);
+    expect([...result.selection.paths]).toEqual(["a"]);
+  });
+
+  it("stops at the ends instead of wrapping", () => {
+    const last = clickRow(emptySelection(), rows, "e", plain);
+    expect(down(last).index).toBe(4);
+    const first = clickRow(emptySelection(), rows, "a", plain);
+    expect(up(first).index).toBe(0);
+  });
+
+  it("moves from the clicked row", () => {
+    const clicked = clickRow(emptySelection(), rows, "c", plain);
+    expect([...down(clicked).selection.paths]).toEqual(["d"]);
+  });
+
+  it("shift extends from the anchor and can shrink back", () => {
+    const start = clickRow(emptySelection(), rows, "b", plain);
+    const wider = down(down(start, true).selection, true);
+    expect([...wider.selection.paths]).toEqual(["b", "c", "d"]);
+    const narrower = up(wider.selection, true);
+    expect([...narrower.selection.paths]).toEqual(["b", "c"]);
+    expect(narrower.selection.anchor).toBe("b");
+  });
+
+  it("shift past the anchor flips the range to the other side", () => {
+    const start = clickRow(emptySelection(), rows, "c", plain);
+    const result = up(up(up(start, true).selection, true).selection, true);
+    expect([...result.selection.paths]).toEqual(["a", "b", "c"]);
+  });
+
+  it("returns null when there are no rows", () => {
+    expect(moveSelection(emptySelection(), [], 1, false)).toBeNull();
+  });
+
+  it("recovers when the focused row is gone", () => {
+    const stale = { paths: new Set(["zzz"]), anchor: "zzz", focus: "zzz" };
+    expect(moveSelection(stale, rows, 1, false)!.index).toBe(0);
   });
 });

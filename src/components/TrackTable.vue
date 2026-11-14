@@ -48,6 +48,7 @@ const columns: { key: SortKey; label: string }[] = [
         class="row item"
         :class="{ current: t.path === currentPath, selected: selected.has(t.path) }"
         role="row"
+        :data-index="i"
         :aria-selected="selected.has(t.path)"
         @click="emit('rowClick', i, $event)"
         @dblclick="emit('play', i)"
