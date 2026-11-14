@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod cache;
+pub mod cleanup;
 pub mod config;
 pub mod cover;
 pub mod library;
@@ -163,6 +164,15 @@ async fn remove_from_library(cache: State<'_, CacheDir>, paths: Vec<String>) -> 
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Moves the extra copies of duplicate songs to the Trash, after safety checks.
+/// Nothing is deleted outright: files the Trash can't take are left alone.
+#[tauri::command]
+async fn trash_duplicates(pairs: Vec<cleanup::DuplicatePair>) -> Result<cleanup::CleanupReport, String> {
+    tauri::async_runtime::spawn_blocking(move || cleanup::trash_duplicates(&pairs, cleanup::move_to_trash))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Shows songs in Finder.
@@ -483,6 +493,7 @@ pub fn run() {
             cached_library,
             remove_from_library,
             reveal_in_finder,
+            trash_duplicates,
             removed_count,
             restore_removed,
             cancel_scan,

@@ -24,6 +24,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     cachedLibrary: vi.fn(async () => null),
     removeFromLibrary: vi.fn(async () => {}),
     revealInFinder: vi.fn(async () => {}),
+    trashDuplicates: vi.fn(async () => ({ trashed: [], missing: [], skipped: [] })),
     removedCount: vi.fn(async () => 0),
     restoreRemoved: vi.fn(async () => {}),
     enqueueNext: vi.fn(async () => {}),
@@ -566,5 +567,75 @@ describe("fixing an unplayable song", () => {
     const { api } = fakeApi();
     await createStore(api).dismissError();
     expect(api.dismissError).toHaveBeenCalled();
+  });
+});
+
+describe("trashing duplicate copies", () => {
+  const keep = makeTrack({ path: "/m/a.mp3", title: "A" });
+  const dup1 = makeTrack({ path: "/m/a 1.mp3", title: "A" });
+  const dup2 = makeTrack({ path: "/m/a 2.mp3", title: "A" });
+
+  async function loaded(report: object, extra: Partial<Api> = {}) {
+    const fake = fakeApi({
+      cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: [keep, dup1, dup2], scannedAtMs: 1 })),
+      trashDuplicates: vi.fn(async () => report as never),
+      ...extra,
+    });
+    const store = createStore(fake.api);
+    await store.init();
+    return { ...fake, store };
+  }
+
+  const pairs = [
+    { keep: "/m/a.mp3", extra: "/m/a 1.mp3" },
+    { keep: "/m/a.mp3", extra: "/m/a 2.mp3" },
+  ];
+
+  it("hides what was trashed from the library and queue, and keeps what was left alone", async () => {
+    const { api, store, listeners } = await loaded({
+      trashed: ["/m/a 1.mp3"],
+      missing: [],
+      skipped: [{ path: "/m/a 2.mp3", reason: "Different size from the copy being kept." }],
+    });
+    listeners.queue[0]([dup1, keep, dup1]);
+
+    await store.trashDuplicates(pairs);
+
+    expect(api.trashDuplicates).toHaveBeenCalledWith(pairs);
+    expect(api.removeFromLibrary).toHaveBeenCalledWith(["/m/a 1.mp3"]);
+    expect(store.library.value.map((t) => t.path)).toEqual(["/m/a.mp3", "/m/a 2.mp3"]);
+    expect((api.removeFromQueue as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toEqual([2, 0]);
+    expect(store.cleanupReport.value?.skipped).toHaveLength(1);
+  });
+
+  it("also clears extras that were already gone from disk", async () => {
+    const { api, store } = await loaded({ trashed: [], missing: ["/m/a 2.mp3"], skipped: [] });
+    await store.trashDuplicates(pairs);
+    expect(api.removeFromLibrary).toHaveBeenCalledWith(["/m/a 2.mp3"]);
+  });
+
+  it("changes nothing in the library when everything was skipped", async () => {
+    const { api, store } = await loaded({
+      trashed: [],
+      missing: [],
+      skipped: [{ path: "/m/a 1.mp3", reason: "Couldn't move to the Trash: no Trash" }],
+    });
+    await store.trashDuplicates(pairs);
+    expect(api.removeFromLibrary).not.toHaveBeenCalled();
+    expect(store.library.value).toHaveLength(3);
+    expect(store.cleanupReport.value?.skipped[0].reason).toContain("no Trash");
+  });
+
+  it("reports a backend failure and leaves the library alone", async () => {
+    const { store } = await loaded({}, { trashDuplicates: vi.fn(async () => Promise.reject("boom")) });
+    await store.trashDuplicates(pairs);
+    expect(store.libraryError.value).toBe("boom");
+    expect(store.library.value).toHaveLength(3);
+  });
+
+  it("does nothing without pairs", async () => {
+    const { api, store } = await loaded({ trashed: [], missing: [], skipped: [] });
+    await store.trashDuplicates([]);
+    expect(api.trashDuplicates).not.toHaveBeenCalled();
   });
 });

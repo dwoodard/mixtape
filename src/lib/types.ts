@@ -56,3 +56,17 @@ export interface PlaylistSummary {
   durationMs: number;
   updatedAtMs: number;
 }
+
+export interface DuplicatePair {
+  keep: string;
+  extra: string;
+}
+
+export interface CleanupReport {
+  /** Moved to the Trash. */
+  trashed: string[];
+  /** Were already gone from disk. */
+  missing: string[];
+  /** Left alone, with why. */
+  skipped: { path: string; reason: string }[];
+}

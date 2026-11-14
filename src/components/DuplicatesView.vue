@@ -15,7 +15,14 @@ const folder = (path: string) => path.slice(0, path.length - fileName(path).leng
 async function removeExtras() {
   const songs = extras.value;
   confirming.value = false;
+  store.cleanupReport.value = null;
   await store.removeFromLibrary(songs);
+}
+
+async function trashExtras() {
+  const pairs = groups.value.flatMap((g) => g.extras.map((e) => ({ keep: g.keep.path, extra: e.path })));
+  confirming.value = false;
+  await store.trashDuplicates(pairs);
 }
 </script>
 
@@ -27,16 +34,35 @@ async function removeExtras() {
         {{ extras.length }} extra {{ extras.length === 1 ? "copy" : "copies" }}
       </span>
       <button v-if="!confirming" :disabled="extras.length === 0" @click="confirming = true">
-        Hide {{ extras.length }} extra {{ extras.length === 1 ? "copy" : "copies" }}…
+        Clean up {{ extras.length }} extra {{ extras.length === 1 ? "copy" : "copies" }}…
       </button>
     </div>
-    <div v-if="confirming" class="confirm" role="alertdialog" aria-label="Confirm hiding duplicates">
+    <div v-if="confirming" class="confirm" role="alertdialog" aria-label="Clean up duplicates">
       <span>
-        Remove {{ extras.length }} extra {{ extras.length === 1 ? "copy" : "copies" }} from the library, keeping the
-        ✓ ones? The files stay on disk, and “Restore removed” brings them back.
+        {{ extras.length }} extra {{ extras.length === 1 ? "copy" : "copies" }}, keeping the ✓ ones.
+        <strong>Move to Trash</strong> takes the files off disk (recoverable from the Trash; anything the drive can't
+        trash is left alone). <strong>Hide</strong> only removes them from this library.
       </span>
-      <button class="danger" @click="removeExtras()">Remove from library</button>
+      <button class="danger" @click="trashExtras()">Move to Trash</button>
+      <button @click="removeExtras()">Hide only</button>
       <button @click="confirming = false">Cancel</button>
+    </div>
+    <div v-if="store.cleanupReport.value" class="report" role="status">
+      <p v-if="store.cleanupReport.value.trashed.length > 0">
+        Moved {{ store.cleanupReport.value.trashed.length }} to the Trash.
+      </p>
+      <p v-if="store.cleanupReport.value.missing.length > 0">
+        {{ store.cleanupReport.value.missing.length }} were already gone from disk, so they were just removed from the library.
+      </p>
+      <p v-if="store.cleanupReport.value.skipped.length > 0" class="left">
+        Left alone ({{ store.cleanupReport.value.skipped.length }}):
+      </p>
+      <ul v-if="store.cleanupReport.value.skipped.length > 0">
+        <li v-for="s in store.cleanupReport.value.skipped" :key="s.path">
+          <strong>{{ fileName(s.path) }}</strong> — {{ s.reason }}
+        </li>
+      </ul>
+      <button @click="store.cleanupReport.value = null">Dismiss</button>
     </div>
     <p v-if="store.libraryError.value" class="error" role="alert">{{ store.libraryError.value }}</p>
 
@@ -70,6 +96,11 @@ async function removeExtras() {
 .confirm { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel-3); border-bottom: 1px solid var(--line); font-size: 12px; }
 .confirm span { margin-right: auto; }
 .danger { background: #8a2f36; border-color: #8a2f36; color: #fff; }
+.report { padding: 6px 10px; font-size: 12px; background: var(--panel-3); border-bottom: 1px solid var(--line); }
+.report p { margin: 0 0 2px; }
+.report .left { color: #ffb4b4; }
+.report ul { margin: 2px 0 6px; padding-left: 18px; color: var(--muted); }
+.report button { padding: 1px 8px; font-size: 12px; }
 .error { margin: 0; padding: 6px 12px; background: #4a2328; color: #ffb4b4; font-size: 12px; }
 .groups { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
 .group { padding: 8px 10px; border-bottom: 1px solid var(--line); }

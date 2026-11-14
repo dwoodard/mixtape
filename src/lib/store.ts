@@ -1,6 +1,6 @@
 import { ref } from "vue";
 import { tauriApi, type Api } from "./api";
-import type { PlayerState, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
+import type { CleanupReport, DuplicatePair, PlayerState, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 /** What the backend returns when a scan was cancelled. */
 const SCAN_CANCELLED = "cancelled";
@@ -33,6 +33,8 @@ export function createStore(api: Api) {
   /** Songs hidden from the library by the user (their files are untouched). */
   const removedCount = ref(0);
   const libraryError = ref<string | null>(null);
+  /** What the last "move extra copies to Trash" did, for the Duplicates tab to show. */
+  const cleanupReport = ref<CleanupReport | null>(null);
   const scanProgress = ref<ScanProgress | null>(null);
   const playlists = ref<PlaylistSummary[]>([]);
   /** Why the last playlist action failed, if it did. */
@@ -181,6 +183,32 @@ export function createStore(api: Api) {
     await api.dismissError();
   }
 
+  /**
+   * Moves duplicate extras to the Trash (the backend checks each one first),
+   * then takes whatever was trashed or already gone out of the library and
+   * the queue. Anything left alone stays in the library and is reported.
+   */
+  async function trashDuplicates(pairs: DuplicatePair[]) {
+    if (pairs.length === 0) return;
+    libraryError.value = null;
+    cleanupReport.value = null;
+    let report: CleanupReport;
+    try {
+      report = await api.trashDuplicates(pairs);
+    } catch (e) {
+      libraryError.value = String(e);
+      return;
+    }
+    cleanupReport.value = report;
+    const gone = [...report.trashed, ...report.missing];
+    if (gone.length === 0) return;
+    await removeFromLibrary(gone.map((path) => ({ path }) as Track));
+    const goneSet = new Set(gone);
+    // Highest index first so earlier removals do not shift the later ones.
+    const indexes = queue.value.flatMap((t, i) => (goneSet.has(t.path) ? [i] : [])).reverse();
+    for (const i of indexes) await api.removeFromQueue(i);
+  }
+
   /** Shows the songs' files in Finder. */
   async function revealInFinder(tracks: Track[]) {
     if (tracks.length === 0) return;
@@ -245,6 +273,8 @@ export function createStore(api: Api) {
     importLibrary,
     refresh,
     removeFromLibrary,
+    trashDuplicates,
+    cleanupReport,
     removeUnplayable,
     dismissError: () => api.dismissError(),
     revealInFinder,

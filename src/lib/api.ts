@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { CachedLibrary, PlayerSnapshot, PlayerState, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
+import type { CachedLibrary, CleanupReport, DuplicatePair, PlayerSnapshot, PlayerState, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 type Unlisten = () => void;
 
@@ -17,6 +17,7 @@ export interface Api {
   cachedLibrary(): Promise<CachedLibrary | null>;
   removeFromLibrary(paths: string[]): Promise<void>;
   revealInFinder(paths: string[]): Promise<void>;
+  trashDuplicates(pairs: DuplicatePair[]): Promise<CleanupReport>;
   removedCount(): Promise<number>;
   restoreRemoved(): Promise<void>;
   playTracks(tracks: Track[], start: number): Promise<void>;
@@ -61,6 +62,7 @@ export const tauriApi: Api = {
   cachedLibrary: () => invoke("cached_library"),
   removeFromLibrary: (paths) => invoke("remove_from_library", { paths }),
   revealInFinder: (paths) => invoke("reveal_in_finder", { paths }),
+  trashDuplicates: (pairs) => invoke("trash_duplicates", { pairs }),
   removedCount: () => invoke("removed_count"),
   restoreRemoved: () => invoke("restore_removed"),
   playTracks: (tracks, start) => invoke("play_tracks", { tracks, start }),
