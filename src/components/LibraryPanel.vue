@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
+import { findDuplicates } from "../lib/duplicates";
 import { formatAgo } from "../lib/format";
 import { store } from "../lib/store";
 import { filterTracks } from "../lib/trackList";
 import { libraryView, type LibraryView } from "../lib/ui";
 import AlbumsView from "./AlbumsView.vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
+import DuplicatesView from "./DuplicatesView.vue";
 import ArtistsView from "./ArtistsView.vue";
 import PlaylistsView from "./PlaylistsView.vue";
 import TrackPane from "./TrackPane.vue";
@@ -47,12 +49,19 @@ const menuItems = computed<MenuItem[]>(() => {
   return items;
 });
 
-const tabs: { id: LibraryView; label: string }[] = [
+const duplicateCount = computed(() => findDuplicates(store.library.value).length);
+// The tab only exists while there is something to clean up.
+const tabs = computed<{ id: LibraryView; label: string }[]>(() => [
   { id: "tracks", label: "Tracks" },
   { id: "albums", label: "Albums" },
   { id: "artists", label: "Artists" },
   { id: "playlists", label: "Playlists" },
-];
+  ...(duplicateCount.value > 0 ? [{ id: "duplicates" as const, label: `Duplicates (${duplicateCount.value})` }] : []),
+]);
+// Once the last duplicate is gone, leave the tab instead of showing an empty one.
+watch(duplicateCount, (n) => {
+  if (n === 0 && libraryView.value === "duplicates") libraryView.value = "tracks";
+});
 
 const scanLabel = computed(() => {
   const p = store.scanProgress.value;
@@ -85,7 +94,7 @@ const scanLabel = computed(() => {
         type="search"
         placeholder="Filter"
         aria-label="Filter library"
-        :disabled="libraryView === 'playlists'"
+        :disabled="libraryView === 'playlists' || libraryView === 'duplicates'"
       />
       <span class="count">
         {{ filtered.length }} tracks<template v-if="store.scannedAt.value">
@@ -108,6 +117,7 @@ const scanLabel = computed(() => {
     <p v-if="store.scanError.value" class="error" role="alert">{{ store.scanError.value }}</p>
 
     <PlaylistsView v-if="libraryView === 'playlists'" />
+    <DuplicatesView v-else-if="libraryView === 'duplicates'" />
     <div v-else-if="store.library.value.length === 0" class="hint">
       <p>{{ store.scanning.value ? scanLabel : "Open a folder to load your music." }}</p>
       <!-- First-run actions: shown only while there is nothing to browse. -->
