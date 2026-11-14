@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { formatTime, trackLabel } from "../lib/format";
+import { formatAgo, formatTime, trackLabel } from "../lib/format";
 import { store } from "../lib/store";
 import { filterTracks, sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
@@ -75,9 +75,19 @@ function sortBy(key: SortKey) {
           <button :disabled="store.scanning.value" @click="store.openFolder()">
             Open folder…
           </button>
+          <button
+            v-if="store.folder.value && !store.scanning.value"
+            :title="`Look for new or changed files in ${store.folder.value}`"
+            @click="store.refresh()"
+          >
+            Refresh
+          </button>
           <button v-if="store.scanning.value" @click="store.cancelScan()">Cancel</button>
           <input v-model="query" type="search" placeholder="Filter" aria-label="Filter library" />
-          <span class="count">{{ visible.length }} tracks</span>
+          <span class="count">
+            {{ visible.length }} tracks<template v-if="store.scannedAt.value">
+              · scanned {{ formatAgo(store.scannedAt.value, Date.now()) }}</template>
+          </span>
           <button :disabled="visible.length === 0" @click="store.enqueue(visible)">Queue all</button>
         </div>
         <p v-if="store.scanning.value && store.library.value.length > 0" class="scan-status" role="status">

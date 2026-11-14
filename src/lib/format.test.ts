@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatTime, trackLabel } from "./format";
+import { formatAgo, formatTime, trackLabel } from "./format";
 import { makeTrack } from "./testing";
 
 describe("formatTime", () => {
@@ -31,5 +31,20 @@ describe("trackLabel", () => {
 
   it("describes the empty state", () => {
     expect(trackLabel(null)).toBe("Nothing playing");
+  });
+});
+
+describe("formatAgo", () => {
+  const now = 1_000_000_000_000;
+  it("describes recent and older times", () => {
+    expect(formatAgo(now - 20_000, now)).toBe("just now");
+    expect(formatAgo(now - 5 * 60_000, now)).toBe("5 min ago");
+    expect(formatAgo(now - 3 * 3_600_000, now)).toBe("3 h ago");
+    expect(formatAgo(now - 24 * 3_600_000, now)).toBe("1 day ago");
+    expect(formatAgo(now - 49 * 3_600_000, now)).toBe("2 days ago");
+  });
+
+  it("treats a time in the future as just now", () => {
+    expect(formatAgo(now + 60_000, now)).toBe("just now");
   });
 });

@@ -36,3 +36,9 @@ export interface ScanProgress {
   /** 0 while discovering (unknown). */
   total: number;
 }
+
+export interface CachedLibrary {
+  folder: string;
+  tracks: Track[];
+  scannedAtMs: number;
+}

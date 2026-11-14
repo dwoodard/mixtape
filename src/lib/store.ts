@@ -23,6 +23,8 @@ export function createStore(api: Api) {
   const folder = ref<string | null>(null);
   /** Folder saved in config.json, or null when none is set. */
   const configuredFolder = ref<string | null>(null);
+  /** When the library was last scanned (ms since epoch), or null if never. */
+  const scannedAt = ref<number | null>(null);
   const scanning = ref(false);
   const scanError = ref<string | null>(null);
   const scanProgress = ref<ScanProgress | null>(null);
@@ -45,6 +47,13 @@ export function createStore(api: Api) {
     queue.value = snapshot.queue;
     mode.value = await api.windowMode();
     configuredFolder.value = await api.musicFolder();
+    // Show the saved library right away; a refresh is up to the user.
+    const cached = await api.cachedLibrary();
+    if (cached && library.value.length === 0) {
+      library.value = cached.tracks;
+      folder.value = cached.folder;
+      scannedAt.value = cached.scannedAtMs;
+    }
     return () => unlisten.forEach((fn) => fn());
   }
 
@@ -58,6 +67,7 @@ export function createStore(api: Api) {
       if (id !== scanId) return;
       library.value = tracks;
       folder.value = path;
+      scannedAt.value = Date.now();
     } catch (e) {
       // A cancelled scan keeps the previous library and is not an error.
       if (id === scanId && String(e) !== SCAN_CANCELLED) scanError.value = String(e);
@@ -67,6 +77,13 @@ export function createStore(api: Api) {
         scanProgress.value = null;
       }
     }
+  }
+
+  /** Rescans the current folder. Only new or changed files are re-read. */
+  async function refresh() {
+    if (!folder.value) return;
+    const path = folder.value;
+    await scan(path, () => api.scanFolder(path));
   }
 
   async function cancelScan() {
@@ -95,6 +112,7 @@ export function createStore(api: Api) {
     library,
     folder,
     configuredFolder,
+    scannedAt,
     scanning,
     scanError,
     scanProgress,
@@ -102,6 +120,7 @@ export function createStore(api: Api) {
     init,
     openFolder,
     importLibrary,
+    refresh,
     cancelScan,
     toggleMode,
     /** Replaces the queue with `tracks` and starts at `index`. */

@@ -21,6 +21,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     musicFolder: vi.fn(async () => "/nas/music" as string | null),
     importLibrary: vi.fn(async () => [makeTrack()]),
     cancelScan: vi.fn(async () => {}),
+    cachedLibrary: vi.fn(async () => null),
     playTracks: vi.fn(async () => {}),
     enqueue: vi.fn(async () => {}),
     playIndex: vi.fn(async () => {}),
@@ -261,5 +262,54 @@ describe("scan progress and cancel", () => {
     await second;
     expect(store.library.value[0].title).toBe("Second");
     expect(store.scanning.value).toBe(false);
+  });
+});
+
+describe("saved library", () => {
+  it("shows the cached library on init without scanning", async () => {
+    const { api } = fakeApi({
+      cachedLibrary: vi.fn(async () => ({
+        folder: "/Volumes/music",
+        tracks: [makeTrack({ title: "Cached" })],
+        scannedAtMs: 1234,
+      })),
+    });
+    const store = createStore(api);
+
+    await store.init();
+
+    expect(store.library.value[0].title).toBe("Cached");
+    expect(store.folder.value).toBe("/Volumes/music");
+    expect(store.scannedAt.value).toBe(1234);
+    expect(api.scanFolder).not.toHaveBeenCalled();
+    expect(api.importLibrary).not.toHaveBeenCalled();
+  });
+
+  it("starts empty when nothing is cached", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.init();
+    expect(store.library.value).toEqual([]);
+    expect(store.scannedAt.value).toBeNull();
+  });
+
+  it("refresh rescans the current folder and updates the scan time", async () => {
+    const { api } = fakeApi({
+      cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: [makeTrack()], scannedAtMs: 1 })),
+    });
+    const store = createStore(api);
+    await store.init();
+
+    await store.refresh();
+
+    expect(api.scanFolder).toHaveBeenCalledWith("/m");
+    expect(store.scannedAt.value).toBeGreaterThan(1);
+  });
+
+  it("refresh does nothing without a folder", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.refresh();
+    expect(api.scanFolder).not.toHaveBeenCalled();
   });
 });

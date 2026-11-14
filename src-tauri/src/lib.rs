@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod cache;
 pub mod config;
 pub mod library;
 pub mod media;
@@ -9,6 +10,7 @@ pub mod window;
 pub mod window_state;
 
 use audio::RodioBackend;
+use cache::{CacheDir, LibraryCache};
 use config::Config;
 use media::{MediaCommand, MediaSession};
 use player::{Player, PlayerEvent, PlayerState};
@@ -60,20 +62,72 @@ impl ScanControl {
     }
 }
 
-async fn scan(app: AppHandle, control: &ScanControl, root: PathBuf) -> Result<Vec<Track>, String> {
+async fn scan(
+    app: AppHandle,
+    control: &ScanControl,
+    cache: &CacheDir,
+    root: PathBuf,
+) -> Result<Vec<Track>, String> {
     let cancel = control.begin();
+    let cache = cache.clone();
     // Everything that touches the (possibly network) file system runs off the async thread.
     tauri::async_runtime::spawn_blocking(move || {
         if !root.is_dir() {
             return Err(format!("{} is not available. Is the drive mounted?", root.display()));
         }
-        library::scan_folder_with(&root, &cancel, |p| {
+        let previous = cache.load(&root);
+        let known = previous.as_ref().map(|c| c.known()).unwrap_or_default();
+        let scanned = library::scan_folder_with(&root, &cancel, &known, |p| {
             let _ = app.emit("scan-progress", p);
         })
-        .ok_or_else(|| SCAN_CANCELLED.to_string())
+        .ok_or_else(|| SCAN_CANCELLED.to_string())?;
+
+        // An unmounted share can leave an empty folder behind. Keep the
+        // cache rather than replacing a real library with nothing.
+        if scanned.is_empty() && !known.is_empty() {
+            return Err(format!(
+                "No audio files found in {}. Is the drive mounted? Your saved library was kept.",
+                root.display()
+            ));
+        }
+
+        let tracks = scanned.iter().map(|c| c.track.clone()).collect();
+        if let Err(e) = cache.save(&LibraryCache::new(&root, scanned)) {
+            eprintln!("could not save library cache: {e}");
+        }
+        Ok(tracks)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CachedLibrary {
+    folder: String,
+    tracks: Vec<Track>,
+    scanned_at_ms: u64,
+}
+
+/// The last scanned library, straight from the local cache (no folder access).
+#[tauri::command]
+async fn cached_library(
+    cache: State<'_, CacheDir>,
+    config: State<'_, Config>,
+) -> Result<Option<CachedLibrary>, String> {
+    let cache = cache.inner().clone();
+    let fallback = config.music_folder.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = cache.last_root().or(fallback)?;
+        let loaded = cache.load(&root)?;
+        Some(CachedLibrary {
+            folder: loaded.root.clone(),
+            scanned_at_ms: loaded.scanned_at_ms,
+            tracks: loaded.tracks.into_iter().map(|c| c.track).collect(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -85,9 +139,10 @@ fn cancel_scan(control: State<ScanControl>) {
 async fn scan_folder(
     app: AppHandle,
     control: State<'_, ScanControl>,
+    cache: State<'_, CacheDir>,
     path: String,
 ) -> Result<Vec<Track>, String> {
-    scan(app, &control, PathBuf::from(path)).await
+    scan(app, &control, &cache, PathBuf::from(path)).await
 }
 
 /// Scans the music folder saved in the config file.
@@ -95,13 +150,14 @@ async fn scan_folder(
 async fn import_library(
     app: AppHandle,
     control: State<'_, ScanControl>,
+    cache: State<'_, CacheDir>,
     config: State<'_, Config>,
 ) -> Result<Vec<Track>, String> {
     let root = config
         .music_folder
         .clone()
         .ok_or("No musicFolder set in config.json")?;
-    scan(app, &control, root).await
+    scan(app, &control, &cache, root).await
 }
 
 #[tauri::command]
@@ -255,6 +311,7 @@ pub fn run() {
         .setup(|app| {
             setup_player(app);
             app.manage(ScanControl::default());
+            app.manage(CacheDir(app.path().app_cache_dir()?.join("library")));
             setup_config(app)?;
             setup_window(app)?;
             Ok(())
@@ -276,6 +333,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             scan_folder,
             import_library,
+            cached_library,
             cancel_scan,
             music_folder,
             player_snapshot,
