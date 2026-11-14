@@ -317,7 +317,9 @@ impl Player {
         let removed_current = self.queue.remove(index);
         self.emit_queue();
         if removed_current {
-            if self.queue.current().is_some() && self.status != Status::Stopped {
+            // Only a song that was playing hands over to the next one; a paused or stopped
+            // player stays quiet, with the next song ready as the current one.
+            if self.queue.current().is_some() && self.status == Status::Playing {
                 self.start_current();
             } else {
                 self.stop_playback();
@@ -1152,5 +1154,17 @@ mod tests {
         h.player.toggle(); // Maya presses play / space
 
         assert_eq!(h.player.state().status, Status::Playing, "play did nothing: queue still holds a, but nothing is current");
+    }
+
+    #[test]
+    fn qa_removing_the_current_song_while_paused_does_not_start_music() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        h.player.pause();
+        assert_eq!(h.player.state().status, Status::Paused);
+
+        h.player.remove(0); // Maya removes the paused song
+
+        assert_ne!(h.player.state().status, Status::Playing, "the next song started by itself");
     }
 }
