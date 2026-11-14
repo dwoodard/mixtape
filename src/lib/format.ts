@@ -34,3 +34,21 @@ export function formatClock(ms: number): string {
   const minutes = Math.floor(total / 60);
   return `${String(minutes).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
+
+/** The last part of a path: "/a/b/song.mp3" -> "song.mp3". */
+export function fileName(path: string): string {
+  return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+/** True when a playback error means the file itself is gone (moved, deleted, or its drive is not mounted). */
+export function isMissingFileError(message: string): boolean {
+  return /no such file|os error 2|not found/i.test(message);
+}
+
+/** A sentence a person can act on, for the banner shown when a track cannot be played. */
+export function describePlaybackError(path: string, message: string): string {
+  const name = fileName(path);
+  return isMissingFileError(message)
+    ? `Can't find “${name}”. It may have been moved, renamed or deleted, or its drive isn't mounted.`
+    : `Can't play “${name}”: ${message}`;
+}

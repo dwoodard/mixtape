@@ -249,6 +249,11 @@ fn enqueue_next(player: State<PlayerHandle>, tracks: Vec<Track>) {
 }
 
 #[tauri::command]
+fn dismiss_error(player: State<PlayerHandle>) {
+    player.with(|p| p.clear_error());
+}
+
+#[tauri::command]
 fn stop_playback(player: State<PlayerHandle>) {
     player.with(|p| p.stop());
 }
@@ -487,6 +492,7 @@ pub fn run() {
             enqueue,
             enqueue_next,
             stop_playback,
+            dismiss_error,
             set_shuffle,
             set_repeat,
             list_playlists,

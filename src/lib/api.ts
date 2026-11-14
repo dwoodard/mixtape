@@ -23,6 +23,7 @@ export interface Api {
   enqueue(tracks: Track[]): Promise<void>;
   enqueueNext(tracks: Track[]): Promise<void>;
   stop(): Promise<void>;
+  dismissError(): Promise<void>;
   setShuffle(on: boolean): Promise<void>;
   setRepeat(repeat: Repeat): Promise<void>;
   listPlaylists(): Promise<PlaylistSummary[]>;
@@ -66,6 +67,7 @@ export const tauriApi: Api = {
   enqueue: (tracks) => invoke("enqueue", { tracks }),
   enqueueNext: (tracks) => invoke("enqueue_next", { tracks }),
   stop: () => invoke("stop_playback"),
+  dismissError: () => invoke("dismiss_error"),
   setShuffle: (on) => invoke("set_shuffle", { on }),
   setRepeat: (repeat) => invoke("set_repeat", { repeat }),
   listPlaylists: () => invoke("list_playlists"),

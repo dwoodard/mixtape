@@ -27,6 +27,7 @@ export function makePlayerState(overrides: Partial<PlayerState> = {}): PlayerSta
     shuffle: false,
     repeat: "off",
     error: null,
+    errorPath: null,
     ...overrides,
   };
 }

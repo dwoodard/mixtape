@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAgo, formatClock, formatTime, trackLabel } from "./format";
+import { describePlaybackError, fileName, formatAgo, formatClock, formatTime, isMissingFileError, trackLabel } from "./format";
 import { makeTrack } from "./testing";
 
 describe("formatTime", () => {
@@ -55,5 +55,24 @@ describe("formatClock", () => {
     expect(formatClock(46_000)).toBe("00:46");
     expect(formatClock(3_723_000)).toBe("62:03");
     expect(formatClock(-5)).toBe("00:00");
+  });
+});
+
+describe("playback error wording", () => {
+  it("takes the file name from a path", () => {
+    expect(fileName("/Volumes/music/Unknown Artist/song.wav")).toBe("song.wav");
+    expect(fileName("song.wav")).toBe("song.wav");
+  });
+
+  it("recognizes a missing file", () => {
+    expect(isMissingFileError("No such file or directory (os error 2)")).toBe(true);
+    expect(isMissingFileError("unsupported codec")).toBe(false);
+  });
+
+  it("explains a missing file in plain words and keeps other errors as they are", () => {
+    expect(describePlaybackError("/m/a.wav", "No such file or directory (os error 2)")).toBe(
+      "Can't find “a.wav”. It may have been moved, renamed or deleted, or its drive isn't mounted.",
+    );
+    expect(describePlaybackError("/m/a.wav", "unsupported codec")).toBe("Can't play “a.wav”: unsupported codec");
   });
 });

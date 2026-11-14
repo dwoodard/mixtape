@@ -25,6 +25,8 @@ export interface PlayerState {
   shuffle: boolean;
   repeat: Repeat;
   error: string | null;
+  /** The file that could not be played, when `error` is set. */
+  errorPath: string | null;
 }
 
 export interface PlayerSnapshot {

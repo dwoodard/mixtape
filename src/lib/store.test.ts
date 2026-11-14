@@ -28,6 +28,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     restoreRemoved: vi.fn(async () => {}),
     enqueueNext: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
+    dismissError: vi.fn(async () => {}),
     setShuffle: vi.fn(async () => {}),
     setRepeat: vi.fn(async () => {}),
     listPlaylists: vi.fn(async () => []),
@@ -525,5 +526,45 @@ describe("reveal in Finder", () => {
 
     await store.revealInFinder([makeTrack()]);
     expect(store.libraryError.value).toBe("not mounted");
+  });
+});
+
+describe("fixing an unplayable song", () => {
+  it("removes it from the library and every queue position, then clears the error", async () => {
+    const gone = makeTrack({ path: "/m/gone.wav" });
+    const ok = makeTrack({ path: "/m/ok.mp3" });
+    const { api, listeners } = fakeApi({
+      cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: [gone, ok], scannedAtMs: 1 })),
+      removedCount: vi.fn(async () => 1),
+    });
+    const store = createStore(api);
+    await store.init();
+    listeners.queue[0]([gone, ok, gone]);
+
+    await store.removeUnplayable("/m/gone.wav");
+
+    expect(api.removeFromLibrary).toHaveBeenCalledWith(["/m/gone.wav"]);
+    expect(store.library.value.map((t) => t.path)).toEqual(["/m/ok.mp3"]);
+    const removed = (api.removeFromQueue as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(removed).toEqual([2, 0]);
+    expect(api.dismissError).toHaveBeenCalled();
+    expect(store.removedCount.value).toBe(1);
+  });
+
+  it("leaves everything alone and reports the problem if the library cannot be updated", async () => {
+    const { api } = fakeApi({ removeFromLibrary: vi.fn(async () => Promise.reject("disk full")) });
+    const store = createStore(api);
+
+    await store.removeUnplayable("/m/gone.wav");
+
+    expect(store.libraryError.value).toBe("disk full");
+    expect(api.removeFromQueue).not.toHaveBeenCalled();
+    expect(api.dismissError).not.toHaveBeenCalled();
+  });
+
+  it("dismissError asks the backend to clear it", async () => {
+    const { api } = fakeApi();
+    await createStore(api).dismissError();
+    expect(api.dismissError).toHaveBeenCalled();
   });
 });

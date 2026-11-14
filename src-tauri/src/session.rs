@@ -203,6 +203,7 @@ mod tests {
             shuffle: true,
             repeat: Repeat::One,
             error: None,
+            error_path: None,
         }
     }
 

@@ -44,7 +44,9 @@ pub struct PlayerState {
     pub volume: f32,
     pub shuffle: bool,
     pub repeat: Repeat,
+    /// Why the last track could not be played, and which file it was.
     pub error: Option<String>,
+    pub error_path: Option<String>,
 }
 
 /// What is needed to bring the player back as it was at the last quit.
@@ -77,6 +79,7 @@ pub struct Player {
     pending_seek: Option<(usize, u64)>,
     token: u64,
     error: Option<String>,
+    error_path: Option<String>,
     backend: Box<dyn Backend>,
     emit: Box<dyn Fn(PlayerEvent) + Send>,
 }
@@ -91,6 +94,7 @@ impl Player {
             pending_seek: None,
             token: 0,
             error: None,
+            error_path: None,
             backend,
             emit,
         };
@@ -110,6 +114,7 @@ impl Player {
             shuffle: self.queue.shuffle(),
             repeat: self.queue.repeat(),
             error: self.error.clone(),
+            error_path: self.error_path.clone(),
         }
     }
 
@@ -153,6 +158,13 @@ impl Player {
         if !had_current {
             self.queue.jump(0);
         }
+        self.emit_state();
+    }
+
+    /// Hides the last playback error.
+    pub fn clear_error(&mut self) {
+        self.error = None;
+        self.error_path = None;
         self.emit_state();
     }
 
@@ -325,6 +337,7 @@ impl Player {
     /// skipped; the last error is reported in the state.
     fn start_current(&mut self) {
         self.error = None;
+        self.error_path = None;
         // Bounds skipping so a queue of unplayable files cannot loop forever
         // under repeat-all or shuffle.
         let mut attempts = self.queue.tracks().len().max(1);
@@ -347,7 +360,8 @@ impl Player {
                     break;
                 }
                 Err(message) => {
-                    self.error = Some(format!("{path}: {message}"));
+                    self.error = Some(message);
+                    self.error_path = Some(path);
                     attempts -= 1;
                     if attempts == 0 || self.queue.next(false).is_none() {
                         self.stop_playback();
@@ -648,7 +662,22 @@ mod tests {
         let state = h.player.state();
         assert_eq!(state.current_index, Some(2));
         assert_eq!(state.status, Status::Playing);
-        assert!(state.error.unwrap().contains("b.mp3"));
+        assert_eq!(state.error_path.as_deref(), Some("/music/b.mp3"));
+        assert_eq!(state.error.as_deref(), Some("cannot decode"));
+    }
+
+    #[test]
+    fn dismissing_the_error_clears_it_without_touching_playback() {
+        let mut h = Harness::new();
+        h.fake.fail_paths.lock().unwrap().push("/music/b.mp3".into());
+        h.load_abc(1);
+        assert!(h.player.state().error.is_some());
+
+        h.player.clear_error();
+
+        let state = h.player.state();
+        assert_eq!((state.error, state.error_path), (None, None));
+        assert_eq!(state.status, Status::Playing);
     }
 
     #[test]

@@ -15,6 +15,7 @@ const emptyState = (): PlayerState => ({
   shuffle: false,
   repeat: "off",
   error: null,
+  errorPath: null,
 });
 
 /** UI state plus the actions that talk to the Rust player. */
@@ -159,6 +160,27 @@ export function createStore(api: Api) {
     removedCount.value = await api.removedCount();
   }
 
+  /**
+   * Fixes a song that cannot be played because its file is gone: takes it out
+   * of the library and the queue. (A refresh instead would re-add it if the
+   * file turns up somewhere else.)
+   */
+  async function removeUnplayable(path: string) {
+    libraryError.value = null;
+    try {
+      await api.removeFromLibrary([path]);
+    } catch (e) {
+      libraryError.value = String(e);
+      return;
+    }
+    library.value = library.value.filter((t) => t.path !== path);
+    removedCount.value = await api.removedCount();
+    // Highest index first so earlier removals do not shift the later ones.
+    const indexes = queue.value.flatMap((t, i) => (t.path === path ? [i] : [])).reverse();
+    for (const i of indexes) await api.removeFromQueue(i);
+    await api.dismissError();
+  }
+
   /** Shows the songs' files in Finder. */
   async function revealInFinder(tracks: Track[]) {
     if (tracks.length === 0) return;
@@ -223,6 +245,8 @@ export function createStore(api: Api) {
     importLibrary,
     refresh,
     removeFromLibrary,
+    removeUnplayable,
+    dismissError: () => api.dismissError(),
     revealInFinder,
     restoreRemoved,
     refreshPlaylists,
