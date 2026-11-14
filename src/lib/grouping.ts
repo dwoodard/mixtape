@@ -15,7 +15,8 @@ export interface Artist {
   trackCount: number;
 }
 
-const text = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+const text = (a: string, b: string, numeric = false) =>
+  a.localeCompare(b, undefined, { sensitivity: "base", numeric });
 
 /** The artist an album is filed under: album artist, else track artist. */
 export function artistOf(track: Track): string {
@@ -93,4 +94,71 @@ export function albumHue(key: string): number {
   let hash = 0;
   for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
   return hash % 360;
+}
+
+export type GroupMode = "artist" | "genre" | "year" | "decade";
+export type GroupSort = "name" | "albums" | "tracks";
+export type SortDirection = "asc" | "desc";
+
+export interface Group {
+  name: string;
+  albumCount: number;
+  trackCount: number;
+}
+
+const UNKNOWN = "Unknown";
+
+/** Which group a track belongs to under `mode`. Tracks missing the tag land in an "Unknown …" group. */
+export function groupName(track: Track, mode: GroupMode): string {
+  switch (mode) {
+    case "artist":
+      return artistOf(track);
+    case "genre":
+      return track.genre || `${UNKNOWN} genre`;
+    case "year":
+      return track.year !== null ? String(track.year) : `${UNKNOWN} year`;
+    case "decade":
+      return track.year !== null ? `${Math.floor(track.year / 10) * 10}s` : `${UNKNOWN} decade`;
+  }
+}
+
+/**
+ * Groups tracks by `mode`, with how many distinct albums and tracks each has,
+ * sorted by `sort` in `direction`. "Unknown …" groups always come last, and
+ * ties fall back to the name so the order is stable.
+ */
+export function groupTracks(
+  tracks: Track[],
+  mode: GroupMode,
+  sort: GroupSort,
+  direction: SortDirection,
+): Group[] {
+  const albums = new Map<string, Set<string>>();
+  const counts = new Map<string, number>();
+  for (const t of tracks) {
+    const name = groupName(t, mode);
+    if (!albums.has(name)) albums.set(name, new Set());
+    albums.get(name)!.add(`${artistOf(t)}\u0000${albumTitleOf(t)}`);
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const groups = [...albums.entries()].map(([name, set]) => ({
+    name,
+    albumCount: set.size,
+    trackCount: counts.get(name)!,
+  }));
+
+  const sign = direction === "asc" ? 1 : -1;
+  const byName = (a: Group, b: Group) => text(a.name, b.name, true);
+  return groups.sort((a, b) => {
+    const aUnknown = a.name.startsWith(UNKNOWN);
+    const bUnknown = b.name.startsWith(UNKNOWN);
+    if (aUnknown !== bUnknown) return aUnknown ? 1 : -1;
+    const primary = sort === "name" ? byName(a, b) : (a[sort === "albums" ? "albumCount" : "trackCount"] - b[sort === "albums" ? "albumCount" : "trackCount"]);
+    return primary * sign || byName(a, b);
+  });
+}
+
+/** A group's tracks in album order. */
+export function tracksInGroup(tracks: Track[], mode: GroupMode, name: string): Track[] {
+  return groupAlbums(tracks.filter((t) => groupName(t, mode) === name)).flatMap((a) => a.tracks);
 }

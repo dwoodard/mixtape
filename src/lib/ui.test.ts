@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampMenuPosition, persistedFlag, type FlagStorage } from "./ui";
+import { clampMenuPosition, persistedChoice, persistedFlag, type FlagStorage } from "./ui";
 
 function memoryStorage(initial: Record<string, string> = {}): FlagStorage & { data: Record<string, string> } {
   const data = { ...initial };
@@ -60,5 +60,23 @@ describe("clampMenuPosition", () => {
   it("never goes past the top-left margin, even for a menu larger than the window", () => {
     expect(clampMenuPosition(-10, -10, 180, 200, 1100, 700)).toEqual({ x: 4, y: 4 });
     expect(clampMenuPosition(0, 0, 2000, 2000, 1100, 700)).toEqual({ x: 4, y: 4 });
+  });
+});
+
+describe("persistedChoice", () => {
+  const allowed = ["a", "b", "c"] as const;
+
+  it("restores a saved allowed value and ignores anything else", () => {
+    expect(persistedChoice("k", "a", allowed, memoryStorage({ k: "c" })).choice.value).toBe("c");
+    expect(persistedChoice("k", "a", allowed, memoryStorage({ k: "zzz" })).choice.value).toBe("a");
+    expect(persistedChoice("k", "b", allowed, memoryStorage()).choice.value).toBe("b");
+  });
+
+  it("saves changes", () => {
+    const storage = memoryStorage();
+    const { choice, set } = persistedChoice("k", "a", allowed, storage);
+    set("b");
+    expect(choice.value).toBe("b");
+    expect(storage.data.k).toBe("b");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { albumHue, groupAlbums, groupArtists, sortAlbumTracks, tracksForArtist } from "./grouping";
+import { albumHue, groupAlbums, groupName, groupTracks, tracksInGroup, groupArtists, sortAlbumTracks, tracksForArtist } from "./grouping";
 import { makeTrack } from "./testing";
 
 const tracks = [
@@ -87,5 +87,76 @@ describe("albumHue", () => {
 
   it("usually differs between albums", () => {
     expect(albumHue("a")).not.toBe(albumHue("b"));
+  });
+});
+
+describe("groupName", () => {
+  const t = makeTrack({ artist: "Abe", genre: "Jazz", year: 1994 });
+
+  it("names the group under each mode", () => {
+    expect(groupName(t, "artist")).toBe("Abe");
+    expect(groupName(t, "genre")).toBe("Jazz");
+    expect(groupName(t, "year")).toBe("1994");
+    expect(groupName(t, "decade")).toBe("1990s");
+  });
+
+  it("puts tracks missing the tag in an Unknown group", () => {
+    const bare = makeTrack({ genre: "", year: null });
+    expect(groupName(bare, "genre")).toBe("Unknown genre");
+    expect(groupName(bare, "year")).toBe("Unknown year");
+    expect(groupName(bare, "decade")).toBe("Unknown decade");
+  });
+});
+
+describe("groupTracks", () => {
+  const library = [
+    makeTrack({ path: "1", artist: "Abe", album: "X", genre: "Jazz", year: 1994 }),
+    makeTrack({ path: "2", artist: "Abe", album: "X", genre: "Jazz", year: 1994 }),
+    makeTrack({ path: "3", artist: "Abe", album: "Y", genre: "Rock", year: 2003 }),
+    makeTrack({ path: "4", artist: "Zed", album: "Z", genre: "Rock", year: 1998 }),
+    makeTrack({ path: "5", artist: "Mia", album: "W", genre: "", year: null }),
+  ];
+  const names = (g: { name: string }[]) => g.map((x) => x.name);
+
+  it("groups by genre and counts distinct albums and tracks", () => {
+    const groups = groupTracks(library, "genre", "name", "asc");
+    expect(groups).toEqual([
+      { name: "Jazz", albumCount: 1, trackCount: 2 },
+      { name: "Rock", albumCount: 2, trackCount: 2 },
+      { name: "Unknown genre", albumCount: 1, trackCount: 1 },
+    ]);
+  });
+
+  it("sorts decades numerically with unknown last", () => {
+    expect(names(groupTracks(library, "decade", "name", "asc"))).toEqual(["1990s", "2000s", "Unknown decade"]);
+    expect(names(groupTracks(library, "decade", "name", "desc"))).toEqual(["2000s", "1990s", "Unknown decade"]);
+  });
+
+  it("sorts by track or album count, breaking ties by name", () => {
+    expect(names(groupTracks(library, "artist", "tracks", "desc"))).toEqual(["Abe", "Mia", "Zed"]);
+    expect(names(groupTracks(library, "artist", "tracks", "asc"))).toEqual(["Mia", "Zed", "Abe"]);
+    expect(names(groupTracks(library, "artist", "albums", "desc"))).toEqual(["Abe", "Mia", "Zed"]);
+  });
+
+  it("keeps Unknown groups last whichever way it is sorted", () => {
+    const sorted = groupTracks(library, "genre", "tracks", "asc");
+    expect(sorted[sorted.length - 1].name).toBe("Unknown genre");
+    const desc = groupTracks(library, "genre", "tracks", "desc");
+    expect(desc[desc.length - 1].name).toBe("Unknown genre");
+  });
+
+  it("returns nothing for no tracks", () => {
+    expect(groupTracks([], "artist", "name", "asc")).toEqual([]);
+  });
+});
+
+describe("tracksInGroup", () => {
+  it("returns a group's tracks in album order", () => {
+    const tracks = [
+      makeTrack({ path: "a", title: "B-side", genre: "Rock", album: "Two", year: 2001, trackNumber: 1 }),
+      makeTrack({ path: "b", title: "Opener", genre: "Rock", album: "One", year: 1999, trackNumber: 1 }),
+      makeTrack({ path: "c", title: "Other", genre: "Jazz", album: "Three" }),
+    ];
+    expect(tracksInGroup(tracks, "genre", "Rock").map((t) => t.title)).toEqual(["Opener", "B-side"]);
   });
 });

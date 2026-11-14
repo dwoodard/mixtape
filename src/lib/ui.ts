@@ -48,3 +48,30 @@ export function clampMenuPosition(
     Math.max(margin, Math.min(pos, limit - size - margin));
   return { x: fit(x, width, viewportWidth), y: fit(y, height, viewportHeight) };
 }
+
+/** A remembered choice among `allowed` values. Unknown or unreadable saved values fall back to `fallback`. */
+export function persistedChoice<T extends string>(
+  key: string,
+  fallback: T,
+  allowed: readonly T[],
+  storage?: FlagStorage,
+) {
+  const store = storage ?? (typeof localStorage === "undefined" ? undefined : localStorage);
+  let initial = fallback;
+  try {
+    const saved = store?.getItem(key);
+    if (saved && (allowed as readonly string[]).includes(saved)) initial = saved as T;
+  } catch {
+    // Storage can throw; keep the fallback.
+  }
+  const choice = ref(initial) as import("vue").Ref<T>;
+  const set = (value: T) => {
+    choice.value = value;
+    try {
+      store?.setItem(key, value);
+    } catch {
+      // Not being able to remember is fine.
+    }
+  };
+  return { choice, set };
+}
