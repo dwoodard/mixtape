@@ -14,6 +14,7 @@ use media::{MediaCommand, MediaSession};
 use player::{Player, PlayerEvent, PlayerState};
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 use track::Track;
@@ -35,28 +36,72 @@ struct PlayerSnapshot {
     queue: Vec<Track>,
 }
 
-async fn scan(root: PathBuf) -> Result<Vec<Track>, String> {
-    if !root.is_dir() {
-        return Err(format!("{} is not available. Is the drive mounted?", root.display()));
+/// Error returned to the UI when a scan was cancelled (not shown as a failure).
+const SCAN_CANCELLED: &str = "cancelled";
+
+/// The flag of the scan currently running, if any. Starting a new scan
+/// cancels the previous one.
+#[derive(Default)]
+struct ScanControl(Mutex<Option<Arc<AtomicBool>>>);
+
+impl ScanControl {
+    fn begin(&self) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        if let Some(previous) = self.0.lock().unwrap().replace(flag.clone()) {
+            previous.store(true, Ordering::Relaxed);
+        }
+        flag
     }
-    tauri::async_runtime::spawn_blocking(move || library::scan_folder(&root))
-        .await
-        .map_err(|e| e.to_string())
+
+    fn cancel(&self) {
+        if let Some(flag) = self.0.lock().unwrap().as_ref() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+async fn scan(app: AppHandle, control: &ScanControl, root: PathBuf) -> Result<Vec<Track>, String> {
+    let cancel = control.begin();
+    // Everything that touches the (possibly network) file system runs off the async thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        if !root.is_dir() {
+            return Err(format!("{} is not available. Is the drive mounted?", root.display()));
+        }
+        library::scan_folder_with(&root, &cancel, |p| {
+            let _ = app.emit("scan-progress", p);
+        })
+        .ok_or_else(|| SCAN_CANCELLED.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn scan_folder(path: String) -> Result<Vec<Track>, String> {
-    scan(PathBuf::from(path)).await
+fn cancel_scan(control: State<ScanControl>) {
+    control.cancel();
+}
+
+#[tauri::command]
+async fn scan_folder(
+    app: AppHandle,
+    control: State<'_, ScanControl>,
+    path: String,
+) -> Result<Vec<Track>, String> {
+    scan(app, &control, PathBuf::from(path)).await
 }
 
 /// Scans the music folder saved in the config file.
 #[tauri::command]
-async fn import_library(config: State<'_, Config>) -> Result<Vec<Track>, String> {
+async fn import_library(
+    app: AppHandle,
+    control: State<'_, ScanControl>,
+    config: State<'_, Config>,
+) -> Result<Vec<Track>, String> {
     let root = config
         .music_folder
         .clone()
         .ok_or("No musicFolder set in config.json")?;
-    scan(root).await
+    scan(app, &control, root).await
 }
 
 #[tauri::command]
@@ -209,6 +254,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             setup_player(app);
+            app.manage(ScanControl::default());
             setup_config(app)?;
             setup_window(app)?;
             Ok(())
@@ -230,6 +276,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             scan_folder,
             import_library,
+            cancel_scan,
             music_folder,
             player_snapshot,
             play_tracks,

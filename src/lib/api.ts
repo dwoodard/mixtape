@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { PlayerSnapshot, PlayerState, Track, WindowMode } from "./types";
+import type { PlayerSnapshot, PlayerState, ScanProgress, Track, WindowMode } from "./types";
 
 type Unlisten = () => void;
 
@@ -13,6 +13,7 @@ export interface Api {
   scanFolder(path: string): Promise<Track[]>;
   musicFolder(): Promise<string | null>;
   importLibrary(): Promise<Track[]>;
+  cancelScan(): Promise<void>;
   playTracks(tracks: Track[], start: number): Promise<void>;
   enqueue(tracks: Track[]): Promise<void>;
   playIndex(index: number): Promise<void>;
@@ -29,6 +30,7 @@ export interface Api {
   onQueue(cb: (queue: Track[]) => void): Promise<Unlisten>;
   onPosition(cb: (positionMs: number) => void): Promise<Unlisten>;
   onWindowMode(cb: (mode: WindowMode) => void): Promise<Unlisten>;
+  onScanProgress(cb: (progress: ScanProgress) => void): Promise<Unlisten>;
 }
 
 export const tauriApi: Api = {
@@ -41,6 +43,7 @@ export const tauriApi: Api = {
   scanFolder: (path) => invoke("scan_folder", { path }),
   musicFolder: () => invoke("music_folder"),
   importLibrary: () => invoke("import_library"),
+  cancelScan: () => invoke("cancel_scan"),
   playTracks: (tracks, start) => invoke("play_tracks", { tracks, start }),
   enqueue: (tracks) => invoke("enqueue", { tracks }),
   playIndex: (index) => invoke("play_index", { index }),
@@ -57,4 +60,5 @@ export const tauriApi: Api = {
   onQueue: (cb) => listen<Track[]>("player-queue", (e) => cb(e.payload)),
   onPosition: (cb) => listen<number>("player-position", (e) => cb(e.payload)),
   onWindowMode: (cb) => listen<WindowMode>("window-mode", (e) => cb(e.payload)),
+  onScanProgress: (cb) => listen<ScanProgress>("scan-progress", (e) => cb(e.payload)),
 };

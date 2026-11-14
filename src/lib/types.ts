@@ -29,3 +29,10 @@ export interface PlayerSnapshot {
 }
 
 export type WindowMode = "thin" | "large";
+
+export interface ScanProgress {
+  phase: "discovering" | "reading";
+  done: number;
+  /** 0 while discovering (unknown). */
+  total: number;
+}

@@ -1,23 +1,83 @@
 use crate::track::{is_audio_file, read_track, Track};
 use rayon::prelude::*;
+use serde::Serialize;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use walkdir::WalkDir;
+
+/// How far a scan has got. While `Discovering`, `total` is unknown (0) and
+/// `done` counts audio files found so far. While `Reading`, `done` of `total`
+/// files have had their tags read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanProgress {
+    pub phase: ScanPhase,
+    pub done: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScanPhase {
+    Discovering,
+    Reading,
+}
+
+/// Report progress at most this often (in files) so slow network shares and
+/// huge libraries do not flood the UI.
+const PROGRESS_EVERY: usize = 25;
 
 /// Recursively scans `root` for audio files and reads their tags.
 /// Files that cannot be parsed are skipped. The result is ordered by
 /// album artist/artist, album, disc, track, then path.
 pub fn scan_folder(root: &Path) -> Vec<Track> {
-    let paths: Vec<_> = WalkDir::new(root)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file() && is_audio_file(e.path()))
-        .map(|e| e.into_path())
-        .collect();
+    scan_folder_with(root, &AtomicBool::new(false), |_| {}).unwrap_or_default()
+}
 
-    let mut tracks: Vec<Track> = paths.par_iter().filter_map(|p| read_track(p)).collect();
+/// Like [`scan_folder`], but reports progress and stops early when `cancel`
+/// is set, returning `None`. Unreadable directories are skipped.
+pub fn scan_folder_with(
+    root: &Path,
+    cancel: &AtomicBool,
+    on_progress: impl Fn(ScanProgress) + Sync,
+) -> Option<Vec<Track>> {
+    let mut paths = Vec::new();
+    for entry in WalkDir::new(root).follow_links(true).into_iter().filter_map(Result::ok) {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+        if entry.file_type().is_file() && is_audio_file(entry.path()) {
+            paths.push(entry.into_path());
+            if paths.len() % PROGRESS_EVERY == 0 {
+                on_progress(ScanProgress { phase: ScanPhase::Discovering, done: paths.len(), total: 0 });
+            }
+        }
+    }
+
+    let total = paths.len();
+    on_progress(ScanProgress { phase: ScanPhase::Reading, done: 0, total });
+    let done = AtomicUsize::new(0);
+    let read: Vec<Option<Track>> = paths
+        .par_iter()
+        .map(|p| {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            let track = read_track(p);
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if n % PROGRESS_EVERY == 0 || n == total {
+                on_progress(ScanProgress { phase: ScanPhase::Reading, done: n, total });
+            }
+            track
+        })
+        .collect();
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+
+    let mut tracks: Vec<Track> = read.into_iter().flatten().collect();
     tracks.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
-    tracks
+    Some(tracks)
 }
 
 fn sort_key(t: &Track) -> (String, String, u32, u32, String) {
@@ -78,6 +138,53 @@ mod tests {
             .map(|t| (t.artist.as_str(), t.track_number.unwrap()))
             .collect();
         assert_eq!(order, vec![("alpha", 9), ("Beta", 1), ("Beta", 2)]);
+    }
+
+    #[test]
+    fn reports_discovery_then_reading_progress_ending_at_total() {
+        use std::sync::Mutex;
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            write_wav(&dir.path().join(format!("{i:02}.wav")), 0.1);
+        }
+        let seen = Mutex::new(Vec::new());
+
+        let tracks = scan_folder_with(dir.path(), &AtomicBool::new(false), |p| {
+            seen.lock().unwrap().push(p)
+        })
+        .unwrap();
+
+        assert_eq!(tracks.len(), 30);
+        let seen = seen.into_inner().unwrap();
+        assert!(seen.iter().any(|p| p.phase == ScanPhase::Discovering && p.done == 25));
+        assert_eq!(
+            seen.last().copied(),
+            Some(ScanProgress { phase: ScanPhase::Reading, done: 30, total: 30 })
+        );
+    }
+
+    #[test]
+    fn cancelled_scan_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        write_wav(&dir.path().join("a.wav"), 0.1);
+        assert!(scan_folder_with(dir.path(), &AtomicBool::new(true), |_| {}).is_none());
+    }
+
+    #[test]
+    fn cancelling_from_the_progress_callback_stops_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..60 {
+            write_wav(&dir.path().join(format!("{i:02}.wav")), 0.1);
+        }
+        let cancel = AtomicBool::new(false);
+
+        let result = scan_folder_with(dir.path(), &cancel, |p| {
+            if p.phase == ScanPhase::Reading && p.done >= 25 {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        });
+
+        assert!(result.is_none());
     }
 
     #[test]

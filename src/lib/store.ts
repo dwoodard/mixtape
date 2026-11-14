@@ -1,6 +1,9 @@
 import { ref } from "vue";
 import { tauriApi, type Api } from "./api";
-import type { PlayerState, Track, WindowMode } from "./types";
+import type { PlayerState, ScanProgress, Track, WindowMode } from "./types";
+
+/** What the backend returns when a scan was cancelled. */
+const SCAN_CANCELLED = "cancelled";
 
 const emptyState = (): PlayerState => ({
   status: "stopped",
@@ -22,6 +25,9 @@ export function createStore(api: Api) {
   const configuredFolder = ref<string | null>(null);
   const scanning = ref(false);
   const scanError = ref<string | null>(null);
+  const scanProgress = ref<ScanProgress | null>(null);
+  /** Identifies the latest scan so a cancelled older one cannot clobber its state. */
+  let scanId = 0;
   const mode = ref<WindowMode>("large");
 
   /** Loads current state and subscribes to updates. Returns a cleanup function. */
@@ -31,6 +37,7 @@ export function createStore(api: Api) {
       api.onQueue((tracks) => (queue.value = tracks)),
       api.onPosition((ms) => (player.value = { ...player.value, positionMs: ms })),
       api.onWindowMode((m) => (mode.value = m)),
+      api.onScanProgress((p) => (scanProgress.value = p)),
     ]);
     // Subscribe first, then read the snapshot, so no update is missed in between.
     const snapshot = await api.snapshot();
@@ -42,16 +49,28 @@ export function createStore(api: Api) {
   }
 
   async function scan(path: string, load: () => Promise<Track[]>) {
+    const id = ++scanId;
     scanning.value = true;
     scanError.value = null;
+    scanProgress.value = null;
     try {
-      library.value = await load();
+      const tracks = await load();
+      if (id !== scanId) return;
+      library.value = tracks;
       folder.value = path;
     } catch (e) {
-      scanError.value = String(e);
+      // A cancelled scan keeps the previous library and is not an error.
+      if (id === scanId && String(e) !== SCAN_CANCELLED) scanError.value = String(e);
     } finally {
-      scanning.value = false;
+      if (id === scanId) {
+        scanning.value = false;
+        scanProgress.value = null;
+      }
     }
+  }
+
+  async function cancelScan() {
+    await api.cancelScan();
   }
 
   async function openFolder() {
@@ -78,10 +97,12 @@ export function createStore(api: Api) {
     configuredFolder,
     scanning,
     scanError,
+    scanProgress,
     mode,
     init,
     openFolder,
     importLibrary,
+    cancelScan,
     toggleMode,
     /** Replaces the queue with `tracks` and starts at `index`. */
     playTracks: (tracks: Track[], index: number) => api.playTracks(tracks, index),
