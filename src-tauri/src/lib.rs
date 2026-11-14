@@ -566,6 +566,12 @@ fn replace_queue_tracks(player: State<PlayerHandle>, replacements: Vec<QueueRepl
     player.with(|p| p.replace_tracks(replacements.into_iter().map(|r| (r.old_path, r.track)).collect()));
 }
 
+/// Moves a queue entry from one position to another.
+#[tauri::command]
+fn move_queue_track(player: State<PlayerHandle>, from: usize, to: usize) {
+    player.with(|p| p.move_track(from, to));
+}
+
 #[tauri::command]
 fn enqueue_next(player: State<PlayerHandle>, tracks: Vec<Track>) {
     player.with(|p| p.enqueue_next(tracks));
@@ -848,6 +854,7 @@ pub fn run() {
             enqueue,
             enqueue_next,
             replace_queue_tracks,
+            move_queue_track,
             stop_playback,
             dismiss_error,
             set_shuffle,

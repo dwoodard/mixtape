@@ -475,6 +475,8 @@ export function createStore(api: Api, storage?: FlagStorage) {
     seek: (ms: number) => api.seek(ms),
     setVolume: (v: number) => api.setVolume(v),
     removeFromQueue: (index: number) => api.removeFromQueue(index),
+    /** Moves a queue entry so it ends up at `to`. */
+    moveQueueTrack: (from: number, to: number) => api.moveQueueTrack(from, to),
     clearQueue: () => api.clearQueue(),
     quit: () => api.quit(),
   };

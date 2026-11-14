@@ -182,6 +182,15 @@ impl Player {
         }
     }
 
+    /// Moves a queue entry (by dragging it, or Move up / down). What is
+    /// playing keeps playing and keeps its marker; nothing is reloaded.
+    pub fn move_track(&mut self, from: usize, to: usize) {
+        if self.queue.move_track(from, to) {
+            self.emit_queue();
+            self.emit_state();
+        }
+    }
+
     pub fn set_shuffle(&mut self, on: bool) {
         self.queue.set_shuffle(on);
         self.emit_state();
@@ -621,6 +630,46 @@ mod tests {
         assert_eq!(h.loads().len(), loads_before, "nothing was reloaded");
         let events = h.events.lock().unwrap();
         assert!(events.iter().any(|e| matches!(e, PlayerEvent::Queue(q) if q.iter().any(|t| t.title == "b-retagged"))));
+    }
+
+    #[test]
+    fn moving_the_playing_track_keeps_it_playing_and_updates_its_position() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        let loads_before = h.loads().len();
+
+        h.player.move_track(0, 2);
+
+        let titles: Vec<_> = h.player.queue_tracks().iter().map(|t| t.title.clone()).collect();
+        assert_eq!(titles, vec!["b", "c", "a"]);
+        let state = h.player.state();
+        assert_eq!((state.status, state.current_index), (Status::Playing, Some(2)));
+        assert_eq!(state.current_track.unwrap().title, "a");
+        assert_eq!(h.loads().len(), loads_before, "nothing was reloaded");
+        // Next now goes to what follows it in the new order (nothing: it is last).
+        h.player.next();
+        assert_eq!(h.player.state().current_index, Some(2));
+    }
+
+    #[test]
+    fn moving_another_track_past_the_playing_one_changes_where_next_goes() {
+        let mut h = Harness::new();
+        h.load_abc(0); // playing a; queue a b c
+        h.player.move_track(2, 1); // a c b
+
+        h.player.next();
+
+        assert_eq!(h.player.state().current_track.unwrap().title, "c");
+    }
+
+    #[test]
+    fn an_invalid_move_emits_nothing() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        let before = h.events.lock().unwrap().len();
+        h.player.move_track(0, 0);
+        h.player.move_track(9, 1);
+        assert_eq!(h.events.lock().unwrap().len(), before);
     }
 
     #[test]

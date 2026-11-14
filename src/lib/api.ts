@@ -40,6 +40,7 @@ export interface Api {
   enqueue(tracks: Track[]): Promise<void>;
   enqueueNext(tracks: Track[]): Promise<void>;
   replaceQueueTracks(replacements: QueueReplacement[]): Promise<void>;
+  moveQueueTrack(from: number, to: number): Promise<void>;
   stop(): Promise<void>;
   dismissError(): Promise<void>;
   setShuffle(on: boolean): Promise<void>;
@@ -99,6 +100,7 @@ export const tauriApi: Api = {
   enqueue: (tracks) => invoke("enqueue", { tracks }),
   enqueueNext: (tracks) => invoke("enqueue_next", { tracks }),
   replaceQueueTracks: (replacements) => invoke("replace_queue_tracks", { replacements }),
+  moveQueueTrack: (from, to) => invoke("move_queue_track", { from, to }),
   stop: () => invoke("stop_playback"),
   dismissError: () => invoke("dismiss_error"),
   setShuffle: (on) => invoke("set_shuffle", { on }),

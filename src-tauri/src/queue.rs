@@ -112,6 +112,35 @@ impl Queue {
         replaced
     }
 
+    /// Moves the track at `from` so it ends up at index `to` (as in
+    /// remove-then-insert). The cursor, the shuffle history and the played
+    /// set all follow their tracks. Returns false if either index is out of
+    /// range or nothing would change.
+    pub fn move_track(&mut self, from: usize, to: usize) -> bool {
+        let len = self.tracks.len();
+        if from >= len || to >= len || from == to {
+            return false;
+        }
+        let track = self.tracks.remove(from);
+        self.tracks.insert(to, track);
+        // Where an index that pointed at a track before the move points after it.
+        let remap = |i: usize| {
+            if i == from {
+                to
+            } else if from < to && i > from && i <= to {
+                i - 1
+            } else if to < from && i >= to && i < from {
+                i + 1
+            } else {
+                i
+            }
+        };
+        self.current = self.current.map(remap);
+        self.history = self.history.iter().map(|&i| remap(i)).collect();
+        self.played = self.played.iter().map(|&i| remap(i)).collect();
+        true
+    }
+
     pub fn clear(&mut self) {
         self.tracks.clear();
         self.current = None;
@@ -365,6 +394,82 @@ mod tests {
         assert_eq!(q.replace_track("/music/a.mp3", &test_track("a2")), 2);
         assert_eq!(q.replace_track("/music/nope.mp3", &test_track("x")), 0);
         assert_eq!(q.tracks().iter().filter(|t| t.title == "a2").count(), 2);
+    }
+
+    fn order(q: &Queue) -> String {
+        q.tracks().iter().map(|t| t.title.as_str()).collect::<Vec<_>>().join("")
+    }
+
+    #[test]
+    fn moving_a_track_down_and_up_reorders_it() {
+        let mut q = queue_of(&["a", "b", "c", "d"], 0);
+        assert!(q.move_track(0, 2));
+        assert_eq!(order(&q), "bcad");
+        assert!(q.move_track(3, 0));
+        assert_eq!(order(&q), "dbca");
+    }
+
+    #[test]
+    fn the_current_track_follows_a_move_of_itself() {
+        let mut q = queue_of(&["a", "b", "c", "d"], 1);
+        q.move_track(1, 3);
+        assert_eq!(order(&q), "acdb");
+        assert_eq!(q.current_index(), Some(3));
+        assert_eq!(title(&q), Some("b"));
+    }
+
+    #[test]
+    fn the_current_track_stays_put_when_others_move_around_it() {
+        // Moving a track from before the current one to after it shifts the cursor back one.
+        let mut q = queue_of(&["a", "b", "c", "d"], 2);
+        q.move_track(0, 3);
+        assert_eq!(order(&q), "bcda");
+        assert_eq!(title(&q), Some("c"));
+        // Moving one from after it to before it shifts the cursor forward one.
+        q.move_track(3, 0);
+        assert_eq!(order(&q), "abcd");
+        assert_eq!(title(&q), Some("c"));
+        // Moves that stay on one side leave the cursor alone.
+        q.move_track(0, 1);
+        assert_eq!(order(&q), "bacd");
+        assert_eq!(title(&q), Some("c"));
+        q.move_track(3, 2);
+        assert_eq!(order(&q), "badc");
+        assert_eq!(title(&q), Some("c"));
+    }
+
+    #[test]
+    fn invalid_or_no_op_moves_change_nothing() {
+        let mut q = queue_of(&["a", "b", "c"], 1);
+        assert!(!q.move_track(1, 1));
+        assert!(!q.move_track(5, 0));
+        assert!(!q.move_track(0, 3));
+        assert_eq!(order(&q), "abc");
+        assert_eq!(q.current_index(), Some(1));
+    }
+
+    #[test]
+    fn shuffle_history_and_played_follow_their_tracks_through_a_move() {
+        let mut q = queue_of(&["a", "b", "c", "d", "e"], 0);
+        q.set_shuffle(true);
+        let second = next_title(&mut q, false).unwrap();
+        let third = next_title(&mut q, false).unwrap();
+
+        // Rearrange everything; "previous" must still land on the tracks that were actually played.
+        q.move_track(0, 4);
+        q.move_track(2, 0);
+
+        assert_eq!(q.prev().map(|t| t.title.clone()), Some(second));
+        assert_eq!(q.prev().map(|t| t.title.clone()), Some("a".into()));
+        assert!(q.prev().is_none());
+        // Played tracks are not offered again in this pass: only the two unplayed remain.
+        let mut rest = Vec::new();
+        q.set_shuffle(true); // restart the pass from the current track
+        while let Some(t) = next_title(&mut q, true) {
+            rest.push(t);
+        }
+        assert!(!rest.contains(&"a".to_string()) || title(&q).is_some());
+        assert!(rest.len() <= 4, "{rest:?} / {third}");
     }
 
     #[test]

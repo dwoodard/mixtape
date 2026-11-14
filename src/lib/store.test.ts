@@ -34,6 +34,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     importOpenInPicard: vi.fn(async () => {}),
     importCancelPicard: vi.fn(async () => {}),
     replaceQueueTracks: vi.fn(async () => {}),
+    moveQueueTrack: vi.fn(async () => {}),
     picardOpenFiles: vi.fn(async () => {}),
     refreshFolders: vi.fn(async () => []),
     importUndo: vi.fn(async () => ""),
@@ -220,7 +221,9 @@ describe("actions", () => {
     await store.setVolume(0.5);
     await store.removeFromQueue(1);
     await store.clearQueue();
+    await store.moveQueueTrack(3, 0);
 
+    expect(api.moveQueueTrack).toHaveBeenCalledWith(3, 0);
     expect(api.playTracks).toHaveBeenCalledWith(tracks, 0);
     expect(api.enqueue).toHaveBeenCalledWith(tracks);
     expect(api.playIndex).toHaveBeenCalledWith(2);
