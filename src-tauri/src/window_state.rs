@@ -102,14 +102,15 @@ pub fn thin_size(saved: Option<&Geometry>, scale_factor: f64, max: f64) -> (f64,
 }
 
 /// If the thin bar's height (physical pixels) is not the fixed one, the logical size to set
-/// it back to, with the width kept. `None` when it is right (a pixel of rounding is allowed).
-pub fn thin_height_fix(width_px: u32, height_px: u32, scale_factor: f64) -> Option<(f64, f64)> {
+/// it back to, with the width kept. `wanted_height` is the bar's height, plus the panel's while one
+/// is open. `None` when it is right (a pixel of rounding is allowed).
+pub fn thin_height_fix(width_px: u32, height_px: u32, scale_factor: f64, wanted_height: f64) -> Option<(f64, f64)> {
     let scale = if scale_factor.is_finite() && scale_factor > 0.0 { scale_factor } else { 1.0 };
-    let wanted = (THIN_HEIGHT * scale).round() as i64;
+    let wanted = (wanted_height * scale).round() as i64;
     if (height_px as i64 - wanted).abs() <= 1 {
         return None;
     }
-    Some((width_px as f64 / scale, THIN_HEIGHT))
+    Some((width_px as f64 / scale, wanted_height))
 }
 
 /// Where the left edge goes so a bar `width` pixels wide ends no further right than
@@ -120,6 +121,61 @@ pub fn x_to_fit_right_edge(x: i32, width: u32, left: i32, right: i32) -> i32 {
         return x;
     }
     ((x as i64 - overflow).max(left as i64)) as i32
+}
+
+/// Which way the thin bar's queue panel opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PanelSide {
+    Down,
+    Up,
+}
+
+/// How the panel opens: which side of the bar and how tall, in the same units as the inputs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PanelPlan {
+    pub side: PanelSide,
+    pub height: f64,
+}
+
+/// Chooses where the queue panel opens. `wanted` is the height that shows the whole queue and
+/// `few_rows` the least worth opening for. Down is preferred whenever the room below holds
+/// `few_rows` (or all of `wanted` if that is less); otherwise up on the same test; if neither
+/// side has that much, the larger side. The panel is never taller than the room on its side,
+/// so a long queue scrolls. All values are along the vertical axis of one monitor's work area
+/// (menu bar and Dock excluded), in one unit.
+pub fn plan_panel(bar_top: f64, bar_height: f64, work_top: f64, work_bottom: f64, wanted: f64, few_rows: f64) -> PanelPlan {
+    let below = (work_bottom - (bar_top + bar_height)).max(0.0);
+    let above = (bar_top - work_top).max(0.0);
+    let enough = wanted.min(few_rows);
+    let side = if below >= enough {
+        PanelSide::Down
+    } else if above >= enough {
+        PanelSide::Up
+    } else if above > below {
+        PanelSide::Up
+    } else {
+        PanelSide::Down
+    };
+    let room = if side == PanelSide::Down { below } else { above };
+    PanelPlan { side, height: wanted.min(room) }
+}
+
+/// The window's top edge while the panel is open: opening up moves it up by the panel's height so
+/// the bar stays where it was; opening down leaves it.
+pub fn window_top_open(bar_top: i32, side: PanelSide, panel_height: u32) -> i32 {
+    match side {
+        PanelSide::Down => bar_top,
+        PanelSide::Up => bar_top - panel_height as i32,
+    }
+}
+
+/// The bar's top edge, given the window's (wherever it was dragged to while the panel was open).
+pub fn bar_top_from_window(window_top: i32, side: PanelSide, panel_height: u32) -> i32 {
+    match side {
+        PanelSide::Down => window_top,
+        PanelSide::Up => window_top + panel_height as i32,
+    }
 }
 
 /// True if enough of the window's top-left area is inside one of the monitors
@@ -275,11 +331,80 @@ mod tests {
 
     #[test]
     fn a_thin_bar_at_the_wrong_height_is_set_back_and_a_right_one_is_left_alone() {
-        assert_eq!(thin_height_fix(960, 48, 2.0), None);
-        assert_eq!(thin_height_fix(960, 49, 2.0), None, "a pixel of rounding is fine");
-        assert_eq!(thin_height_fix(1400, 400, 2.0), Some((700.0, THIN_HEIGHT)));
-        assert_eq!(thin_height_fix(500, 200, 1.0), Some((500.0, THIN_HEIGHT)));
-        assert_eq!(thin_height_fix(500, 1, 1.0), Some((500.0, THIN_HEIGHT)), "too short too");
+        assert_eq!(thin_height_fix(960, 48, 2.0, THIN_HEIGHT), None);
+        assert_eq!(thin_height_fix(960, 49, 2.0, THIN_HEIGHT), None, "a pixel of rounding is fine");
+        assert_eq!(thin_height_fix(1400, 400, 2.0, THIN_HEIGHT), Some((700.0, THIN_HEIGHT)));
+        assert_eq!(thin_height_fix(500, 200, 1.0, THIN_HEIGHT), Some((500.0, THIN_HEIGHT)));
+        assert_eq!(thin_height_fix(500, 1, 1.0, THIN_HEIGHT), Some((500.0, THIN_HEIGHT)), "too short too");
+        // With the panel open the right height is the bar's plus the panel's.
+        assert_eq!(thin_height_fix(1000, 648, 2.0, 324.0), None);
+        assert_eq!(thin_height_fix(1000, 48, 2.0, 324.0), Some((500.0, 324.0)));
+    }
+
+    // Panel plans use logical numbers here: a 24 high bar, rows of 28, "few rows" = 84.
+    const BAR: f64 = 24.0;
+    const FEW: f64 = 84.0;
+
+    #[test]
+    fn the_panel_opens_down_when_there_is_room_below() {
+        let plan = plan_panel(40.0, BAR, 25.0, 900.0, 300.0, FEW);
+        assert_eq!(plan, PanelPlan { side: PanelSide::Down, height: 300.0 });
+    }
+
+    #[test]
+    fn a_long_queue_is_cut_to_the_room_and_scrolls() {
+        let plan = plan_panel(40.0, BAR, 25.0, 900.0, 5000.0, FEW);
+        assert_eq!(plan, PanelPlan { side: PanelSide::Down, height: 900.0 - 64.0 });
+    }
+
+    #[test]
+    fn near_the_bottom_it_opens_up() {
+        let plan = plan_panel(850.0, BAR, 25.0, 900.0, 300.0, FEW);
+        assert_eq!(plan, PanelPlan { side: PanelSide::Up, height: 300.0 });
+        let long = plan_panel(850.0, BAR, 25.0, 900.0, 5000.0, FEW);
+        assert_eq!(long, PanelPlan { side: PanelSide::Up, height: 825.0 });
+    }
+
+    #[test]
+    fn a_short_queue_still_opens_down_in_less_room_than_a_few_rows() {
+        // Wants only 30, and 30 fits below even though few_rows (84) would not.
+        assert_eq!(plan_panel(850.0, BAR, 25.0, 920.0, 30.0, FEW).side, PanelSide::Down);
+    }
+
+    #[test]
+    fn with_no_room_for_a_few_rows_on_either_side_the_larger_side_is_used() {
+        // 60 below, 40 above: neither holds 84, so down, at 60.
+        assert_eq!(plan_panel(65.0, BAR, 25.0, 149.0, 300.0, FEW), PanelPlan { side: PanelSide::Down, height: 60.0 });
+        // 40 below, 70 above: up, at 70.
+        assert_eq!(plan_panel(95.0, BAR, 25.0, 159.0, 300.0, FEW), PanelPlan { side: PanelSide::Up, height: 70.0 });
+        // A bar with no room at all gets a zero-height panel rather than a negative one.
+        assert_eq!(plan_panel(25.0, BAR, 25.0, 49.0, 300.0, FEW).height, 0.0);
+    }
+
+    #[test]
+    fn the_work_area_not_the_screen_sets_the_room() {
+        // A Dock (work area ends at 800 on a 900 screen) leaves less room below the bar.
+        let with_dock = plan_panel(700.0, BAR, 25.0, 800.0, 300.0, FEW);
+        assert_eq!((with_dock.side, with_dock.height), (PanelSide::Up, 300.0));
+    }
+
+    #[test]
+    fn it_works_on_a_display_placed_above_or_left_of_the_main_one() {
+        // A second display above the main one has negative coordinates: -1080 to -25 here.
+        let up_top = plan_panel(-1070.0, BAR, -1080.0, -1.0, 300.0, FEW);
+        assert_eq!(up_top.side, PanelSide::Down);
+        let bottom_of_it = plan_panel(-60.0, BAR, -1080.0, -1.0, 300.0, FEW);
+        assert_eq!(bottom_of_it, PanelPlan { side: PanelSide::Up, height: 300.0 });
+    }
+
+    #[test]
+    fn opening_up_keeps_the_bar_in_place_and_closing_finds_it_again() {
+        assert_eq!(window_top_open(850, PanelSide::Up, 300), 550);
+        assert_eq!(window_top_open(850, PanelSide::Down, 300), 850);
+        assert_eq!(bar_top_from_window(550, PanelSide::Up, 300), 850);
+        assert_eq!(bar_top_from_window(850, PanelSide::Down, 300), 850);
+        // Dragged 40 down while open: the bar is 40 further down when it closes.
+        assert_eq!(bar_top_from_window(590, PanelSide::Up, 300), 890);
     }
 }
 

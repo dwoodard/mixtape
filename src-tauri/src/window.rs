@@ -1,8 +1,8 @@
 //! Applies and persists the two window modes (thin bar and large).
 
 use crate::window_state::{
-    clamp_thin_width, is_reachable, thin_height_fix, thin_size, x_to_fit_right_edge, Geometry, Mode, WindowState, THIN_HEIGHT,
-    THIN_MIN_WIDTH,
+    bar_top_from_window, clamp_thin_width, is_reachable, plan_panel, thin_height_fix, thin_size, window_top_open,
+    x_to_fit_right_edge, Geometry, Mode, PanelSide, WindowState, THIN_HEIGHT, THIN_MIN_WIDTH,
 };
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -10,6 +10,18 @@ use tauri::{LogicalSize, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 const LARGE_SIZE: (f64, f64) = (1100.0, 700.0);
 const LARGE_MIN: (f64, f64) = (760.0, 480.0);
+/// The least height worth opening the queue panel for: three rows, in logical pixels.
+const PANEL_FEW_ROWS: f64 = 84.0;
+
+/// The queue panel while it is open. Never saved: the window is only this tall while it is open.
+#[derive(Clone, Copy)]
+struct OpenPanel {
+    side: PanelSide,
+    /// The panel's height in physical pixels (what the window grew by).
+    height_px: u32,
+    /// The same, in logical pixels.
+    height: f64,
+}
 
 pub struct WindowStore {
     path: PathBuf,
@@ -17,12 +29,13 @@ pub struct WindowStore {
     /// Window events are ignored until the saved layout has been applied, so
     /// startup defaults never overwrite what was saved.
     ready: Mutex<bool>,
+    panel: Mutex<Option<OpenPanel>>,
 }
 
 impl WindowStore {
     pub fn load(path: PathBuf) -> Self {
         let state = WindowState::load(&path);
-        WindowStore { path, state: Mutex::new(state), ready: Mutex::new(false) }
+        WindowStore { path, state: Mutex::new(state), ready: Mutex::new(false), panel: Mutex::new(None) }
     }
 
     pub fn mode(&self) -> Mode {
@@ -38,7 +51,8 @@ impl WindowStore {
 
     /// Records the window's current placement for the active mode.
     pub fn track(&self, window: &WebviewWindow) {
-        if !*self.ready.lock().unwrap() || window.is_minimized().unwrap_or(false) {
+        // While the queue panel is open the window is taller than the bar: that size is never saved.
+        if !*self.ready.lock().unwrap() || window.is_minimized().unwrap_or(false) || self.panel.lock().unwrap().is_some() {
             return;
         }
         if let Some(geometry) = capture(window) {
@@ -55,13 +69,69 @@ impl WindowStore {
             return false;
         }
         let Ok(size) = window.inner_size() else { return false };
-        match thin_height_fix(size.width, size.height, window.scale_factor().unwrap_or(1.0)) {
+        let wanted = THIN_HEIGHT + self.panel_height();
+        match thin_height_fix(size.width, size.height, window.scale_factor().unwrap_or(1.0), wanted) {
             Some((width, height)) => {
                 let _ = window.set_size(LogicalSize::new(width, height));
                 true
             }
             None => false,
         }
+    }
+
+    /// The open queue panel's height in logical pixels, or 0.
+    pub fn panel_height(&self) -> f64 {
+        self.panel.lock().unwrap().map_or(0.0, |p| p.height)
+    }
+
+    /// Opens the queue panel on the side with room, growing the window (the bar stays where it
+    /// is on screen). `wanted` is the logical height that shows the whole queue. Returns where
+    /// it opened and how tall, or `None` if it did not open.
+    pub fn open_panel(&self, window: &WebviewWindow, wanted: f64) -> Option<(PanelSide, f64)> {
+        if !*self.ready.lock().unwrap() || self.mode() != Mode::Thin || self.panel.lock().unwrap().is_some() {
+            return None;
+        }
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let position = window.outer_position().ok()?;
+        let size = window.inner_size().ok()?;
+        let monitor = window.current_monitor().ok().flatten()?;
+        let work = monitor.work_area();
+        let plan = plan_panel(
+            position.y as f64,
+            size.height as f64,
+            work.position.y as f64,
+            work.position.y as f64 + work.size.height as f64,
+            wanted * scale,
+            PANEL_FEW_ROWS * scale,
+        );
+        let height_px = plan.height.floor() as u32;
+        if height_px == 0 {
+            return None;
+        }
+        let height = height_px as f64 / scale;
+        let total = THIN_HEIGHT + height;
+        let width = size.width as f64 / scale;
+        // The height stays locked, now at the taller size.
+        let _ = window.set_max_size(Some(LogicalSize::new(screen_logical_width(window).max(THIN_MIN_WIDTH), total)));
+        let _ = window.set_min_size(Some(LogicalSize::new(THIN_MIN_WIDTH, total)));
+        *self.panel.lock().unwrap() = Some(OpenPanel { side: plan.side, height_px, height });
+        let _ = window.set_size(LogicalSize::new(width, total));
+        let _ = window.set_position(PhysicalPosition::new(position.x, window_top_open(position.y, plan.side, height_px)));
+        Some((plan.side, height))
+    }
+
+    /// Closes the queue panel: the window goes back to the bar's own size, with the bar where it
+    /// is now (wherever the window was dragged to while the panel was open).
+    pub fn close_panel(&self, window: &WebviewWindow) {
+        let Some(open) = self.panel.lock().unwrap().take() else { return };
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let (Ok(position), Ok(size)) = (window.outer_position(), window.inner_size()) else { return };
+        let width = size.width as f64 / scale;
+        let _ = window.set_min_size(Some(LogicalSize::new(THIN_MIN_WIDTH, THIN_HEIGHT)));
+        let _ = window.set_max_size(Some(LogicalSize::new(screen_logical_width(window).max(THIN_MIN_WIDTH), THIN_HEIGHT)));
+        let _ = window.set_size(LogicalSize::new(width, THIN_HEIGHT));
+        let _ = window.set_position(PhysicalPosition::new(position.x, bar_top_from_window(position.y, open.side, open.height_px)));
+        self.track(window);
     }
 
     /// Applies the saved mode and layout, then shows the window.
@@ -77,6 +147,7 @@ impl WindowStore {
 
     /// Switches to the other mode, remembering where the current one was.
     pub fn toggle(&self, window: &WebviewWindow) -> Mode {
+        self.close_panel(window);
         self.track(window);
         let (target, saved) = {
             let mut state = self.state.lock().unwrap();
@@ -117,11 +188,14 @@ fn apply(window: &WebviewWindow, mode: Mode, saved: Option<Geometry>) {
             let _ = window.set_min_size(Some(LogicalSize::new(THIN_MIN_WIDTH, THIN_HEIGHT)));
             let _ = window.set_max_size(Some(LogicalSize::new(max.max(THIN_MIN_WIDTH), THIN_HEIGHT)));
             let _ = window.set_resizable(true);
+            // No zoom or maximize: the height must not change.
+            let _ = window.set_maximizable(false);
             let _ = window.set_decorations(false);
             let _ = window.set_always_on_top(true);
         }
         Mode::Large => {
             let _ = window.set_max_size(None::<LogicalSize<f64>>);
+            let _ = window.set_maximizable(true);
             let _ = window.set_decorations(true);
             let _ = window.set_always_on_top(false);
             let _ = window.set_resizable(true);
@@ -184,8 +258,8 @@ fn fit_right_edge(window: &WebviewWindow) {
 }
 
 /// Sets the thin bar's width (logical pixels) from the drag handle. The height never changes.
-pub fn resize_thin(window: &WebviewWindow, width: f64) {
+pub fn resize_thin(window: &WebviewWindow, width: f64, panel_height: f64) {
     let width = clamp_thin_width(width, screen_logical_width(window));
-    let _ = window.set_size(LogicalSize::new(width, THIN_HEIGHT));
+    let _ = window.set_size(LogicalSize::new(width, THIN_HEIGHT + panel_height));
     fit_right_edge(window);
 }

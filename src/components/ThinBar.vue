@@ -5,6 +5,7 @@ import { tip } from "../lib/shortcuts";
 import { store } from "../lib/store";
 import { queueSummary, thinParts, thinTier } from "../lib/thinBar";
 import CoverArt from "./CoverArt.vue";
+import QueueList from "./QueueList.vue";
 import SeekBar from "./SeekBar.vue";
 import ThinResizeHandle from "./ThinResizeHandle.vue";
 import VolumeControl from "./VolumeControl.vue";
@@ -34,6 +35,9 @@ const upNext = computed(() => {
 </script>
 
 <template>
+  <!-- The queue panel is part of the window only while it is open: above the bar or below it. -->
+  <div class="shell">
+  <div v-if="store.thinPanel.value?.side === 'up'" class="drop up" :style="{ height: `${store.thinPanel.value.height}px` }"><QueueList /></div>
   <div class="thin" data-tauri-drag-region>
     <span v-if="parts.cover && track" class="art" data-tauri-drag-region>
       <CoverArt
@@ -53,8 +57,8 @@ const upNext = computed(() => {
       <svg viewBox="0 0 16 16"><path d="M11 2h2v12h-2zM2 2l8 6-8 6z" /></svg>
     </button>
     <!-- Without a title there is still somewhere to grab the bar and drag it. -->
-    <span v-if="!parts.title" class="grow" data-tauri-drag-region />
-    <div v-if="parts.title" class="lcd title ellipsis" data-tauri-drag-region :title="trackLabel(track)">{{ track?.title ?? "Nothing playing" }}</div>
+    <span v-if="!parts.title" class="grow" data-tauri-drag-region @dblclick="store.toggleThinPanel()" />
+    <div v-if="parts.title" class="lcd title ellipsis" data-tauri-drag-region :title="trackLabel(track)" @dblclick="store.toggleThinPanel()">{{ track?.title ?? "Nothing playing" }}</div>
     <span v-if="parts.artist && track?.artist" class="meta artist ellipsis" data-tauri-drag-region>{{ track.artist }}</span>
     <span v-if="parts.album && track?.album" class="meta album ellipsis" data-tauri-drag-region>{{ track.album }}</span>
     <span v-if="parts.time" class="time" data-tauri-drag-region>{{ time }}</span>
@@ -83,11 +87,18 @@ const upNext = computed(() => {
     </template>
     <ThinResizeHandle />
   </div>
+  <div v-if="store.thinPanel.value?.side === 'down'" class="drop down" :style="{ height: `${store.thinPanel.value.height}px` }"><QueueList /></div>
+  </div>
 </template>
 
 <style scoped>
+.shell { height: 100%; display: flex; flex-direction: column; }
+.drop { flex: none; display: flex; min-height: 0; overflow: hidden; background: var(--panel-3); border: 1px solid var(--line); }
+.drop.up { border-bottom: none; }
+.drop.down { border-top: none; }
 .thin {
-  height: 100%;
+  flex: none;
+  height: 24px;
   display: flex;
   align-items: center;
   gap: 6px;

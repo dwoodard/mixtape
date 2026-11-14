@@ -2,6 +2,7 @@ import { computed, ref } from "vue";
 import { tauriApi, type Api } from "./api";
 import type { TagEditPayload } from "./tagEdit";
 import { changedTracks, queueReplacements } from "./changes";
+import { panelWantedHeight } from "./thinBar";
 import { applyFolderRefresh, insertSorted } from "./librarySort";
 import { dirName } from "./format";
 import { createImports } from "./imports";
@@ -67,7 +68,9 @@ export function createStore(api: Api, storage?: FlagStorage) {
   /** What the last "move extra copies to Trash" did, for the Duplicates tab to show. */
   const cleanupReport = ref<CleanupReport | null>(null);
   const scanProgress = ref<ScanProgress | null>(null);
-  const thinPanelOpen = ref(false);
+  /** The thin bar's queue panel: closed, or open on a side at a height (from the window). Not saved. */
+  const thinPanel = ref<{ side: "down" | "up"; height: number } | null>(null);
+  const thinPanelOpen = computed(() => thinPanel.value !== null);
   /** Identifies the latest scan so a cancelled older one cannot clobber its state. */
   let scanId = 0;
   /** Unknown (null) until the backend says which window mode this launch is in. */
@@ -84,7 +87,11 @@ export function createStore(api: Api, storage?: FlagStorage) {
       api.onState((state) => (player.value = state)),
       api.onQueue((tracks) => (queue.value = tracks)),
       api.onPosition((ms) => (player.value = { ...player.value, positionMs: ms })),
-      api.onWindowMode((m) => (mode.value = m)),
+      api.onWindowMode((m) => {
+        mode.value = m;
+        // The window closes the panel itself when the mode changes.
+        thinPanel.value = null;
+      }),
       api.onScanProgress((p) => (scanProgress.value = p)),
     ]);
     // Subscribe first, then read the snapshot, so no update is missed in between.
@@ -172,6 +179,18 @@ export function createStore(api: Api, storage?: FlagStorage) {
     const at = current === null ? queue.value.length : current + 1;
     await api.enqueueNext([track]);
     return api.playIndex(at);
+  }
+
+  /** Opens the thin bar's queue panel (the window grows to fit it), or closes it if it is open. */
+  async function toggleThinPanel() {
+    if (thinPanel.value) return closeThinPanel();
+    thinPanel.value = await api.openThinPanel(panelWantedHeight(queue.value.length));
+  }
+
+  async function closeThinPanel() {
+    if (!thinPanel.value) return;
+    thinPanel.value = null;
+    await api.closeThinPanel();
   }
 
   /** Takes songs out of the library. Their files stay on disk and are not re-added by a refresh. */
@@ -462,9 +481,11 @@ export function createStore(api: Api, storage?: FlagStorage) {
     clearQueue: () => api.clearQueue(),
     quit: () => api.quit(),
     resizeThin: (width: number) => api.resizeThin(width),
-    /** The thin bar's drop-down panel (queue and more). Nothing draws it yet. */
+    /** The thin bar's drop-down queue panel. */
+    thinPanel,
     thinPanelOpen,
-    toggleThinPanel: () => (thinPanelOpen.value = !thinPanelOpen.value),
+    toggleThinPanel,
+    closeThinPanel,
   };
 }
 

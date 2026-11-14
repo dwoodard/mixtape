@@ -651,8 +651,26 @@ fn toggle_window_mode(window: WebviewWindow, store: State<WindowStore>) -> Mode 
 #[tauri::command]
 fn resize_thin(window: WebviewWindow, store: State<WindowStore>, width: f64) {
     if store.mode() == Mode::Thin {
-        window::resize_thin(&window, width);
+        window::resize_thin(&window, width, store.panel_height());
     }
+}
+
+/// Where the thin bar's queue panel opened and how tall it is.
+#[derive(serde::Serialize)]
+struct PanelOpened {
+    side: window_state::PanelSide,
+    height: f64,
+}
+
+/// Opens the queue panel under or over the thin bar. `wanted` is the logical height that shows the whole queue.
+#[tauri::command]
+fn open_thin_panel(window: WebviewWindow, store: State<WindowStore>, wanted: f64) -> Option<PanelOpened> {
+    store.open_panel(&window, wanted).map(|(side, height)| PanelOpened { side, height })
+}
+
+#[tauri::command]
+fn close_thin_panel(window: WebviewWindow, store: State<WindowStore>) {
+    store.close_panel(&window);
 }
 
 #[tauri::command]
@@ -860,6 +878,8 @@ pub fn run() {
             window_mode,
             toggle_window_mode,
             resize_thin,
+            open_thin_panel,
+            close_thin_panel,
             quit_app,
         ])
         .build(tauri::generate_context!())

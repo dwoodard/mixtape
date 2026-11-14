@@ -74,3 +74,12 @@ export function thinParts(tier: number): ThinParts {
   THIN_TIERS.slice(0, tier + 1).forEach((t) => t.adds.forEach((key) => (parts[key] = true)));
   return parts;
 }
+
+/** The height of one queue row, and of the panel's header and tools above the rows (logical pixels). */
+const PANEL_ROW = 28;
+const PANEL_CHROME = 72;
+
+/** The panel height that shows the whole queue (an empty queue still shows its message). */
+export function panelWantedHeight(rows: number): number {
+  return PANEL_CHROME + Math.max(rows, 1) * PANEL_ROW;
+}

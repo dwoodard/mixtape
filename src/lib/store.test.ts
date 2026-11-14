@@ -3,6 +3,7 @@ import type { Api } from "./api";
 import { createStore } from "./store";
 import type { FlagStorage } from "./ui";
 import { makePlayerState, makeTrack } from "./testing";
+import { panelWantedHeight } from "./thinBar";
 import type { CleanupReport, PlayerState, ScanProgress, Track, WindowMode } from "./types";
 
 function fakeApi(overrides: Partial<Api> = {}) {
@@ -59,6 +60,8 @@ function fakeApi(overrides: Partial<Api> = {}) {
     removeFromQueue: vi.fn(async () => {}),
     removeFromQueueDown: vi.fn(async () => {}),
     resizeThin: vi.fn(async () => {}),
+    openThinPanel: vi.fn(async () => ({ side: "down" as const, height: 200 })),
+    closeThinPanel: vi.fn(async () => {}),
     clearQueue: vi.fn(async () => {}),
     toggleWindowMode: vi.fn(async () => "thin" as WindowMode),
     quit: vi.fn(async () => {}),
@@ -392,12 +395,50 @@ describe("thin bar", () => {
     expect(api.resizeThin).toHaveBeenCalledWith(640);
   });
 
-  it("has one toggle for the drop-down panel, closed to begin with", () => {
-    const store = createStore(fakeApi().api);
+  it("the drop-down panel starts closed and the toggle opens it where the window says", async () => {
+    const { api, listeners } = fakeApi({ openThinPanel: vi.fn(async () => ({ side: "up" as const, height: 150 })) });
+    const store = createStore(api);
+    await store.init();
+    listeners.queue[0]([makeTrack(), makeTrack(), makeTrack()]);
     expect(store.thinPanelOpen.value).toBe(false);
-    store.toggleThinPanel();
+
+    await store.toggleThinPanel();
+
+    expect(api.openThinPanel).toHaveBeenCalledWith(panelWantedHeight(3));
     expect(store.thinPanelOpen.value).toBe(true);
-    store.toggleThinPanel();
+    expect(store.thinPanel.value).toEqual({ side: "up", height: 150 });
+  });
+
+  it("toggling again closes it", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.toggleThinPanel();
+    await store.toggleThinPanel();
+    expect(api.closeThinPanel).toHaveBeenCalledTimes(1);
+    expect(store.thinPanelOpen.value).toBe(false);
+    expect(store.thinPanel.value).toBeNull();
+  });
+
+  it("stays closed when the window had no room to open it", async () => {
+    const { api } = fakeApi({ openThinPanel: vi.fn(async () => null) });
+    const store = createStore(api);
+    await store.toggleThinPanel();
+    expect(store.thinPanelOpen.value).toBe(false);
+  });
+
+  it("closing a panel that is not open does nothing", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.closeThinPanel();
+    expect(api.closeThinPanel).not.toHaveBeenCalled();
+  });
+
+  it("switching window mode closes the panel in the app (the window closes it itself)", async () => {
+    const { api, listeners } = fakeApi();
+    const store = createStore(api);
+    await store.init();
+    await store.toggleThinPanel();
+    listeners.mode[0]("large");
     expect(store.thinPanelOpen.value).toBe(false);
   });
 });
