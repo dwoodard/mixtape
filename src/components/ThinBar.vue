@@ -38,13 +38,21 @@ const time = computed(
   height: 100%;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 6px;
+  padding: 0 6px;
   background: var(--panel);
   border: 1px solid var(--line);
 }
-.title { flex: 0 1 200px; min-width: 60px; padding: 3px 8px; font-size: 12px; }
-.time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; white-space: nowrap; pointer-events: none; }
-.seek { flex: 1; min-width: 60px; }
-.volume { width: 64px; }
+.title { flex: 0 1 130px; min-width: 50px; padding: 0 6px; font-size: 10px; line-height: 16px; border-radius: 3px; }
+.time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 10px; white-space: nowrap; pointer-events: none; }
+.seek { flex: 1; min-width: 40px; }
+.volume { width: 44px; }
+
+/* Compact versions of the shared controls. */
+.thin :deep(.icon-btn) { width: 18px; height: 18px; }
+.thin :deep(.icon-btn svg) { width: 9px; height: 9px; }
+.thin :deep(.transport) { gap: 3px; }
+.thin :deep(input[type="range"]) { height: 12px; }
+.thin :deep(input[type="range"]::-webkit-slider-runnable-track) { height: 3px; }
+.thin :deep(input[type="range"]::-webkit-slider-thumb) { width: 9px; height: 9px; margin-top: -3px; }
 </style>

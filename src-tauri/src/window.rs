@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{LogicalSize, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-const THIN_SIZE: (f64, f64) = (720.0, 44.0);
+const THIN_SIZE: (f64, f64) = (480.0, 24.0);
 const LARGE_SIZE: (f64, f64) = (1100.0, 700.0);
 const LARGE_MIN: (f64, f64) = (760.0, 480.0);
 
