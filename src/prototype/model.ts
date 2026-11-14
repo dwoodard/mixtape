@@ -37,6 +37,58 @@ export function parseVideoTitle(raw: string): { artist: string; title: string } 
   return split ? { artist: split[1].trim(), title: split[2].trim() } : { artist: "", title: cleaned };
 }
 
+/**
+ * What YouTube says about a video (the fields yt-dlp reports). The one entry
+ * below is the real data fetched for the example video; a real build would
+ * fetch this for any link.
+ */
+export interface VideoMeta {
+  channel?: string;
+  /** YYYYMMDD. YouTube Music releases carry a true release date. */
+  releaseDate?: string;
+  /** YYYYMMDD. When the video went up; can be later than the song's release. */
+  uploadDate?: string;
+  durationSec?: number;
+}
+
+export const KNOWN_VIDEOS: Record<string, VideoMeta> = {
+  v4YQJ6KuWvQ: { channel: "The Dead South", releaseDate: "20211111", uploadDate: "20211111", durationSec: 193 },
+};
+
+const prettyDate = (d: string) => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** Fills in what the YouTube data can tell us, and records where each value came from. */
+export function applyVideoMeta(
+  parsed: { artist: string; title: string },
+  meta: VideoMeta | undefined,
+): { year: string; confidence: number; notes: string[]; from: ImportItem["from"] } {
+  const notes: string[] = [];
+  let confidence = parsed.artist ? 0.5 : 0.3;
+  let year = "";
+  if (!meta) return { year, confidence, notes, from: "Guessed from the video title" };
+
+  if (meta.channel && parsed.artist && sameName(meta.channel, parsed.artist)) {
+    confidence = 0.7;
+    notes.push(`Artist matches the channel (${meta.channel}).`);
+  } else if (meta.channel && !parsed.artist) {
+    notes.push(`Channel is “${meta.channel}”; the title didn't name an artist.`);
+  }
+  const date = meta.releaseDate ?? meta.uploadDate;
+  if (date) {
+    year = date.slice(0, 4);
+    notes.push(
+      meta.releaseDate
+        ? `Year ${year} from YouTube's release date (${prettyDate(meta.releaseDate)}).`
+        : `Year ${year} is only the upload date (${prettyDate(date)}). The song may be older. Please check.`,
+    );
+  }
+  if (meta.durationSec) {
+    notes.push(`Length ${Math.floor(meta.durationSec / 60)}:${String(meta.durationSec % 60).padStart(2, "0")}, usable to check a MusicBrainz match.`);
+  }
+  return { year, confidence, notes, from: "Video title + YouTube data" };
+}
+
 export const SOURCE_LABEL: Record<Source, string> = {
   "youtube-video": "YouTube video",
   "youtube-playlist": "YouTube playlist",
@@ -82,10 +134,12 @@ export interface ImportItem {
   proposal: Proposal;
   /** 0-1: how sure the (fake) lookup is. */
   confidence: number;
-  from: "MusicBrainz" | "Guessed from the video title";
+  from: "MusicBrainz" | "Guessed from the video title" | "Video title + YouTube data";
   duplicateOf: string | null;
   /** The video's own title, when we were given it. */
   videoTitle: string;
+  /** Plain-language notes on where tag values came from (and how far to trust them). */
+  notes: string[];
 }
 
 export type Format = "mp3 320k" | "m4a (aac)" | "flac";
@@ -175,7 +229,7 @@ export function createImports(getLibrary: () => Track[]) {
     seed: string,
     index = 0,
     batchId = 0,
-    given?: { proposal: Proposal; confidence: number; from: ImportItem["from"]; videoTitle: string },
+    given?: { proposal: Proposal; confidence: number; from: ImportItem["from"]; videoTitle: string; notes: string[] },
   ) {
     const { proposal, confidence, from } = given ?? fakeProposal(seed, index);
     const owned = findOwned(getLibrary(), proposal.title, proposal.artist);
@@ -191,6 +245,7 @@ export function createImports(getLibrary: () => Track[]) {
       from,
       duplicateOf: owned ? owned.path : null,
       videoTitle: given?.videoTitle ?? "",
+      notes: given?.notes ?? [],
     };
     items.value.push(item);
     advance(items.value[items.value.length - 1]);
@@ -207,12 +262,16 @@ export function createImports(getLibrary: () => Track[]) {
       // With the video title we can make a real guess; without it, fall back to the fake lookup.
       const parsed = hint ? parseVideoTitle(hint) : null;
       const given = parsed
-        ? {
-            proposal: { title: parsed.title, artist: parsed.artist, album: "", year: "", track: "", genre: "" },
-            confidence: parsed.artist ? 0.5 : 0.3,
-            from: "Guessed from the video title" as const,
-            videoTitle: hint,
-          }
+        ? (() => {
+            const meta = applyVideoMeta(parsed, KNOWN_VIDEOS[id]);
+            return {
+              proposal: { title: parsed.title, artist: parsed.artist, album: "", year: meta.year, track: "", genre: "" },
+              confidence: meta.confidence,
+              from: meta.from,
+              videoTitle: hint,
+              notes: meta.notes,
+            };
+          })()
         : undefined;
       enqueue(source, raw, id, 0, newBatch(hint || `YouTube video ${id}`, source), given);
     }

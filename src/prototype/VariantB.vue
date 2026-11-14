@@ -78,7 +78,7 @@ const labels = ["Source", "Review & tag", "Add"];
               <td><input v-model="it.proposal.artist" class="field" /></td>
               <td><input v-model="it.proposal.album" class="field" :class="{ empty: !it.proposal.album }" placeholder="?" /></td>
               <td class="narrow"><input v-model="it.proposal.year" class="field" :class="{ empty: !it.proposal.year }" placeholder="?" /></td>
-              <td :class="it.confidence > 0.8 ? 'hi' : 'lo'">{{ it.confidence > 0.8 ? "Matched" : "Guess" }}</td>
+              <td :class="it.confidence > 0.8 ? 'hi' : 'lo'" :title="it.notes.join(' ')">{{ it.confidence > 0.8 ? "Matched" : "Guess" }}</td>
             </tr>
           </tbody>
         </table>

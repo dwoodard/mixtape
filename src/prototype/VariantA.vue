@@ -61,6 +61,7 @@ const toggle = (id: number) => (open.value.has(id) ? open.value.delete(id) : ope
             <span class="conf" :class="it.confidence > 0.8 ? 'hi' : 'lo'">{{ it.confidence > 0.8 ? "Matched" : "Needs a look" }} · {{ it.from }}</span>
             <span v-if="it.duplicateOf" class="dup">Already in your library</span>
           </div>
+          <ul v-if="it.notes.length" class="notes"><li v-for="n in it.notes" :key="n">{{ n }}</li></ul>
           <TagFields v-if="open.has(it.id)" :item="it" />
           <div class="act">
             <button @click="toggle(it.id)">{{ open.has(it.id) ? "Hide tags" : "Edit tags" }}</button>
@@ -106,4 +107,5 @@ const toggle = (id: number) => (open.value.has(id) ? open.value.delete(id) : ope
 .ok { color: #8fd7a0; font-size: 12px; }
 .rm { margin-left: auto; }
 .empty { color: var(--muted); text-align: center; padding: 24px; }
+.notes { margin: 0; padding-left: 16px; font-size: 11px; color: var(--muted); }
 </style>

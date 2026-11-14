@@ -78,6 +78,7 @@ const toggle = (id: number) => (picked.value.has(id) ? picked.value.delete(id) :
         <StageChip :item="current" />
         <p class="muted">{{ current.from }}</p>
         <p v-if="current.videoTitle" class="muted">Video: {{ current.videoTitle }}</p>
+        <ul v-if="current.notes.length" class="notes"><li v-for="n in current.notes" :key="n">{{ n }}</li></ul>
         <TagFields :item="current" dense />
         <p v-if="current.duplicateOf" class="dup">Already in your library:<br /><code>{{ current.duplicateOf }}</code></p>
         <p class="muted">Will be added as<br /><code>{{ im.destination(current) }}</code></p>
@@ -118,4 +119,5 @@ tr.focus { background: var(--accent); color: #fff; } tr.focus .muted { color: rg
 code { font-size: 11px; user-select: text; -webkit-user-select: text; word-break: break-all; }
 .row { display: flex; gap: 6px; }
 .panel-title small { color: var(--muted); font-weight: 400; }
+.notes { margin: 0; padding-left: 16px; font-size: 11px; color: var(--muted); }
 </style>
