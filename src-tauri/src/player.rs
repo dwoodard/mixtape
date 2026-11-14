@@ -70,6 +70,13 @@ pub enum PlayerEvent {
     Position(u64),
 }
 
+/// Which way to move on from a song that cannot be played.
+#[derive(Clone, Copy)]
+enum Step {
+    Forward,
+    Back,
+}
+
 pub struct Player {
     queue: Queue,
     status: Status,
@@ -281,7 +288,8 @@ impl Player {
             self.seek(0);
         } else if self.queue.prev().is_some() {
             self.pending_seek = None;
-            self.start_current();
+            // A song that cannot be played is skipped going back, not forward.
+            self.start_stepping(Step::Back);
         } else if self.status != Status::Stopped {
             self.seek(0);
         }
@@ -378,8 +386,13 @@ impl Player {
     // --- internals ---
 
     /// Loads and plays the queue's current track. Tracks that fail to load are
-    /// skipped; the last error is reported in the state.
+    /// skipped forward; the last error is reported in the state.
     fn start_current(&mut self) {
+        self.start_stepping(Step::Forward);
+    }
+
+    /// Like `start_current`, but a track that fails to load is skipped in the direction given.
+    fn start_stepping(&mut self, step: Step) {
         self.error = None;
         self.error_path = None;
         // Bounds skipping so a queue of unplayable files cannot loop forever
@@ -407,7 +420,11 @@ impl Player {
                     self.error = Some(message);
                     self.error_path = Some(path);
                     attempts -= 1;
-                    if attempts == 0 || self.queue.next(false).is_none() {
+                    let moved = match step {
+                        Step::Forward => self.queue.next(false).is_some(),
+                        Step::Back => self.queue.prev().is_some(),
+                    };
+                    if attempts == 0 || !moved {
                         self.stop_playback();
                         break;
                     }
@@ -1166,5 +1183,17 @@ mod tests {
         h.player.remove(0); // Maya removes the paused song
 
         assert_ne!(h.player.state().status, Status::Playing, "the next song started by itself");
+    }
+
+    #[test]
+    fn qa_previous_goes_back_past_a_song_that_cannot_be_played() {
+        let mut h = Harness::new();
+        h.fake.fail_paths.lock().unwrap().push("/music/b.mp3".into());
+        h.load_abc(2); // c playing, b (above it) is missing on disk
+
+        h.player.prev();
+
+        let title = h.player.state().current_track.map(|t| t.title);
+        assert_eq!(title, Some("a".to_string()), "previous skipped forward and replayed the current song");
     }
 }
