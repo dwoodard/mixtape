@@ -6,13 +6,13 @@ import type { Track } from "../lib/types";
 defineProps<{
   tracks: Track[];
   currentPath: string | null;
-  selectedPath: string | null;
+  selected: ReadonlySet<string>;
   sortKey: SortKey;
   sortDirection: SortDirection;
 }>();
 const emit = defineEmits<{
+  rowClick: [index: number, event: MouseEvent];
   play: [index: number];
-  select: [track: Track];
   enqueue: [track: Track];
   sort: [key: SortKey];
 }>();
@@ -26,35 +26,38 @@ const columns: { key: SortKey; label: string }[] = [
 </script>
 
 <template>
-  <div class="table" role="table" aria-label="Library">
+  <div class="table" role="grid" aria-label="Tracks" aria-multiselectable="true">
     <div class="row head" role="row">
+      <span class="num" />
       <button
         v-for="c in columns"
         :key="c.key"
-        class="cell head-cell"
+        class="head-cell"
         :class="c.key"
         role="columnheader"
         @click="emit('sort', c.key)"
       >
         {{ c.label }}<span v-if="sortKey === c.key">{{ sortDirection === "asc" ? " ▲" : " ▼" }}</span>
       </button>
-      <span class="cell add" />
+      <span />
     </div>
     <div class="body">
       <div
         v-for="(t, i) in tracks"
-        :key="t.path"
+        :key="`${i}-${t.path}`"
         class="row item"
-        :class="{ current: t.path === currentPath, selected: t.path === selectedPath }"
+        :class="{ current: t.path === currentPath, selected: selected.has(t.path) }"
         role="row"
-        @click="emit('select', t)"
+        :aria-selected="selected.has(t.path)"
+        @click="emit('rowClick', i, $event)"
         @dblclick="emit('play', i)"
       >
-        <span class="cell title ellipsis">{{ t.title }}</span>
-        <span class="cell artist ellipsis">{{ t.artist }}</span>
-        <span class="cell album ellipsis">{{ t.album }}</span>
-        <span class="cell durationMs">{{ formatTime(t.durationMs) }}</span>
-        <button class="cell add" aria-label="Add to queue" title="Add to queue" @click.stop="emit('enqueue', t)">+</button>
+        <span class="num">{{ i + 1 }}.</span>
+        <span class="cell ellipsis">{{ t.title }}</span>
+        <span class="cell ellipsis muted">{{ t.artist }}</span>
+        <span class="cell ellipsis muted">{{ t.album }}</span>
+        <span class="cell time">{{ formatTime(t.durationMs) }}</span>
+        <button class="add" aria-label="Add to queue" title="Add to queue" @click.stop="emit('enqueue', t)">+</button>
       </div>
       <p v-if="tracks.length === 0" class="empty">No tracks.</p>
     </div>
@@ -64,15 +67,20 @@ const columns: { key: SortKey; label: string }[] = [
 <style scoped>
 .table { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .body { flex: 1; overflow-y: auto; }
-.row { display: grid; grid-template-columns: 3fr 2fr 2fr 56px 28px; align-items: center; gap: 8px; padding: 0 10px; }
+.row { display: grid; grid-template-columns: 34px 3fr 2fr 2fr 52px 24px; align-items: center; gap: 8px; padding: 0 10px; }
 .head { border-bottom: 1px solid var(--line); }
-.head-cell { background: none; border: none; border-radius: 0; text-align: left; color: var(--muted); padding: 6px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-.item { height: 26px; cursor: default; }
+.head-cell { background: none; border: none; border-radius: 0; text-align: left; color: var(--muted); padding: 5px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.head-cell.durationMs { text-align: right; }
+.item { height: 28px; cursor: default; font-size: 13px; }
 .item:hover { background: var(--panel-2); }
-.item.selected { background: #2b3a33; }
-.item.current .title { color: var(--accent); font-weight: 600; }
+.item.selected { background: var(--accent); color: var(--accent-text); }
+.item.selected .muted, .item.selected .num, .item.selected .time { color: rgba(255, 255, 255, 0.8); }
+.item.current .cell:first-of-type { font-weight: 700; }
+.item.current:not(.selected) .cell:first-of-type { color: #6fb1f0; }
+.num { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
 .cell { min-width: 0; }
-.durationMs { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.time { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .add { width: 22px; height: 22px; padding: 0; line-height: 1; visibility: hidden; border-radius: 50%; }
 .item:hover .add { visibility: visible; }
 .empty { color: var(--muted); text-align: center; margin-top: 24px; }

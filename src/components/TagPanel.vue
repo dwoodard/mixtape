@@ -24,24 +24,24 @@ const rows = computed(() => {
 </script>
 
 <template>
-  <section class="tags" aria-label="Tags">
-    <h2>Tags <small>read-only</small></h2>
-    <dl v-if="track">
+  <section class="tags panel" aria-label="Tags">
+    <h2 class="panel-title">Now playing tags <small>read-only</small></h2>
+    <dl v-if="track" class="body">
       <template v-for="[label, value] in rows" :key="label">
         <dt>{{ label }}</dt>
         <dd class="ellipsis" :title="String(value)">{{ value || "—" }}</dd>
       </template>
     </dl>
-    <p v-else class="empty">Select a track to see its tags.</p>
+    <p v-else class="empty body">Nothing playing.</p>
   </section>
 </template>
 
 <style scoped>
-.tags { padding: 8px 10px 10px; border-top: 1px solid var(--line); }
-h2 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
-h2 small { text-transform: none; letter-spacing: 0; margin-left: 4px; }
-dl { display: grid; grid-template-columns: 80px 1fr; gap: 3px 8px; margin: 0; }
+.tags { flex: none; }
+.panel-title small { font-weight: 400; color: var(--muted); margin-left: 4px; }
+.body { padding: 8px 12px 10px; margin: 0; }
+dl { display: grid; grid-template-columns: 80px 1fr; gap: 3px 8px; }
 dt { color: var(--muted); }
 dd { margin: 0; min-width: 0; user-select: text; -webkit-user-select: text; }
-.empty { color: var(--muted); margin: 0; }
+.empty { color: var(--muted); }
 </style>

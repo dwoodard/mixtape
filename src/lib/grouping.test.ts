@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupAlbums, groupArtists, sortAlbumTracks, tracksForArtist } from "./grouping";
+import { albumHue, groupAlbums, groupArtists, sortAlbumTracks, tracksForArtist } from "./grouping";
 import { makeTrack } from "./testing";
 
 const tracks = [
@@ -72,5 +72,20 @@ describe("groupArtists", () => {
 describe("tracksForArtist", () => {
   it("lists an artist's tracks album by album", () => {
     expect(tracksForArtist(tracks, "Boards").map((t) => t.title)).toEqual(["One", "Two", "Later"]);
+  });
+});
+
+describe("albumHue", () => {
+  it("is stable and within the hue range", () => {
+    expect(albumHue("Boards\u0000Geogaddi")).toBe(albumHue("Boards\u0000Geogaddi"));
+    for (const key of ["", "a", "Boards\u0000MHTRTC", "ünïcode"]) {
+      const hue = albumHue(key);
+      expect(hue).toBeGreaterThanOrEqual(0);
+      expect(hue).toBeLessThan(360);
+    }
+  });
+
+  it("usually differs between albums", () => {
+    expect(albumHue("a")).not.toBe(albumHue("b"));
   });
 });

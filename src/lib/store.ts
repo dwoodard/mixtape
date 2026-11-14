@@ -35,10 +35,16 @@ export function createStore(api: Api) {
   const playlistError = ref<string | null>(null);
   /** Identifies the latest scan so a cancelled older one cannot clobber its state. */
   let scanId = 0;
-  const mode = ref<WindowMode>("large");
+  /** Unknown (null) until the backend says which window mode this launch is in. */
+  const mode = ref<WindowMode | null>(null);
 
-  /** Loads current state and subscribes to updates. Returns a cleanup function. */
+  /**
+   * Loads current state and subscribes to updates. Returns a cleanup function.
+   * The window mode is read first so the right layout shows immediately, and
+   * the optional loads cannot stop it from being set.
+   */
   async function init(): Promise<() => void> {
+    mode.value = await api.windowMode();
     const unlisten = await Promise.all([
       api.onState((state) => (player.value = state)),
       api.onQueue((tracks) => (queue.value = tracks)),
@@ -50,16 +56,19 @@ export function createStore(api: Api) {
     const snapshot = await api.snapshot();
     player.value = snapshot.state;
     queue.value = snapshot.queue;
-    mode.value = await api.windowMode();
-    configuredFolder.value = await api.musicFolder();
-    playlists.value = await api.listPlaylists();
-    // Show the saved library right away; a refresh is up to the user.
-    const cached = await api.cachedLibrary();
-    if (cached && library.value.length === 0) {
-      library.value = cached.tracks;
-      folder.value = cached.folder;
-      scannedAt.value = cached.scannedAtMs;
-    }
+    // Nice-to-have data: a failure here is logged and must not break startup.
+    await Promise.all([
+      api.musicFolder().then((f) => (configuredFolder.value = f)),
+      api.listPlaylists().then((p) => (playlists.value = p)),
+      api.cachedLibrary().then((cached) => {
+        // Show the saved library right away; a refresh is up to the user.
+        if (cached && library.value.length === 0) {
+          library.value = cached.tracks;
+          folder.value = cached.folder;
+          scannedAt.value = cached.scannedAtMs;
+        }
+      }),
+    ].map((load) => load.catch((e) => console.error("startup load failed:", e))));
     return () => unlisten.forEach((fn) => fn());
   }
 

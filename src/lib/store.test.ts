@@ -417,3 +417,34 @@ describe("playlists", () => {
     expect(api.listPlaylists).toHaveBeenCalled();
   });
 });
+
+describe("startup", () => {
+  it("has no window mode until the backend answers", async () => {
+    let answer!: (m: WindowMode) => void;
+    const { api } = fakeApi({ windowMode: vi.fn(() => new Promise<WindowMode>((r) => (answer = r))) });
+    const store = createStore(api);
+
+    const started = store.init();
+    expect(store.mode.value).toBeNull();
+    answer("thin");
+    await started;
+
+    expect(store.mode.value).toBe("thin");
+  });
+
+  it("sets the mode even when the optional loads fail", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { api } = fakeApi({
+      windowMode: vi.fn(async () => "thin" as WindowMode),
+      listPlaylists: vi.fn(async () => Promise.reject("no such command")),
+      cachedLibrary: vi.fn(async () => Promise.reject("cache unreadable")),
+    });
+    const store = createStore(api);
+
+    await store.init();
+
+    expect(store.mode.value).toBe("thin");
+    expect(quiet).toHaveBeenCalledTimes(2);
+    quiet.mockRestore();
+  });
+});

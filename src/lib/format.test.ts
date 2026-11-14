@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAgo, formatTime, trackLabel } from "./format";
+import { formatAgo, formatClock, formatTime, trackLabel } from "./format";
 import { makeTrack } from "./testing";
 
 describe("formatTime", () => {
@@ -46,5 +46,14 @@ describe("formatAgo", () => {
 
   it("treats a time in the future as just now", () => {
     expect(formatAgo(now + 60_000, now)).toBe("just now");
+  });
+});
+
+describe("formatClock", () => {
+  it("pads minutes and seconds and keeps counting minutes past an hour", () => {
+    expect(formatClock(0)).toBe("00:00");
+    expect(formatClock(46_000)).toBe("00:46");
+    expect(formatClock(3_723_000)).toBe("62:03");
+    expect(formatClock(-5)).toBe("00:00");
   });
 });

@@ -12,6 +12,7 @@ onUnmounted(() => cleanup?.());
 </script>
 
 <template>
+  <!-- Nothing until the mode is known, so the wrong layout never flashes in. -->
   <ThinBar v-if="store.mode.value === 'thin'" />
-  <LargeView v-else />
+  <LargeView v-else-if="store.mode.value === 'large'" />
 </template>

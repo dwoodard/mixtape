@@ -87,3 +87,10 @@ export function groupArtists(tracks: Track[]): Artist[] {
 export function tracksForArtist(tracks: Track[], name: string): Track[] {
   return groupAlbums(tracks.filter((t) => artistOf(t) === name)).flatMap((a) => a.tracks);
 }
+
+/** A stable 0-359 hue for an album, used to color its cover placeholder. */
+export function albumHue(key: string): number {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return hash % 360;
+}
