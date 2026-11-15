@@ -21,6 +21,7 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
       <span class="modes-switch" role="tablist" aria-label="Mode">
         <button role="tab" :aria-selected="appMode === 'player'" :class="{ on: appMode === 'player' }" :title="tip('Player: play and browse your music', 'discovery')" @click="setAppMode('player')">Player</button>
         <button role="tab" :aria-selected="appMode === 'discovery'" :class="{ on: appMode === 'discovery' }" :title="tip('Discovery: bring in new songs and fix their tags', 'discovery')" @click="setAppMode('discovery')">Discovery</button>
+        <button role="tab" :aria-selected="appMode === 'settings'" :class="{ on: appMode === 'settings' }" title="Settings: themes and other options" @click="setAppMode('settings')">Settings</button>
       </span>
     </h2>
     <div class="top">
