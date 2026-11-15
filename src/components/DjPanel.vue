@@ -17,7 +17,7 @@ const onResize = () => (windowWidth.value = window.innerWidth);
 // A click anywhere outside the open panel closes it.
 const panel = ref<HTMLElement | null>(null);
 function onPress(event: PointerEvent) {
-  if (djPanelOpen.value && event.button === 0 && pressClosesPanel(event.target, panel.value)) closeDjPanel();
+  if (djPanelOpen.value && event.button === 0 && pressClosesPanel(event.target as Element | null, panel.value)) closeDjPanel();
 }
 onMounted(() => {
   window.addEventListener("resize", onResize);

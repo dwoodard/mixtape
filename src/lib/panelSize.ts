@@ -21,8 +21,11 @@ export function widthFromDrag(startWidth: number, startX: number, x: number, win
  * Whether a press at `target` should close the DJ panel: it landed outside the panel, and not on the DJ button
  * (which toggles it itself) or on a menu or dialog, which the chat may have opened.
  */
-export function pressClosesPanel(target: EventTarget | null, panel: Element | null): boolean {
-  if (!(target instanceof Element) || !panel) return false;
-  if (panel.contains(target)) return false;
+export function pressClosesPanel(
+  target: { closest?: (selector: string) => unknown } | null,
+  panel: { contains: (node: never) => boolean } | null,
+): boolean {
+  if (!target || typeof target.closest !== "function" || !panel) return false;
+  if (panel.contains(target as never)) return false;
   return !target.closest('.dj-toggle, [role="menu"], [role="dialog"], .backdrop');
 }
