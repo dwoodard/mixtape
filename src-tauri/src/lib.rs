@@ -313,6 +313,12 @@ fn import_add_link(imports: State<ImportsHandle>, text: String, format: String) 
     imports.0.add_link(&text, &format)
 }
 
+/// Adds audio files picked from disk to the import list.
+#[tauri::command]
+fn import_add_files(imports: State<ImportsHandle>, paths: Vec<String>) -> Result<usize, String> {
+    imports.0.add_files(&paths)
+}
+
 #[tauri::command]
 fn import_set_tags(
     imports: State<ImportsHandle>,
@@ -842,6 +848,7 @@ pub fn run() {
             import_tools,
             import_list,
             import_add_link,
+            import_add_files,
             import_set_tags,
             import_open_in_picard,
             picard_open_files,

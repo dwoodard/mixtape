@@ -91,6 +91,19 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     return unlisten;
   }
 
+  /** Asks for files and adds them to the list. Returns how many were added (0 if cancelled or none were new). */
+  async function addFiles(): Promise<number> {
+    error.value = null;
+    try {
+      const paths = await api.pickAudioFiles();
+      if (paths.length === 0) return 0;
+      return await api.importAddFiles(paths);
+    } catch (e) {
+      error.value = String(e);
+      return 0;
+    }
+  }
+
   async function addLink(text: string): Promise<boolean> {
     error.value = null;
     try {
@@ -182,6 +195,7 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     setNoticeSeen,
     init,
     addLink,
+    addFiles,
     setTags,
     add,
     openInPicard,

@@ -4,8 +4,8 @@
 //! tested without a network.
 
 use crate::importer::{
-    classify_link, destination, extract_link, find_picard, find_tool, open_in_picard, parse_meta, parse_playlist, parse_progress, place, proposal_from_track,
-    remove_from_picard, suggest, LinkKind, Progress, Proposal,
+    clean_file_title, classify_link, destination, extract_link, find_picard, find_tool, open_in_picard, parse_meta, parse_playlist, parse_progress, place, proposal_from_track,
+    remove_from_picard, suggest, LinkKind, Progress, Proposal, VideoMeta,
 };
 use crate::importer::to_edit;
 use crate::library::CachedTrack;
@@ -123,6 +123,10 @@ pub trait Runner: Send + Sync {
     fn open_in_picard(&self, file: &Path) -> Result<(), String>;
     /// Tells Picard to forget a file (best effort).
     fn close_in_picard(&self, file: &Path);
+    /// Converts any audio or video file to an mp3 (needs ffmpeg).
+    fn convert(&self, _input: &Path, _output: &Path) -> Result<(), String> {
+        Err("Converting this kind of file needs ffmpeg. In a terminal: brew install ffmpeg".into())
+    }
     /// Downloads and converts, passing each output line to `line`.
     fn fetch(&self, url: &str, format: &str, dir: &Path, line: &mut dyn FnMut(&str), kill: &KillSwitch) -> Result<(), String>;
 }
@@ -193,6 +197,23 @@ impl Runner for YtDlp {
 
     fn playlist(&self, url: &str) -> Result<String, String> {
         self.capture(&["--flat-playlist", "-J", "--no-warnings", "--", url])
+    }
+
+    fn convert(&self, input: &Path, output: &Path) -> Result<(), String> {
+        let out = Command::new(self.ffmpeg_dir.join("ffmpeg"))
+            .args(["-y", "-nostdin", "-loglevel", "error", "-i"])
+            .arg(input)
+            .args(["-vn", "-map_metadata", "0", "-codec:a", "libmp3lame", "-q:a", "0"])
+            .arg(output)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("Couldn't run ffmpeg: {e}"))?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let text = String::from_utf8_lossy(&out.stderr);
+        let reason = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("it gave no reason");
+        Err(format!("Couldn't convert this file: {reason}"))
     }
 
     fn fetch(&self, url: &str, format: &str, dir: &Path, line: &mut dyn FnMut(&str), kill: &KillSwitch) -> Result<(), String> {
@@ -420,6 +441,111 @@ impl Imports {
             }
             LinkKind::Unsupported => Err("That isn't a YouTube video or playlist link. (Spotify isn't set up yet.)".into()),
         }
+    }
+
+    /// Adds audio files from disk. Files the player can read are copied into
+    /// staging as they are; anything else (video containers like .webm and
+    /// .mkv, .opus, .wma, .aiff…) is converted to mp3 first. Each becomes an
+    /// item to review and add, like a link. Returns how many were new.
+    pub fn add_files(&self, paths: &[String]) -> Result<usize, String> {
+        let mut started = 0;
+        for text in paths {
+            let path = PathBuf::from(text);
+            if !path.is_file() {
+                continue;
+            }
+            let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            // Already in the list: nothing to do for this one.
+            let Ok(id) = self.new_item(text, "mp3", &stem) else { continue };
+            started += 1;
+            let this = self.clone();
+            std::thread::spawn(move || {
+                this.acquire_slot();
+                this.run_file_pipeline(id, &path);
+                this.release_slot();
+            });
+        }
+        if started == 0 {
+            return Err("Nothing new to add: those files are missing or already in the list.".into());
+        }
+        Ok(started)
+    }
+
+    /// Stage one picked file (copy or convert), read its tags, and make it ready to review.
+    pub fn run_file_pipeline(&self, id: u64, path: &Path) {
+        if self.is_cancelled(id) {
+            return;
+        }
+        let dir = self.inner.staging.join(id.to_string());
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return self.fail(id, format!("Couldn't create the staging folder: {e}"));
+        }
+        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let staged = if is_audio_file(path) {
+            self.update(id, |i| i.stage = Stage::Probing);
+            let target = dir.join(path.file_name().unwrap_or_default());
+            std::fs::copy(path, &target).map(|_| target).map_err(|e| format!("Couldn't copy the file: {e}"))
+        } else {
+            self.update(id, |i| i.stage = Stage::Converting);
+            let target = dir.join(format!("{stem}.mp3"));
+            self.inner.runner.convert(path, &target).map(|_| target)
+        };
+        if self.is_cancelled(id) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let staged = match staged {
+            Ok(s) => s,
+            Err(e) => return self.fail(id, e),
+        };
+        let Some(track) = read_track(&staged) else {
+            return self.fail(id, "That file has no audio this app can read.".into());
+        };
+
+        let mut proposal = proposal_from_track(&track);
+        proposal.disc_total = read_disc_total(&staged).map(|n| n.to_string()).unwrap_or_default();
+        let mut sources: BTreeMap<String, String> = BTreeMap::new();
+        let mut notes = Vec::new();
+        let mut confidence = 0.9;
+        if proposal.artist.trim().is_empty() {
+            // Untagged (the title is just the file name): read artist and title out of the name.
+            let meta = VideoMeta { title: clean_file_title(&track.title), ..Default::default() };
+            let guess = suggest(&meta, None);
+            if !guess.proposal.artist.is_empty() {
+                proposal.artist = guess.proposal.artist;
+            }
+            if !guess.proposal.title.is_empty() {
+                proposal.title = guess.proposal.title;
+            }
+            for (field, value) in [("title", &proposal.title), ("artist", &proposal.artist)] {
+                if !value.trim().is_empty() {
+                    sources.insert(field.to_string(), "File name".to_string());
+                }
+            }
+            notes.push("This file had no tags. Check the artist and title.".to_string());
+            confidence = 0.4;
+        } else {
+            for (field, value) in [("title", &proposal.title), ("artist", &proposal.artist), ("album", &proposal.album), ("albumArtist", &proposal.album_artist), ("year", &proposal.year), ("track", &proposal.track), ("genre", &proposal.genre)] {
+                if !value.trim().is_empty() {
+                    sources.insert(field.to_string(), "File tags".to_string());
+                }
+            }
+        }
+        let ext = staged.extension().and_then(|e| e.to_str()).unwrap_or("mp3").to_string();
+        let preview = self.preview(&proposal, &ext);
+        self.update(id, |i| {
+            i.video_title = stem.clone();
+            i.duration_secs = Some(track.duration_ms / 1000);
+            i.destination = Some(preview);
+            i.proposal = proposal;
+            i.sources = sources;
+            i.notes = notes;
+            i.confidence = confidence;
+            i.format = ext;
+            i.stage = Stage::Ready;
+            i.progress = 1.0;
+            i.staged = Some(staged);
+        });
     }
 
     fn fail(&self, id: u64, message: String) {
@@ -1077,6 +1203,59 @@ mod tests {
     }
 
     // ---- Picard
+
+    fn add_one_file(h: &Harness, name: &str, contents: &[u8]) -> PathBuf {
+        let file = h.dir.path().join(name);
+        std::fs::write(&file, contents).unwrap();
+        h.imports.add_files(&[file.to_string_lossy().into_owned()]).unwrap();
+        file
+    }
+
+    #[test]
+    fn a_picked_tagged_file_keeps_its_tags_and_the_original_stays() {
+        let h = harness(Fake::ok());
+        let tone = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone.mp3")).unwrap();
+        let file = add_one_file(&h, "whatever.mp3", &tone);
+        wait_until(&h.imports, "ready", |i| i.first().is_some_and(|x| x.stage == Stage::Ready));
+        let item = &h.imports.list()[0];
+        assert!(item.staged.as_ref().unwrap().is_file());
+        assert!(file.is_file(), "the original is left alone");
+        assert_eq!(item.proposal.artist, "FixtureArtist");
+        assert_eq!(item.sources.get("artist").map(String::as_str), Some("File tags"));
+    }
+
+    #[test]
+    fn an_untagged_file_gets_its_artist_and_title_from_the_file_name() {
+        let h = harness(Fake::ok());
+        let tone = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone.mp3")).unwrap();
+        let file = h.dir.path().join("The Dead South - Gunslingers [dQw4w9WgXcQ].webm.mp3");
+        std::fs::write(&file, tone).unwrap();
+        let clear = crate::tags::TagEdit { title: Some(String::new()), artist: Some(String::new()), album: Some(String::new()), ..Default::default() };
+        write_tags(&file, &clear).unwrap();
+        h.imports.add_files(&[file.to_string_lossy().into_owned()]).unwrap();
+        wait_until(&h.imports, "ready", |i| i.first().is_some_and(|x| x.stage == Stage::Ready));
+        let item = &h.imports.list()[0];
+        assert_eq!(item.proposal.artist, "The Dead South");
+        assert_eq!(item.proposal.title, "Gunslingers");
+        assert_eq!(item.sources.get("artist").map(String::as_str), Some("File name"));
+    }
+
+    #[test]
+    fn a_file_the_player_cannot_read_is_converted_or_fails_with_a_reason() {
+        // The fake has no ffmpeg, so the default convert says so.
+        let h = harness(Fake::ok());
+        add_one_file(&h, "clip.webm", b"not really video");
+        wait_until(&h.imports, "failed", |i| i.first().is_some_and(|x| x.stage == Stage::Failed));
+        assert!(h.imports.list()[0].error.as_deref().unwrap().contains("ffmpeg"));
+    }
+
+    #[test]
+    fn the_same_file_is_not_added_twice_and_missing_files_are_skipped() {
+        let h = harness(Fake::ok());
+        let file = add_one_file(&h, "a.webm", b"x");
+        assert!(h.imports.add_files(&[file.to_string_lossy().into_owned()]).is_err());
+        assert!(h.imports.add_files(&["/no/such/file.mp3".into()]).is_err());
+    }
 
     fn ready_song(fake: Fake) -> (Harness, u64) {
         let h = harness(fake);

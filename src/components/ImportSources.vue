@@ -51,6 +51,12 @@ const formatLabel: Record<Format, string> = { mp3: "mp3 (320k)", m4a: "m4a (aac)
       <p v-if="imports.error.value" class="err" role="alert">{{ imports.error.value }}</p>
     </section>
 
+    <section class="src">
+      <h3>Files</h3>
+      <button @click="imports.addFiles()">Add files…</button>
+      <p class="muted">Any audio file. Ones the player can't read directly (.webm, .mkv, .opus…) are converted to mp3 first.</p>
+    </section>
+
     <section class="src off" aria-disabled="true">
       <h3>Spotify</h3>
       <form @submit.prevent>

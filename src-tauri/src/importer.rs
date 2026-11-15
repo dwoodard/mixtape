@@ -396,6 +396,27 @@ pub fn place(root: &Path, p: &Proposal, ext: &str, library: &[CachedTrack]) -> P
 }
 
 /// A proposal read back from a tagged file (what Picard wrote).
+/// A file name made readable for guessing artist and title: the leftovers of a
+/// download (a trailing ".webm" and a "[videoId]") are dropped.
+pub fn clean_file_title(stem: &str) -> String {
+    let mut s = stem.trim().to_string();
+    for ext in [".webm", ".mkv", ".mp4", ".m4a", ".opus", ".ogg", ".flac", ".wav", ".mp3"] {
+        if s.to_ascii_lowercase().ends_with(ext) {
+            s.truncate(s.len() - ext.len());
+        }
+    }
+    let s = s.trim_end();
+    if let Some(open) = s.rfind(" [") {
+        let id = &s[open + 2..];
+        if let Some(id) = id.strip_suffix(']') {
+            if id.len() == 11 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                return s[..open].trim_end().to_string();
+            }
+        }
+    }
+    s.to_string()
+}
+
 pub fn proposal_from_track(t: &Track) -> Proposal {
     Proposal {
         title: t.title.clone(),
@@ -660,6 +681,15 @@ pub fn find_tool(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- files
+
+    #[test]
+    fn file_names_lose_download_leftovers() {
+        assert_eq!(clean_file_title("@kongos - Come with Me Now (Lyrics) [hVN-GVdH3qY].webm"), "@kongos - Come with Me Now (Lyrics)");
+        assert_eq!(clean_file_title("Plain Song"), "Plain Song");
+        assert_eq!(clean_file_title("Song [not an id]"), "Song [not an id]");
+    }
 
     // ---- links
 
