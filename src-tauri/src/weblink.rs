@@ -1,16 +1,16 @@
-//! Opens a web page in the person's browser, for the few sites the app links to (MusicBrainz, LRCLIB).
+//! Opens a web page in the person's browser, for the few sites the app links to (MusicBrainz, LRCLIB, YouTube).
 
 use std::process::Command;
 
 /// The only places a link may go. Each ends in a slash, so `https://musicbrainz.org.evil.example/` and
 /// `https://musicbrainz.org@evil.example/` do not match.
-const ALLOWED: &[&str] = &["https://musicbrainz.org/", "https://lrclib.net/"];
+const ALLOWED: &[&str] = &["https://musicbrainz.org/", "https://lrclib.net/", "https://www.youtube.com/", "https://music.youtube.com/", "https://youtu.be/"];
 
 /// The arguments for `open`, when `url` is a plain link to an allowed site. `--` first, so it can never be read as an option.
 pub fn open_args(url: &str) -> Result<Vec<String>, String> {
     let plain = !url.is_empty() && url.len() <= 300 && url.chars().all(|c| c.is_ascii() && !c.is_ascii_control() && c != ' ');
     if !plain || !ALLOWED.iter().any(|site| url.starts_with(site)) {
-        return Err("The app only opens links to musicbrainz.org and lrclib.net.".into());
+        return Err("The app only opens links to musicbrainz.org, lrclib.net and youtube.com.".into());
     }
     Ok(vec!["--".to_string(), url.to_string()])
 }
@@ -36,6 +36,9 @@ mod tests {
             vec!["--", "https://musicbrainz.org/release/e6389564-0a50-4a19-9219-c22a42aa8de8"]
         );
         assert!(open_args("https://lrclib.net/api/get?track_name=x").is_ok());
+        assert!(open_args("https://www.youtube.com/watch?v=abc").is_ok());
+        assert!(open_args("https://youtu.be/abc").is_ok());
+        assert!(open_args("https://www.youtube.com.evil.example/watch").is_err());
     }
 
     #[test]

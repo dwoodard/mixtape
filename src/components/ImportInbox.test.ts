@@ -76,3 +76,30 @@ describe("songs held back from a playlist", () => {
   });
 });
 
+
+describe("fetching one held song from its row", () => {
+  it("puts a Fetch button on held rows only", async () => {
+    imports.items.value = [song(1, "held"), song(2, "ready")];
+    const html = await draw([]);
+    expect(html.match(/title="Fetch this song"/g)).toHaveLength(1);
+  });
+});
+
+describe("showing an added song in the library", () => {
+  it("puts Show in library on added rows that have a file, and not on ready ones", async () => {
+    imports.items.value = [{ ...song(1, "added"), addedPath: "/lib/a.mp3" } as ImportItem, song(2, "ready")];
+    const html = await draw([]);
+    expect(html.match(/Show in library/g)).toHaveLength(1);
+  });
+});
+
+describe("the title links to the video on YouTube", () => {
+  it("links songs that came from YouTube, and not songs from a file", async () => {
+    imports.items.value = [
+      { ...song(1, "ready"), url: "https://www.youtube.com/watch?v=abc" } as ImportItem,
+      { ...song(2, "ready"), url: "/Users/me/song.mp3" } as ImportItem,
+    ];
+    const html = await draw([]);
+    expect(html.match(/title="Open the video on YouTube"/g)).toHaveLength(1);
+  });
+});

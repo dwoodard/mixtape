@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { heldOwnership, isHeld, isLoading, needsAttention } from "../lib/imports";
+import { heldOwnership, isHeld, isYoutubeLink, isLoading, needsAttention } from "../lib/imports";
 import { imports, store } from "../lib/store";
 import { showInLibrary } from "../lib/ui";
 import type { ImportItem } from "../lib/types";
@@ -113,10 +113,15 @@ const autoList = computed(() =>
         <tbody>
           <tr v-for="it in imports.items.value" :key="it.id" :class="{ focus: focus === it.id, picked: picked.has(it.id) }" @mousedown="$event.shiftKey && $event.preventDefault()" @click="onRowClick(it, $event)" @contextmenu.prevent="openMenu(it, $event)">
             <td><input type="checkbox" :checked="picked.has(it.id)" aria-label="Select (shift-click for a range)" title="Shift-click to select a range" @click.stop="emit('toggle', it.id, $event.shiftKey)" /></td>
-            <td class="ellipsis">{{ it.proposal.title || it.videoTitle || it.url }}</td>
+            <td class="ellipsis">
+              <a v-if="isYoutubeLink(it.url)" class="src-link" :href="it.url" title="Open the video on YouTube" @click.prevent.stop="imports.openSource(it.url)">{{ it.proposal.title || it.videoTitle || it.url }}</a>
+              <template v-else>{{ it.proposal.title || it.videoTitle || it.url }}</template>
+            </td>
             <td class="ellipsis muted">{{ it.proposal.artist }}</td>
-            <td><ImportStage :item="it" :owned="heldOwned.get(it.id)?.match" />
-              <button v-if="heldOwned.get(it.id)" class="tiny" title="Go to this song in your library" @click.stop="showInLibrary(heldOwned.get(it.id)!.track)">Show</button></td>
+            <td class="status"><ImportStage :item="it" :owned="heldOwned.get(it.id)?.match" />
+              <button v-if="it.stage === 'held'" class="tiny" title="Fetch this song" @click.stop="imports.fetchHeld([it.id])">Fetch</button>
+              <button v-else-if="it.stage === 'added' && it.addedPath" class="tiny" title="Go to this song in your library" @click.stop="showInLibrary({ path: it.addedPath, title: it.proposal.title })">Show in library</button>
+              <button v-if="heldOwned.get(it.id)" class="tiny" title="Go to this song in your library" @click.stop="showInLibrary(heldOwned.get(it.id)!.track)">Show in library</button></td>
             <td :class="it.confidence >= 0.8 ? 'hi' : 'lo'">
               {{ it.stage === "queued" || it.stage === "probing" || it.stage === "failed" ? "" : `${Math.round(it.confidence * 100)}%` }}
               <span v-if="attention(it)" class="flag" title="Needs a look">!</span>
@@ -176,9 +181,12 @@ tr.picked:not(.focus) { background: color-mix(in srgb, var(--accent) 16%, transp
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
 td { padding: 4px 6px; max-width: 170px; }
+td.status { white-space: normal; }
+td.status .tiny { margin: 2px 4px 0 0; }
 tbody tr:hover { background: var(--panel-2); }
 tr.focus { background: var(--accent); color: #fff; } tr.focus .muted { color: rgba(255, 255, 255, 0.8); }
 .muted { color: var(--muted); }
+.src-link { color: inherit; text-decoration: none; } .src-link:hover { text-decoration: underline; }
 .hi { color: #8fd7a0; } .lo { color: #f0c674; } tr.focus .hi, tr.focus .lo { color: #fff; }
 .flag { display: inline-block; width: 15px; height: 15px; margin-left: 4px; border-radius: 50%; background: #7a5a20; color: #ffe2a0; font-size: 10px; font-weight: 700; text-align: center; line-height: 15px; }
 .empty { color: var(--muted); text-align: center; padding: 28px 16px; margin: 0; }

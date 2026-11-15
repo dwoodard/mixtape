@@ -45,6 +45,9 @@ export function heldOwnership(item: Pick<ImportItem, "videoTitle">, library: Tra
   return sameTitle.length > 0 ? { match: "maybe", track: sameTitle[0] } : null;
 }
 
+/** Is this a YouTube link the app may open? Files added from disk have no link. */
+export const isYoutubeLink = (url: string): boolean => /^https:\/\/(www\.youtube\.com|music\.youtube\.com|youtu\.be)\//.test(url);
+
 export const missingKeyFields = (item: ImportItem): ImportField[] =>
   KEY_FIELDS.filter((f) => !item.proposal[f].trim());
 
@@ -248,6 +251,15 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     }
   }
 
+  /** Opens the song's YouTube page in the browser. */
+  async function openSource(url: string) {
+    try {
+      await api.openLink(url);
+    } catch (e) {
+      error.value = String(e);
+    }
+  }
+
   /** Shows the song's file in Finder. */
   async function reveal(id: number) {
     setItemError(id, null);
@@ -335,6 +347,7 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     add,
     openInPicard,
     reveal,
+    openSource,
     notice,
     stopLoading,
     fetchHeld,
