@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { djChat as chat } from "../lib/djChat";
+import { suggestionsFor } from "../lib/djSuggestions";
 import DjViews from "./DjViews.vue";
 import MarkdownText from "./MarkdownText.vue";
 
@@ -28,6 +29,14 @@ onMounted(async () => {
   await scrollDown();
   focus();
 });
+
+/** One-click requests that fit what is going on now. They stay put, greyed out, while the DJ works so the chat does not jump. */
+const suggestions = computed(() => suggestionsFor(chat.host));
+const working = computed(() => chat.busy.value || !!chat.pending.value);
+function ask(prompt: string) {
+  void chat.send(prompt);
+  focus();
+}
 
 function submit() {
   const text = draft.value;
@@ -91,6 +100,10 @@ function onKey(event: KeyboardEvent) {
       </div>
     </div>
 
+    <div v-if="suggestions.length" class="chips" role="group" aria-label="Quick requests">
+      <button v-for="s in suggestions" :key="s.label" class="chip" :title="s.prompt" :disabled="working" @click="ask(s.prompt)">{{ s.label }}</button>
+    </div>
+
     <footer>
       <label class="confirm" title="When off, the DJ changes and deletes files without asking">
         <input type="checkbox" :checked="chat.confirmRisky.value" @change="chat.setConfirmRisky(($event.target as HTMLInputElement).checked)" />
@@ -112,6 +125,9 @@ function onKey(event: KeyboardEvent) {
 </template>
 
 <style scoped>
+.chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px 0; }
+.chip { padding: 1px 9px; border-radius: 11px; font-size: 11px; background: var(--panel-2); color: var(--muted); }
+.chip:hover { color: var(--text); border-color: var(--accent); }
 .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 header { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--panel-3); border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; }
 h2 { margin: 0 auto 0 4px; font-size: 12px; font-weight: 600; }

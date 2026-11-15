@@ -22,6 +22,13 @@ describe("DjViews", () => {
     for (const control of ["Play now", "Play next", "Add to the queue", "Show in the library", "Play all"]) expect(html).toContain(control);
   });
 
+  it("marks the song that is playing", async () => {
+    const html = await render({ kind: "songs", title: "Left to play", songs: [halo, makeTrack({ path: "/m/b.mp3", title: "Next one" })], total: 2, currentPath: "/m/halo.mp3" });
+    expect(html).toContain("Now playing");
+    expect(html.match(/Now playing/g)).toHaveLength(1);
+    expect(html).toMatch(/<li class="(song current|current song)"/);
+  });
+
   it("shows a few songs and offers the rest", async () => {
     const many = Array.from({ length: 9 }, (_, i) => makeTrack({ path: `/m/${i}.mp3`, title: `Song ${i}` }));
     const html = await render({ kind: "songs", title: "Queue", songs: many, total: 9 });
@@ -43,6 +50,24 @@ describe("DjViews", () => {
     expect(html).toContain("Apply");
     // The year already matches, so it is not listed as a change.
     expect(html).not.toContain("Year");
+  });
+
+  it("heads the lyrics with what the service matched, and warns only when that is not your song", async () => {
+    const same = await render({ kind: "lyrics", song: halo, text: "words", instrumental: false, source: "lrclib.net", matched: { title: "Halo", artist: "Beyonce", album: "I Am...Sasha Fierce" } });
+    expect(same).toContain("I Am...Sasha Fierce");
+    expect(same).toContain("Lyrics · lrclib.net");
+    expect(same).toContain("Beyonce");
+    expect(same).not.toContain("wrong lyrics");
+
+    const other = await render({ kind: "lyrics", song: halo, text: "words", instrumental: false, matched: { title: "Halo (Live)", artist: "Beyoncé", album: "World Tour" } });
+    expect(other).toContain("Matched");
+    expect(other).toContain("wrong lyrics");
+    expect(other).toContain("Halo (Live)");
+
+    // Without a match (an older card) it falls back to your own song.
+    const bare = await render({ kind: "lyrics", song: halo, text: "words", instrumental: false });
+    expect(bare).toContain("Halo");
+    expect(bare).not.toContain("lrclib");
   });
 
   it("draws lyrics, an instrumental note, duplicates with a Trash button, and Discovery with its controls", async () => {

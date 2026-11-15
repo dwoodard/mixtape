@@ -9,7 +9,7 @@ describe("fetchLyrics", () => {
   it("asks for an exact match first and sends only the song's facts", async () => {
     const doFetch = vi.fn(async () => reply({ trackName: "Halo", artistName: "Beyoncé", albumName: "I Am", plainLyrics: "Remember those walls" }));
     const lyrics = await fetchLyrics(song, doFetch);
-    expect(lyrics).toMatchObject({ text: "Remember those walls", instrumental: false });
+    expect(lyrics).toMatchObject({ text: "Remember those walls", instrumental: false, source: "lrclib.net" });
     const [url, init] = doFetch.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
     const params = new URL(url).searchParams;
     expect(url.startsWith("https://lrclib.net/api/get?")).toBe(true);

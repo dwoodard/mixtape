@@ -52,7 +52,7 @@ function fakeHost(player: Partial<PlayerState> = {}, queue: Track[] = [], extra:
     reveal: ok(),
     openInPicard: ok(),
     lookupTags: vi.fn(async () => [] as TagMatch[]),
-    fetchLyrics: vi.fn(async () => ({ text: "la la", instrumental: false, matched: { title: "Halo", artist: "Beyoncé", album: "" } }) as Lyrics | null),
+    fetchLyrics: vi.fn(async () => ({ source: "lrclib.net", text: "la la", instrumental: false, matched: { title: "Halo", artist: "Beyoncé", album: "" } }) as Lyrics | null),
     importLink: ok(),
     importFiles: vi.fn(async () => ({ added: 1, problem: null as string | null })),
     setImportTags: ok(),
@@ -491,7 +491,7 @@ describe("whole-app tools", () => {
     });
 
     it("cuts very long lyrics and says so", async () => {
-      const long = fakeHost({ currentTrack: library[0] }, [], { fetchLyrics: vi.fn(async () => ({ text: "x".repeat(9000), instrumental: false, matched: { title: "", artist: "", album: "" } })) });
+      const long = fakeHost({ currentTrack: library[0] }, [], { fetchLyrics: vi.fn(async () => ({ source: "lrclib.net", text: "x".repeat(9000), instrumental: false, matched: { title: "", artist: "", album: "" } })) });
       const out = (await runTool("get_lyrics", {}, long, new DjSession())).result as { lyrics: string; truncated: boolean };
       expect(out.lyrics).toHaveLength(6000);
       expect(out.truncated).toBe(true);
@@ -711,10 +711,29 @@ describe("views the chat draws", () => {
 
     expect(await run("get_queue")).toMatchObject({ kind: "songs", title: "Queue", total: 1 });
     expect(await run("get_play_count")).toMatchObject({ kind: "songs", title: "Play count", note: "Played 2 times, last on 2026-11-14" });
-    expect(await run("get_lyrics")).toMatchObject({ kind: "lyrics", text: "la la", instrumental: false });
+    expect(await run("get_lyrics")).toMatchObject({ kind: "lyrics", text: "la la", instrumental: false, matched: { title: "Halo", artist: "Beyoncé" }, source: "lrclib.net" });
     expect(await run("lookup_tags")).toMatchObject({ kind: "tags", matches: [{ album: "I Am" }] });
     expect(await run("find_duplicates")).toMatchObject({ kind: "duplicates", groups: [{ extras: [library[2]] }] });
     expect(await run("list_imports")).toEqual({ kind: "imports", ids: [4] });
+  });
+
+  it("get_queue with remaining starts at the playing song and marks it", async () => {
+    const queue = [library[0], library[1], library[2], library[3]];
+    const host = fakeHost({ status: "playing", currentIndex: 2, currentTrack: library[2] }, queue);
+    const all = await runTool("get_queue", {}, host, new DjSession());
+    expect(all.view).toMatchObject({ kind: "songs", title: "Queue", total: 4, currentPath: "/m/3.mp3" });
+
+    const left = await runTool("get_queue", { remaining: true }, host, new DjSession());
+    expect(left.view).toMatchObject({ title: "Left to play", total: 2, currentPath: "/m/3.mp3" });
+    expect((left.view as { songs: Track[] }).songs.map((t) => t.title)).toEqual(["Halo", "Atmosphere"]);
+    expect((left.result as { songs: { position: number }[] }).songs.map((s) => s.position)).toEqual([3, 4]);
+  });
+
+  it("with nothing playing, what is left is the whole queue", async () => {
+    const host = fakeHost({}, [library[0], library[1]]);
+    const left = await runTool("get_queue", { remaining: true }, host, new DjSession());
+    expect(left.view).toMatchObject({ title: "Queue", total: 2 });
+    expect((left.view as { currentPath?: string }).currentPath).toBeUndefined();
   });
 
   it("runTurn hands the view to whoever is watching, with the note", async () => {
@@ -764,6 +783,24 @@ describe("file check", () => {
     const missing = fakeHost({ currentTrack: library[2] }, [], { inspectFile: vi.fn(async () => { throw new Error("Cannot read /m/3.mp3: No such file"); }) });
     expect((await runTool("check_file", {}, missing, new DjSession())).result).toEqual({ error: "Cannot read /m/3.mp3: No such file" });
     expect((await runTool("check_file", {}, fakeHost(), new DjSession())).result).toHaveProperty("error");
+  });
+});
+
+describe("a song tool given no id", () => {
+  it("treats a missing, null or empty id as the song playing now, for every tool that takes one", async () => {
+    for (const tool of ["get_lyrics", "lookup_tags", "check_file", "fix_length", "get_play_count"]) {
+      for (const id of [undefined, null, ""]) {
+        const host = fakeHost({ currentTrack: library[2] });
+        const args = id === undefined ? {} : { id };
+        const out = await runTool(tool, args, host, new DjSession());
+        expect(out.result, `${tool} with id ${JSON.stringify(id)}`).not.toHaveProperty("error");
+      }
+    }
+  });
+
+  it("still asks for a song when nothing is playing, and rejects an id it never handed out", async () => {
+    expect((await runTool("get_lyrics", { id: null }, fakeHost(), new DjSession())).result).toEqual({ error: "Nothing is playing. Give a song id from search_library." });
+    expect((await runTool("get_lyrics", { id: 99 }, fakeHost(), new DjSession())).result).toHaveProperty("error");
   });
 });
 

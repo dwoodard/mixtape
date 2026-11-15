@@ -81,10 +81,10 @@ export interface DjHost {
 
 /** What the chat can draw for the person, with controls, for the kind of thing being talked about. */
 export type DjView =
-  | { kind: "songs"; title: string; songs: Track[]; total: number; note?: string }
+  | { kind: "songs"; title: string; songs: Track[]; total: number; note?: string; /** The song playing now, marked in the list. */ currentPath?: string }
   | { kind: "tags"; song: Track; matches: TagMatch[] }
   | { kind: "filecheck"; song: Track; check: FileCheck }
-  | { kind: "lyrics"; song: Track; text: string; instrumental: boolean }
+  | { kind: "lyrics"; song: Track; text: string; instrumental: boolean; /** The song the lyrics service matched, which may not be exactly yours. */ matched?: { title: string; artist: string; album: string }; /** Where the lyrics came from. */ source?: string }
   | { kind: "duplicates"; groups: { keep: Track; extras: Track[] }[] }
   | { kind: "imports"; ids: number[] };
 
@@ -149,6 +149,7 @@ export function systemPrompt(library: Track[]): string {
     "Some actions change or delete files. The app asks the user first, so just call the tool. If the user says no, do not retry.",
     "If a search finds nothing, try broader words. If the library has nothing that fits, say so plainly.",
     "Searches, the queue, play counts, tag matches, lyrics, duplicates, Discovery items and file checks are shown to the user as cards under your action. The card already has the songs, numbers and controls, so never repeat or list what a card shows, and never describe the card. After a card, say nothing at all unless you have something the card does not show (why you picked these songs, what you suggest next), and then one short sentence.",
+    "For 'what's left', 'what's next' or 'what's coming up' in the queue, call get_queue with remaining true: it starts at the song playing now and leaves out the ones already played.",
     "When you act without a card, answer in one short sentence: what you did and why. Do not list every song.",
     `The library has ${library.length} songs. ${tagged} have a genre tag and ${dated} have a year.`,
     genres.length ? `Most common genres: ${genres.join(", ")}.` : "",

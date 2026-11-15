@@ -3,12 +3,16 @@ import type { Fetch } from "./lm";
 import type { Track } from "./types";
 
 const ENDPOINT = "https://lrclib.net/api";
+/** What the card calls the service. */
+const SOURCE = "lrclib.net";
 /** LRCLIB asks clients to say what they are. Nothing about the person goes in it. */
 const HEADERS = { "User-Agent": "Mixtape/0.1", "Lrclib-Client": "Mixtape/0.1" };
 /** The model gets this much; a very long text only fills its memory. */
 export const MAX_LYRICS_CHARS = 6000;
 
 export interface Lyrics {
+  /** Where the words came from, for the person to see. */
+  source: string;
   /** The words, without timestamps. Empty for an instrumental. */
   text: string;
   instrumental: boolean;
@@ -41,6 +45,7 @@ function toLyrics(entry: LrclibEntry, track: Track): Lyrics | null {
   const text = entry.plainLyrics?.trim() || (entry.syncedLyrics ? stripTimestamps(entry.syncedLyrics) : "");
   if (!text && !entry.instrumental) return null;
   return {
+    source: SOURCE,
     text,
     instrumental: !!entry.instrumental,
     matched: { title: entry.trackName ?? track.title, artist: entry.artistName ?? track.artist, album: entry.albumName ?? track.album },

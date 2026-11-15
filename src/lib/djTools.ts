@@ -58,6 +58,15 @@ const formatClock = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.flo
 
 const verdictText = (v: string) => ({ ok: "length is right", lengthWrong: "length is wrong", looksWrong: "length looks wrong", cannotCheck: "could not compare" })[v] ?? v;
 
+/** Whether the model left the song out: it may omit `id`, or send null or an empty string, and all mean "the song playing now". */
+const noId = (args: Args) => args.id === undefined || args.id === null || args.id === "";
+
+/** The song a tool was asked about: the one with the given id, or the song playing now when none was given. */
+function songArg(args: Args, ctx: ToolContext): Track | null | undefined {
+  return noId(args) ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
+}
+const noSongMessage = (args: Args) => (noId(args) ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+
 const NO_IDS = "No valid song ids. Call search_library first and use the ids it returns.";
 
 const describe = (track: Track, id: number) => ({
@@ -148,8 +157,10 @@ function search(args: Args, { host, session }: ToolContext): ToolOutcome {
   };
 }
 
-function queueView({ host, session }: ToolContext) {
+function queueView({ host, session }: ToolContext, remaining = false) {
   const player = host.player();
+  // "What is left": the song playing now and everything after it. With nothing playing, the whole queue is left.
+  const from = remaining && player.currentIndex !== null ? player.currentIndex : 0;
   return {
     status: player.status,
     shuffle: player.shuffle,
@@ -158,7 +169,7 @@ function queueView({ host, session }: ToolContext) {
     position_seconds: Math.round(player.positionMs / 1000),
     duration_seconds: Math.round(player.durationMs / 1000),
     current_position: player.currentIndex === null ? null : player.currentIndex + 1,
-    songs: host.queue().map((t, i) => ({ position: i + 1, ...describe(t, session.idFor(t)) })),
+    songs: host.queue().flatMap((t, i) => (i >= from ? [{ position: i + 1, ...describe(t, session.idFor(t)) }] : [])),
   };
 }
 
@@ -234,8 +245,24 @@ export const TOOLS_TABLE: DjTool[] = [
   ),
 
   // The queue and playback
-  define("get_queue", "Show the queue in play order with positions, what is playing, volume, shuffle and repeat.", {}, [], async (_a, ctx) =>
-    ({ ...done("Looked at the queue", queueView(ctx)), view: ctx.host.queue().length ? { kind: "songs", title: "Queue", songs: ctx.host.queue(), total: ctx.host.queue().length } : undefined }),
+  define(
+    "get_queue",
+    "Show the queue in play order with positions, what is playing, volume, shuffle and repeat. Set remaining to true for what is left to play: the song playing now and the ones after it ('what's left', 'what's next', 'what's coming up').",
+    { remaining: { type: "boolean", description: "Only the song playing now and the songs after it." } },
+    [],
+    async (args, ctx) => {
+      const { host } = ctx;
+      const remaining = args.remaining === true;
+      const current = host.player().currentIndex;
+      const from = remaining && current !== null ? current : 0;
+      const songs = host.queue().slice(from);
+      return {
+        ...done(remaining ? "Looked at what is left in the queue" : "Looked at the queue", queueView(ctx, remaining)),
+        view: songs.length
+          ? { kind: "songs", title: remaining && from > 0 ? "Left to play" : "Queue", songs, total: songs.length, currentPath: current === null ? undefined : host.queue()[current]?.path }
+          : undefined,
+      };
+    },
   ),
   define(
     "start_queue",
@@ -426,8 +453,8 @@ export const TOOLS_TABLE: DjTool[] = [
     { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
     [],
     async (args, ctx) => {
-      const track = args.id === undefined ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
-      if (!track) return fail(args.id === undefined ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+      const track = songArg(args, ctx);
+      if (!track) return fail(noSongMessage(args));
       let matches;
       try {
         matches = await ctx.host.lookupTags(track);
@@ -509,8 +536,8 @@ export const TOOLS_TABLE: DjTool[] = [
     { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
     [],
     async (args, ctx) => {
-      const track = args.id === undefined ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
-      if (!track) return fail(args.id === undefined ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+      const track = songArg(args, ctx);
+      if (!track) return fail(noSongMessage(args));
       let check;
       try {
         check = await ctx.host.inspectFile(track);
@@ -541,8 +568,8 @@ export const TOOLS_TABLE: DjTool[] = [
     { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
     [],
     async (args, ctx) => {
-      const track = args.id === undefined ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
-      if (!track) return fail(args.id === undefined ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+      const track = songArg(args, ctx);
+      if (!track) return fail(noSongMessage(args));
       let check;
       try {
         check = await ctx.host.inspectFile(track);
@@ -571,8 +598,8 @@ export const TOOLS_TABLE: DjTool[] = [
     { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
     [],
     async (args, ctx) => {
-      const track = args.id === undefined ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
-      if (!track) return fail(args.id === undefined ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+      const track = songArg(args, ctx);
+      if (!track) return fail(noSongMessage(args));
       const stat = ctx.host.plays()[track.path];
       const count = stat?.count ?? 0;
       return {
@@ -594,8 +621,8 @@ export const TOOLS_TABLE: DjTool[] = [
     { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
     [],
     async (args, ctx) => {
-      const track = args.id === undefined ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
-      if (!track) return fail(args.id === undefined ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+      const track = songArg(args, ctx);
+      if (!track) return fail(noSongMessage(args));
       let lyrics;
       try {
         lyrics = await ctx.host.fetchLyrics(track);
@@ -604,13 +631,13 @@ export const TOOLS_TABLE: DjTool[] = [
       }
       if (!lyrics) return { result: { found: false, song: `${track.artist} - ${track.title}` }, note: `No lyrics found for "${track.title}"` };
       if (lyrics.instrumental) {
-        return { result: { found: true, instrumental: true }, note: `"${track.title}" is an instrumental`, view: { kind: "lyrics", song: track, text: "", instrumental: true } };
+        return { result: { found: true, instrumental: true }, note: `"${track.title}" is an instrumental`, view: { kind: "lyrics", song: track, text: "", instrumental: true, matched: lyrics.matched, source: lyrics.source } };
       }
       const cut = lyrics.text.length > MAX_LYRICS_CHARS;
       return {
         result: { found: true, matched: lyrics.matched, lyrics: cut ? lyrics.text.slice(0, MAX_LYRICS_CHARS) : lyrics.text, truncated: cut },
         note: `Fetched lyrics for "${track.title}"`,
-        view: { kind: "lyrics", song: track, text: lyrics.text, instrumental: false },
+        view: { kind: "lyrics", song: track, text: lyrics.text, instrumental: false, matched: lyrics.matched, source: lyrics.source },
       };
     },
   ),

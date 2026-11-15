@@ -55,6 +55,17 @@ function apply(song: Track, match: TagMatch, index: number) {
 }
 const level = (confidence: number) => (confidence >= 75 ? "high" : confidence >= 50 ? "mid" : "low");
 
+// --- lyrics: what the service matched, and whether that is your song ---
+const fold = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+const lyricsMatch = computed(() => {
+  if (props.view.kind !== "lyrics") return null;
+  const { song, matched } = props.view;
+  const shown = matched ?? { title: song.title, artist: song.artist, album: song.album };
+  // Different words for the same song are fine ("Beyoncé" / "Beyonce"); a different title or artist is worth saying.
+  const differs = !!matched && (fold(matched.title) !== fold(song.title) || (!!song.artist && fold(matched.artist) !== fold(song.artist)));
+  return { ...shown, differs };
+});
+
 // --- file check ---
 const check = computed<FileCheck | null>(() => (props.view.kind === "filecheck" ? props.view.check : null));
 const verdictText = computed(() => ({ ok: "Length is right", lengthWrong: "Length is wrong", looksWrong: "Length looks wrong", cannotCheck: "Could not compare" })[check.value?.verdict ?? "ok"]);
@@ -103,11 +114,11 @@ const stageText = (i: ImportItem) => (i.stage === "fetching" ? `Downloading ${Ma
       </header>
       <p v-if="view.note" class="note">{{ view.note }}</p>
       <ul>
-        <li v-for="s in visibleSongs" :key="s.path" class="song">
+        <li v-for="s in visibleSongs" :key="s.path" class="song" :class="{ current: s.path === view.currentPath }" :aria-current="s.path === view.currentPath ? 'true' : undefined">
           <CoverArt class="art" :path="s.path" :hue-key="hue(s)" :title="s.album || s.title" />
           <span class="meta">
             <span class="title ellipsis">{{ s.title }}</span>
-            <span class="muted ellipsis">{{ [s.artist, s.album].filter(Boolean).join(" · ") }}</span>
+            <span class="muted ellipsis">{{ s.path === view.currentPath ? "Now playing · " : "" }}{{ [s.artist, s.album].filter(Boolean).join(" · ") }}</span>
           </span>
           <span v-if="playsOf(s)" class="muted plays" :title="`Last played ${formatDate(playsOf(s)!.lastPlayedMs)}`">{{ playsOf(s)!.count }}×</span>
           <span class="muted time">{{ formatTime(s.durationMs) }}</span>
@@ -172,10 +183,15 @@ const stageText = (i: ImportItem) => (i.stage === "fetching" ? `Downloading ${Ma
 
     <!-- Lyrics -->
     <template v-else-if="view.kind === 'lyrics'">
-      <header>
-        <b>Lyrics: {{ view.song.title }}</b>
-        <span class="muted">{{ view.song.artist }}</span>
+      <header v-if="lyricsMatch">
+        <b class="ellipsis">{{ lyricsMatch.title }}</b>
+        <span class="muted ellipsis">{{ [lyricsMatch.artist, lyricsMatch.album].filter(Boolean).join(" · ") }}</span>
+        <span class="spacer" />
+        <span class="muted small">Lyrics{{ view.kind === 'lyrics' && view.source ? ` · ${view.source}` : "" }}</span>
       </header>
+      <p v-if="lyricsMatch?.differs" class="warn">
+        Matched “{{ lyricsMatch.title }}” by {{ lyricsMatch.artist }}, but your song is “{{ view.song.title }}” by {{ view.song.artist }}. These may be the wrong lyrics.
+      </p>
       <p v-if="view.instrumental" class="note">This one is an instrumental.</p>
       <pre v-else class="lyrics">{{ view.text }}</pre>
     </template>
@@ -232,6 +248,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 button { padding: 0 7px; font-size: 11px; }
 .song { display: flex; align-items: center; gap: 6px; padding: 3px 0; border-top: 1px solid var(--line); }
 .song:first-child { border-top: none; }
+.song.current { background: color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 4px; box-shadow: inset 3px 0 0 var(--accent); padding-left: 6px; }
 .art { width: 28px; height: 28px; flex: none; border-radius: 4px; }
 .meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .title { font-weight: 600; }
@@ -252,6 +269,7 @@ button { padding: 0 7px; font-size: 11px; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; font-variant-numeric: tabular-nums; }
 .bad { color: #ffb4b4; font-weight: 700; }
+.warn { margin: 2px 0 4px; padding: 3px 6px; border-radius: 4px; background: #4a3a1f; color: #ffd9a0; }
 .lyrics { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font: inherit; user-select: text; -webkit-user-select: text; }
 .bar { display: block; height: 3px; background: var(--line); border-radius: 2px; margin-top: 2px; }
 .bar > span { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
