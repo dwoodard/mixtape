@@ -60,6 +60,17 @@ export const THEMES: readonly Theme[] = [
 
 export const DEFAULT_THEME = "dark";
 
+/** Accent colours the user can pick over a theme's own. "theme" keeps the theme's accent. */
+export const ACCENTS: readonly { id: string; label: string; color: string | null }[] = [
+  { id: "theme", label: "Theme", color: null },
+  { id: "blue", label: "Blue", color: "#2f7bc4" },
+  { id: "green", label: "Green", color: "#2f9a5b" },
+  { id: "orange", label: "Orange", color: "#d9822b" },
+  { id: "pink", label: "Pink", color: "#d6568f" },
+  { id: "purple", label: "Purple", color: "#8a5fd1" },
+  { id: "red", label: "Red", color: "#d24a4a" },
+];
+
 const VARIABLES: Record<keyof Palette, string> = {
   bg: "--bg",
   panel: "--panel",
@@ -84,11 +95,16 @@ export function findTheme(id: string): Theme {
   return THEMES.find((t) => t.id === id) ?? THEMES[0];
 }
 
-/** Paints the app in a theme (an unknown id gives the default). */
-export function applyTheme(id: string, target: ThemeTarget): void {
+/** Paints the app in a theme (an unknown id gives the default), with the chosen accent over it. */
+export function applyTheme(id: string, target: ThemeTarget, accentId = "theme"): void {
   const theme = findTheme(id);
   for (const key of Object.keys(VARIABLES) as (keyof Palette)[]) {
     target.style.setProperty(VARIABLES[key], theme.palette[key]);
+  }
+  const accent = ACCENTS.find((a) => a.id === accentId)?.color;
+  if (accent) {
+    target.style.setProperty("--accent", accent);
+    target.style.setProperty("--accent-text", "#ffffff");
   }
   target.style.setProperty("color-scheme", theme.scheme);
 }
@@ -101,3 +117,8 @@ const themeChoice = persistedChoice<string>(
 /** The theme the user picked, remembered between launches. */
 export const themeId = themeChoice.choice;
 export const setTheme = themeChoice.set;
+
+const accentChoice = persistedChoice<string>("mixtape.accent", "theme", ACCENTS.map((a) => a.id));
+/** The accent colour the user picked ("theme" when none). */
+export const accentId = accentChoice.choice;
+export const setAccent = accentChoice.set;

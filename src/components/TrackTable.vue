@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { formatDate, formatTime } from "../lib/format";
-import type { SortDirection, SortKey } from "../lib/trackList";
+import { computed } from "vue";
+import { gridColumns, type SortDirection, type SortKey } from "../lib/trackList";
+import { showAddedColumn, showAlbumColumn } from "../lib/ui";
 import type { Track } from "../lib/types";
 
 defineProps<{
@@ -18,18 +20,21 @@ const emit = defineEmits<{
   sort: [key: SortKey];
 }>();
 
-const columns: { key: SortKey; label: string }[] = [
+const columns = computed<{ key: SortKey; label: string }[]>(() => [
   { key: "title", label: "Title" },
   { key: "artist", label: "Artist" },
-  { key: "album", label: "Album" },
-  { key: "addedMs", label: "Date Added" },
+  ...(showAlbumColumn.flag.value ? [{ key: "album" as const, label: "Album" }] : []),
+  ...(showAddedColumn.flag.value ? [{ key: "addedMs" as const, label: "Date Added" }] : []),
   { key: "durationMs", label: "Time" },
-];
+]);
+const gridStyle = computed(() => ({
+  gridTemplateColumns: gridColumns({ album: showAlbumColumn.flag.value, added: showAddedColumn.flag.value }),
+}));
 </script>
 
 <template>
   <div class="table" role="grid" aria-label="Tracks" aria-multiselectable="true">
-    <div class="row head" role="row">
+    <div class="row head" role="row" :style="gridStyle">
       <span class="num" />
       <button
         v-for="c in columns"
@@ -48,6 +53,7 @@ const columns: { key: SortKey; label: string }[] = [
         v-for="(t, i) in tracks"
         :key="`${i}-${t.path}`"
         class="row item"
+        :style="gridStyle"
         :class="{ current: t.path === currentPath, selected: selected.has(t.path) }"
         role="row"
         :data-index="i"
@@ -60,8 +66,8 @@ const columns: { key: SortKey; label: string }[] = [
         <span class="num">{{ i + 1 }}.</span>
         <span class="cell ellipsis">{{ t.title }}</span>
         <span class="cell ellipsis muted">{{ t.artist }}</span>
-        <span class="cell ellipsis muted">{{ t.album }}</span>
-        <span class="cell ellipsis muted">{{ formatDate(t.addedMs) }}</span>
+        <span v-if="showAlbumColumn.flag.value" class="cell ellipsis muted">{{ t.album }}</span>
+        <span v-if="showAddedColumn.flag.value" class="cell ellipsis muted">{{ formatDate(t.addedMs) }}</span>
         <span class="cell time">{{ formatTime(t.durationMs) }}</span>
         <button class="add" aria-label="Add to queue" title="Add to queue" @click.stop="emit('enqueue', t)">+</button>
       </div>
@@ -73,7 +79,7 @@ const columns: { key: SortKey; label: string }[] = [
 <style scoped>
 .table { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .body { flex: 1; overflow-y: auto; }
-.row { display: grid; grid-template-columns: 34px 3fr 2fr 2fr 96px 52px 24px; align-items: center; gap: 8px; padding: 0 10px; }
+.row { display: grid; align-items: center; gap: 8px; padding: 0 10px; }
 .head { border-bottom: 1px solid var(--line); }
 .head-cell { background: none; border: none; border-radius: 0; text-align: left; color: var(--muted); padding: 5px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
 .head-cell.durationMs { text-align: right; }

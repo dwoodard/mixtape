@@ -104,6 +104,10 @@ export function persistedSet(key: string, storage?: FlagStorage) {
   };
 }
 
+/** Optional track-list columns, remembered between launches. */
+export const showAlbumColumn = persistedFlag("mixtape.col.album", true);
+export const showAddedColumn = persistedFlag("mixtape.col.added", true);
+
 export type AppMode = "player" | "discovery" | "settings";
 const appModeChoice = persistedChoice<AppMode>("mixtape.appMode", "player", ["player", "discovery", "settings"]);
 /** Which workspace the large window shows: playing music, discovering and fixing it, or settings. */

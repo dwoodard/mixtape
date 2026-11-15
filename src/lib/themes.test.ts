@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyTheme, findTheme, THEMES } from "./themes";
+import { ACCENTS, applyTheme, findTheme, THEMES } from "./themes";
 
 function target() {
   const set: Record<string, string> = {};
@@ -21,6 +21,15 @@ describe("themes", () => {
     expect(t.set["--lcd"]).toBe(findTheme("light").palette.lcd);
     expect(t.set["color-scheme"]).toBe("light");
     expect(Object.keys(t.set)).toHaveLength(13);
+  });
+
+  it("lets an accent override the theme's accent, and \"theme\" keeps it", () => {
+    const withAccent = target();
+    applyTheme("dark", withAccent, "green");
+    expect(withAccent.set["--accent"]).toBe(ACCENTS.find((a) => a.id === "green")?.color);
+    const plain = target();
+    applyTheme("dark", plain, "theme");
+    expect(plain.set["--accent"]).toBe(findTheme("dark").palette.accent);
   });
 
   it("falls back to the default for an unknown theme", () => {
