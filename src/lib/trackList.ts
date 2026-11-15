@@ -1,11 +1,6 @@
 import type { Track } from "./types";
 
 export type SortKey = "default" | "title" | "artist" | "album" | "durationMs" | "year" | "addedMs";
-/** The track table's grid columns: number, title, artist, then the optional ones, time and the add button. */
-export function gridColumns(opts: { album: boolean; added: boolean }): string {
-  return ["34px", "3fr", "2fr", ...(opts.album ? ["2fr"] : []), ...(opts.added ? ["96px"] : []), "52px", "24px"].join(" ");
-}
-
 export type SortDirection = "asc" | "desc";
 
 /** Case-insensitive match of every word in `query` against title, artist, album, or genre. */

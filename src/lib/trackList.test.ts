@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterTracks, gridColumns, shuffleTracks, sortTracks } from "./trackList";
+import { filterTracks, shuffleTracks, sortTracks } from "./trackList";
 import { makeTrack } from "./testing";
 
 const tracks = [
@@ -68,14 +68,5 @@ describe("sortTracks", () => {
     const copy = [...tracks];
     sortTracks(tracks, "artist", "asc");
     expect(tracks).toEqual(copy);
-  });
-});
-
-describe("gridColumns", () => {
-  it("leaves out the album and date columns when they are hidden", () => {
-    expect(gridColumns({ album: true, added: true })).toBe("34px 3fr 2fr 2fr 96px 52px 24px");
-    expect(gridColumns({ album: false, added: true })).toBe("34px 3fr 2fr 96px 52px 24px");
-    expect(gridColumns({ album: true, added: false })).toBe("34px 3fr 2fr 2fr 52px 24px");
-    expect(gridColumns({ album: false, added: false })).toBe("34px 3fr 2fr 52px 24px");
   });
 });

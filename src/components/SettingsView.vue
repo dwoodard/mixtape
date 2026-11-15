@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { store } from "../lib/store";
 import { accentId, ACCENTS, setAccent, setTheme, themeId, THEMES } from "../lib/themes";
-import { showAddedColumn, showAlbumColumn } from "../lib/ui";
 </script>
 
 <template>
@@ -45,10 +44,6 @@ import { showAddedColumn, showAlbumColumn } from "../lib/ui";
         </button>
       </div>
 
-      <h3 class="next">Track list columns</h3>
-      <label class="check"><input type="checkbox" :checked="showAlbumColumn.flag.value" @change="showAlbumColumn.toggle()" /> Album</label>
-      <label class="check"><input type="checkbox" :checked="showAddedColumn.flag.value" @change="showAddedColumn.toggle()" /> Date Added</label>
-
       <h3 class="next">Music folder</h3>
       <div class="folder">
         <span class="path ellipsis">{{ store.folder.value ?? "No folder opened yet" }}</span>
@@ -68,7 +63,6 @@ h3.next { margin-top: 22px; }
 .accent.on { background: var(--panel-2); color: var(--text); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .dot { width: 12px; height: 12px; border-radius: 50%; }
 .dot.auto { background: conic-gradient(#2f7bc4, #2f9a5b, #d9822b, #d6568f, #8a5fd1, #2f7bc4); }
-.check { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
 .folder { display: flex; align-items: center; gap: 10px; }
 .path { flex: 1; min-width: 0; color: var(--muted); }
 .themes { display: flex; flex-wrap: wrap; gap: 12px; }
