@@ -4,6 +4,7 @@ import { formatTime } from "../lib/format";
 import { finalIndex, insertionIndex } from "../lib/reorder";
 import { imports, store } from "../lib/store";
 import { tip } from "../lib/shortcuts";
+import { showInLibrary } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import CoverArt from "./CoverArt.vue";
 
@@ -18,6 +19,12 @@ const menuItems = computed<MenuItem[]>(() => {
   const last = store.queue.value.length - 1;
   return [
     { label: "Play", action: () => store.playQueueIndex(index) },
+    {
+      label: "Show in library",
+      action: () => showInLibrary(track),
+      // A song taken out of the library has nowhere to be shown.
+      disabled: !store.library.value.some((t) => t.path === track.path),
+    },
     { label: "Reveal in Finder", action: () => store.revealInFinder([track]) },
     {
       label: picardMissing ? "Open in MusicBrainz Picard (not installed)" : "Open in MusicBrainz Picard",
