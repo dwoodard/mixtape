@@ -259,6 +259,7 @@ function onKey(event: KeyboardEvent) {
       :selected="selection.paths"
       :sort-key="sortKey"
       :sort-direction="sortDirection"
+      :plays="store.plays.value"
       @row-click="onRowClick"
       @row-menu="onRowMenu"
       @play="chooseSong"

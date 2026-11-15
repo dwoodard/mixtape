@@ -118,14 +118,20 @@ describe("commands", () => {
     expect(djPanelOpen.value).toBe(true);
   });
 
-  it("from the thin bar, the DJ key opens the large window with the DJ out", async () => {
-    djPanelOpen.value = true; // a stale value from an earlier session must not hide it
-    const store = fakeStore({ mode: { value: "thin" } });
-    const dj = get(createCommands(store), "dj");
-    expect(dj.enabled).toBe(true);
-    await dj.run!();
-    expect(store.toggleMode).toHaveBeenCalledOnce();
-    expect(djPanelOpen.value).toBe(true);
+  it("in the thin bar, the DJ key opens the chat in the bar's panel and does not touch the large window", async () => {
+    vi.stubGlobal("window", { innerWidth: 300 });
+    try {
+      djPanelOpen.value = false;
+      const store = fakeStore({ mode: { value: "thin" }, toggleThinView: vi.fn(async () => {}) });
+      const dj = get(createCommands(store), "dj");
+      expect(dj.enabled).toBe(true);
+      await dj.run!();
+      expect(store.toggleThinView).toHaveBeenCalledWith("dj", 300);
+      expect(store.toggleMode).not.toHaveBeenCalled();
+      expect(djPanelOpen.value).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("limits the thin bar to playback and the window switch", () => {

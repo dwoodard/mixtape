@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MULTIPLE, buildEdit, commonValue, draftFor, isMixed } from "./tagEdit";
+import { MULTIPLE, buildEdit, changedFields, commonValue, draftFor, isMixed } from "./tagEdit";
 import { makeTrack } from "./testing";
 
 const a = makeTrack({ path: "a", title: "One", artist: "Abe", album: "Same", year: 1999, trackNumber: 1 });
@@ -80,3 +80,22 @@ describe("buildEdit", () => {
     expect(buildEdit([a], { ...draftFor([a]), year: "2001" }).error).toBeNull();
   });
 });
+
+describe("changedFields", () => {
+  const a = makeTrack({ title: "Halo", year: 2008, genre: "Pop" });
+  const b = makeTrack({ title: "Halo", year: 2011, genre: "Pop" });
+
+  it("drops fields every song already has", () => {
+    expect(changedFields({ title: "Halo", year: "2008", genre: "Rock" }, [a])).toEqual({ genre: "Rock" });
+  });
+
+  it("keeps a field that differs for even one of several songs", () => {
+    expect(changedFields({ year: "2008", genre: "Pop" }, [a, b])).toEqual({ year: "2008" });
+  });
+
+  it("treats a missing number as empty, so clearing it is a change only when something is there", () => {
+    expect(changedFields({ year: "" }, [makeTrack({ year: null })])).toEqual({});
+    expect(changedFields({ year: "" }, [a])).toEqual({ year: "" });
+  });
+});
+

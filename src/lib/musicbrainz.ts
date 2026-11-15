@@ -1,5 +1,6 @@
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import type { Fetch } from "./lm";
+import type { TagEditPayload } from "./tagEdit";
 import type { Track } from "./types";
 
 const ENDPOINT = "https://musicbrainz.org/ws/2/recording";
@@ -110,6 +111,20 @@ function toMatch(r: Recording, track: Track): TagMatch {
     confidence: Math.max(0, Math.min(100, Math.round(confidence / 1.85))),
     reasons,
   };
+}
+
+/** The tags a match would write. Empty values are left out, so a match never blanks a tag. Genre is only a hint, so it stays out. */
+export function tagEditFromMatch(match: TagMatch): TagEditPayload {
+  const edit: TagEditPayload = {
+    title: match.title,
+    artist: match.artist,
+    album: match.album,
+    albumArtist: match.albumArtist,
+    year: match.year,
+    trackNumber: match.trackNumber,
+    discNumber: match.discNumber,
+  };
+  return Object.fromEntries(Object.entries(edit).filter(([, v]) => v)) as TagEditPayload;
 }
 
 let lastCall = 0;

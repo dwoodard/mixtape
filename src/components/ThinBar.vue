@@ -5,6 +5,7 @@ import { tip } from "../lib/shortcuts";
 import { store } from "../lib/store";
 import { queueSummary, thinParts, thinTier } from "../lib/thinBar";
 import CoverArt from "./CoverArt.vue";
+import DjChat from "./DjChat.vue";
 import QueueList from "./QueueList.vue";
 import SeekBar from "./SeekBar.vue";
 import ThinResizeHandle from "./ThinResizeHandle.vue";
@@ -37,7 +38,10 @@ const upNext = computed(() => {
 <template>
   <!-- The queue panel is part of the window only while it is open: above the bar or below it. -->
   <div class="shell">
-  <div v-if="store.thinPanel.value?.side === 'up'" class="drop up" :style="{ height: `${store.thinPanel.value.height}px` }"><QueueList /></div>
+  <div v-if="store.thinPanel.value?.side === 'up'" class="drop up" :style="{ height: `${store.thinPanel.value.height}px` }">
+    <div class="drop-body"><DjChat v-if="store.thinPanelView.value === 'dj'" @close="store.closeThinPanel()" /><QueueList v-else /></div>
+    <nav class="views" aria-label="Panel"><button :class="{ on: store.thinPanelView.value === 'queue' }" @click="store.toggleThinView('queue', width)">Queue</button><button :class="{ on: store.thinPanelView.value === 'dj' }" @click="store.toggleThinView('dj', width)">DJ</button></nav>
+  </div>
   <div class="thin" data-tauri-drag-region>
     <span v-if="parts.cover && track" class="art" data-tauri-drag-region>
       <CoverArt
@@ -60,12 +64,20 @@ const upNext = computed(() => {
       v-if="parts.queueButton"
       class="icon-btn"
       aria-label="Queue"
-      :aria-pressed="store.thinPanelOpen.value"
+      :aria-pressed="store.thinPanelOpen.value && store.thinPanelView.value === 'queue'"
       title="Queue"
       @click="store.toggleThinPanel()"
     >
       <svg viewBox="0 0 16 16"><path d="M2 3h12v2H2zM2 7h12v2H2zM2 11h8v2H2z" /></svg>
     </button>
+    <button
+      v-if="parts.djButton"
+      class="icon-btn dj-btn"
+      aria-label="DJ"
+      :aria-pressed="store.thinPanelOpen.value && store.thinPanelView.value === 'dj'"
+      :title="tip('DJ: ask an AI to run the queue and the library', 'dj')"
+      @click="store.toggleThinView('dj', width)"
+    >DJ</button>
     <!-- Without a title there is still somewhere to grab the bar and drag it. -->
     <span v-if="!parts.title" class="grow" data-tauri-drag-region @dblclick="store.toggleThinPanel()" />
     <div v-if="parts.title" class="lcd title ellipsis" data-tauri-drag-region :title="trackLabel(track)" @dblclick="store.toggleThinPanel()">{{ track?.title ?? "Nothing playing" }}</div>
@@ -97,13 +109,21 @@ const upNext = computed(() => {
     </template>
     <ThinResizeHandle />
   </div>
-  <div v-if="store.thinPanel.value?.side === 'down'" class="drop down" :style="{ height: `${store.thinPanel.value.height}px` }"><QueueList /></div>
+  <div v-if="store.thinPanel.value?.side === 'down'" class="drop down" :style="{ height: `${store.thinPanel.value.height}px` }">
+    <nav class="views" aria-label="Panel"><button :class="{ on: store.thinPanelView.value === 'queue' }" @click="store.toggleThinView('queue', width)">Queue</button><button :class="{ on: store.thinPanelView.value === 'dj' }" @click="store.toggleThinView('dj', width)">DJ</button></nav>
+    <div class="drop-body"><DjChat v-if="store.thinPanelView.value === 'dj'" @close="store.closeThinPanel()" /><QueueList v-else /></div>
+  </div>
   </div>
 </template>
 
 <style scoped>
 .shell { height: 100%; display: flex; flex-direction: column; }
-.drop { flex: none; display: flex; min-height: 0; overflow: hidden; background: var(--panel-3); border: 1px solid var(--line); }
+.drop { flex: none; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--panel-3); border: 1px solid var(--line); }
+.drop-body { flex: 1; min-height: 0; display: flex; }
+.drop-body > :deep(*) { flex: 1; min-width: 0; }
+.views { flex: none; display: flex; gap: 2px; padding: 2px 4px; background: var(--panel); }
+.views button { height: 18px; padding: 0 10px; font-size: 10px; line-height: 16px; }
+.dj-btn { width: auto; padding: 0 5px; font-size: 9px; font-weight: 700; }
 .drop.up { border-bottom: none; }
 .drop.down { border-top: none; }
 .thin {
@@ -133,7 +153,8 @@ const upNext = computed(() => {
 .modes button { height: 18px; padding: 0 6px; font-size: 10px; line-height: 16px; white-space: nowrap; }
 
 /* Compact versions of the shared controls. */
-.thin :deep(.icon-btn) { width: 18px; height: 18px; }
+.thin :deep(.icon-btn:not(.dj-btn)) { width: 18px; height: 18px; }
+.thin :deep(.dj-btn) { height: 18px; }
 .thin :deep(.icon-btn svg) { width: 9px; height: 9px; }
 .thin :deep(.icon-btn[aria-pressed="true"]) { background: var(--accent); color: var(--accent-text); }
 .thin :deep(input[type="range"]) { height: 12px; }

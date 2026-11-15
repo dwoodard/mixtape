@@ -70,3 +70,20 @@ describe("sortTracks", () => {
     expect(tracks).toEqual(copy);
   });
 });
+
+describe("sorting by plays", () => {
+  const a = makeTrack({ path: "/a", title: "A" });
+  const b = makeTrack({ path: "/b", title: "B" });
+  const c = makeTrack({ path: "/c", title: "C" });
+  const plays = { "/b": { count: 5, lastPlayedMs: 1 }, "/c": { count: 2, lastPlayedMs: 1 } };
+
+  it("puts the most played first when descending, and counts unplayed songs as zero", () => {
+    expect(sortTracks([a, b, c], "plays", "desc", plays).map((t) => t.title)).toEqual(["B", "C", "A"]);
+    expect(sortTracks([a, b, c], "plays", "asc", plays).map((t) => t.title)).toEqual(["A", "C", "B"]);
+  });
+
+  it("keeps the given order for songs with equal counts", () => {
+    expect(sortTracks([c, a], "plays", "desc", {}).map((t) => t.title)).toEqual(["C", "A"]);
+  });
+});
+

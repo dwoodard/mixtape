@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { QueueReplacement } from "./changes";
 import type { TagEditPayload } from "./tagEdit";
 import type { FolderRefresh, ImportEvent, ImportItem, TagsPatch, ToolStatus } from "./types";
-import type { CachedLibrary, CleanupReport, DuplicatePair, PlayerSnapshot, PlayStat, PlayerState, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
+import type { CachedLibrary, CleanupReport, DuplicatePair, FileCheck, PlayerSnapshot, PlayStat, PlayerState, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
 
 type Unlisten = () => void;
 
@@ -27,6 +27,10 @@ export interface Api {
   cancelScan(): Promise<void>;
   cachedLibrary(): Promise<CachedLibrary | null>;
   removeFromLibrary(paths: string[]): Promise<void>;
+  /** Compares a song's file with the length the library holds for it. */
+  inspectFile(path: string, storedMs: number): Promise<FileCheck>;
+  /** Corrects the length the library holds for a song (the file itself is untouched). Returns the updated song. */
+  fixLength(path: string, lengthMs: number): Promise<Track>;
   revealInFinder(paths: string[]): Promise<void>;
   trashDuplicates(pairs: DuplicatePair[]): Promise<CleanupReport>;
   writeTags(paths: string[], edit: TagEditPayload): Promise<TagWriteResult[]>;
@@ -99,6 +103,8 @@ export const tauriApi: Api = {
   cancelScan: () => invoke("cancel_scan"),
   cachedLibrary: () => invoke("cached_library"),
   removeFromLibrary: (paths) => invoke("remove_from_library", { paths }),
+  inspectFile: (path, storedMs) => invoke("inspect_file", { path, storedMs }),
+  fixLength: (path, lengthMs) => invoke("fix_length", { path, lengthMs }),
   revealInFinder: (paths) => invoke("reveal_in_finder", { paths }),
   trashDuplicates: (pairs) => invoke("trash_duplicates", { pairs }),
   writeTags: (paths, edit) => invoke("write_tags", { paths, edit }),

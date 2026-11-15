@@ -1,7 +1,7 @@
 import type { DjTool, ToolContext, ToolOutcome } from "./dj";
 import { MAX_LYRICS_CHARS } from "./lyrics";
 import { ACCENTS, THEMES } from "./themes";
-import type { TagEditPayload } from "./tagEdit";
+import { changedFields, type TagEditPayload } from "./tagEdit";
 import type { ImportItem, TagsPatch, Track } from "./types";
 
 const MAX_SEARCH = 100;
@@ -26,6 +26,26 @@ function define(
 }
 
 const plain = (text: string) => text.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+
+/** "Synth-Pop", "synth pop" and "Synthpop" all become "synthpop": spacing and punctuation do not decide a match. */
+const squash = (text: string) => plain(text).replace(/[^a-z0-9]+/g, "");
+
+const DECADE_WORDS: Record<string, number> = { sixties: 1960, seventies: 1970, eighties: 1980, nineties: 1990, noughties: 2000 };
+
+/** "80s", "1980s" and "eighties" in a query mean a range of years. Returns the words left over and that range, if any. */
+function pullDecade(words: string[]): { words: string[]; from: number | null; to: number | null } {
+  let start: number | null = null;
+  const rest = words.filter((raw) => {
+    const word = raw.replace(/[^a-z0-9]/g, "");
+    const short = word.match(/^(\d0)s$/);
+    const long = word.match(/^((?:19|20)\d0)s$/);
+    const decade = long ? Number(long[1]) : short ? (Number(short[1]) < 30 ? 2000 : 1900) + Number(short[1]) : DECADE_WORDS[word];
+    if (decade === undefined) return true;
+    start = decade;
+    return false;
+  });
+  return { words: rest, from: start, to: start === null ? null : start + 9 };
+}
 const songs = (n: number) => `${n} song${n === 1 ? "" : "s"}`;
 const done = (note: string, result: unknown = { ok: true }): ToolOutcome => ({ result, note });
 const fail = (message: string): ToolOutcome => ({ result: { error: message }, note: message });
@@ -35,6 +55,8 @@ const num = (value: unknown): number | null =>
   value !== undefined && value !== null && value !== "" && Number.isFinite(Number(value)) ? Number(value) : null;
 
 const formatClock = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
+
+const verdictText = (v: string) => ({ ok: "length is right", lengthWrong: "length is wrong", looksWrong: "length looks wrong", cannotCheck: "could not compare" })[v] ?? v;
 
 const NO_IDS = "No valid song ids. Call search_library first and use the ids it returns.";
 
@@ -65,20 +87,30 @@ function named(tracks: Track[]): string {
   return tracks.length === 1 ? `"${tracks[0].title}"` : songs(tracks.length);
 }
 
+const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
 function search(args: Args, { host, session }: ToolContext): ToolOutcome {
+  const plays = host.plays();
+  const [minPlays, maxPlays] = [num(args.min_plays), num(args.max_plays)];
+  const playsOf = (t: Track) => plays[t.path]?.count ?? 0;
   const text = (key: string) => (typeof args[key] === "string" ? plain(args[key] as string).trim() : "");
-  const words = text("query").split(/\s+/).filter(Boolean);
-  const [artist, album, genre] = [text("artist"), text("album"), text("genre")];
-  const [from, to] = [num(args.year_from), num(args.year_to)];
+  const decade = pullDecade(text("query").split(/\s+/).filter(Boolean));
+  // A decade in the words is a range of years, unless the years were given outright.
+  const from = num(args.year_from) ?? decade.from;
+  const to = num(args.year_to) ?? decade.to;
+  const words = decade.words.map(squash).filter(Boolean);
+  const [artist, album, genre] = [squash(text("artist")), squash(text("album")), squash(text("genre"))];
 
   const found = host.library().filter((t) => {
-    const hay = plain(`${t.title} ${t.artist} ${t.albumArtist} ${t.album} ${t.genre}`);
+    const hay = [t.title, t.artist, t.albumArtist, t.album, t.genre].map(squash).join(" ");
     if (!words.every((w) => hay.includes(w))) return false;
-    if (artist && !plain(`${t.artist} ${t.albumArtist}`).includes(artist)) return false;
-    if (album && !plain(t.album).includes(album)) return false;
-    if (genre && !plain(t.genre).includes(genre)) return false;
+    if (artist && !squash(`${t.artist} ${t.albumArtist}`).includes(artist)) return false;
+    if (album && !squash(t.album).includes(album)) return false;
+    if (genre && !squash(t.genre).includes(genre)) return false;
     if (from !== null && (t.year ?? 0) < from) return false;
     if (to !== null && (t.year === null || t.year > to)) return false;
+    if (minPlays !== null && playsOf(t) < minPlays) return false;
+    if (maxPlays !== null && playsOf(t) > maxPlays) return false;
     return true;
   });
 
@@ -87,6 +119,9 @@ function search(args: Args, { host, session }: ToolContext): ToolOutcome {
   if (sort === "newest_added") ordered.sort((a, b) => b.addedMs - a.addedMs);
   else if (sort === "title") ordered.sort((a, b) => a.title.localeCompare(b.title));
   else if (sort === "year") ordered.sort((a, b) => (a.year ?? 0) - (b.year ?? 0));
+  else if (sort === "most_played") ordered.sort((a, b) => playsOf(b) - playsOf(a));
+  else if (sort === "least_played") ordered.sort((a, b) => playsOf(a) - playsOf(b));
+  else if (sort === "recently_played") ordered.sort((a, b) => (plays[b.path]?.lastPlayedMs ?? 0) - (plays[a.path]?.lastPlayedMs ?? 0));
   else
     for (let i = ordered.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -96,12 +131,20 @@ function search(args: Args, { host, session }: ToolContext): ToolOutcome {
   const limit = Math.min(MAX_SEARCH, Math.max(1, num(args.limit) ?? DEFAULT_SEARCH));
   const shown = ordered.slice(0, limit);
   const label = Object.entries(args)
-    .filter(([k, v]) => v !== undefined && v !== "" && k !== "limit" && k !== "sort")
+    .filter(([k, v]) => v !== undefined && v !== "" && k !== "limit")
     .map(([k, v]) => (k === "query" ? String(v) : `${k.replace("_", " ")} ${v}`))
     .join(", ");
   return {
-    result: { matches: found.length, shown: shown.length, songs: shown.map((t) => describe(t, session.idFor(t))) },
+    result: {
+      matches: found.length,
+      shown: shown.length,
+      hint: found.length
+        ? undefined
+        : "Nothing matched. Most songs have no genre tag, so do not search by genre or mood. Search by year range (year_from, year_to) or artist, with a large limit, and choose by what you know of the artists.",
+      songs: shown.map((t) => ({ ...describe(t, session.idFor(t)), plays: playsOf(t), last_played: plays[t.path] ? dayOf(plays[t.path].lastPlayedMs) : undefined })),
+    },
     note: `Searched${label ? ` ${label}` : " the library"}: ${found.length} found`,
+    view: found.length ? { kind: "songs", title: "Found", songs: shown, total: found.length } : undefined,
   };
 }
 
@@ -129,15 +172,6 @@ const TAG_KEYS: Record<string, keyof TagEditPayload> = {
   year: "year",
   genre: "genre",
 };
-
-/** The edit without the fields every one of `tracks` already has: writing those again changes nothing. */
-function onlyChanges(edit: TagEditPayload, tracks: Track[]): TagEditPayload {
-  const have = (t: Track, field: keyof TagEditPayload) => {
-    const v = t[field as keyof Track];
-    return v === null || v === undefined ? "" : String(v);
-  };
-  return Object.fromEntries(Object.entries(edit).filter(([field, value]) => !tracks.every((t) => have(t, field as keyof TagEditPayload) === value)));
-}
 
 function tagEdit(args: Args): TagEditPayload | string {
   const edit: TagEditPayload = {};
@@ -190,7 +224,9 @@ export const TOOLS_TABLE: DjTool[] = [
       genre: str(),
       year_from: int(),
       year_to: int(),
-      sort: str(`Default random, which gives variety.`, { enum: ["random", "newest_added", "title", "year"] }),
+      sort: str(`Default random, which gives variety.`, { enum: ["random", "newest_added", "title", "year", "most_played", "least_played", "recently_played"] }),
+      min_plays: int({ description: "Only songs played at least this many times." }),
+      max_plays: int({ description: "Only songs played at most this many times. 0 means never played." }),
       limit: int({ description: `How many songs to return. Default ${DEFAULT_SEARCH}, at most ${MAX_SEARCH}.` }),
     },
     [],
@@ -199,7 +235,7 @@ export const TOOLS_TABLE: DjTool[] = [
 
   // The queue and playback
   define("get_queue", "Show the queue in play order with positions, what is playing, volume, shuffle and repeat.", {}, [], async (_a, ctx) =>
-    done("Looked at the queue", queueView(ctx)),
+    ({ ...done("Looked at the queue", queueView(ctx)), view: ctx.host.queue().length ? { kind: "songs", title: "Queue", songs: ctx.host.queue(), total: ctx.host.queue().length } : undefined }),
   ),
   define(
     "start_queue",
@@ -211,7 +247,10 @@ export const TOOLS_TABLE: DjTool[] = [
       if (isOutcome(picked)) return picked;
       await ctx.host.startQueue(picked.tracks);
       if (args.shuffle === true) await ctx.host.setShuffle(true);
-      return done(`Started a new queue of ${songs(picked.tracks.length)}${args.shuffle === true ? ", shuffled" : ""}.${picked.note}`, { started: picked.tracks.length });
+      return {
+        ...done(`Started a new queue of ${songs(picked.tracks.length)}${args.shuffle === true ? ", shuffled" : ""}.${picked.note}`, { started: picked.tracks.length }),
+        view: { kind: "songs", title: "New queue", songs: picked.tracks, total: picked.tracks.length },
+      };
     },
   ),
   define(
@@ -224,7 +263,10 @@ export const TOOLS_TABLE: DjTool[] = [
       if (isOutcome(picked)) return picked;
       const where = args.where === "next" ? "next" : "end";
       await ctx.host.addToQueue(picked.tracks, where);
-      return done(`Added ${songs(picked.tracks.length)} ${where === "next" ? "to play next" : "to the end of the queue"}.${picked.note}`, { added: picked.tracks.length });
+      return {
+        ...done(`Added ${songs(picked.tracks.length)} ${where === "next" ? "to play next" : "to the end of the queue"}.${picked.note}`, { added: picked.tracks.length }),
+        view: { kind: "songs", title: where === "next" ? "Playing next" : "Added to the queue", songs: picked.tracks, total: picked.tracks.length },
+      };
     },
   ),
   define("play_now", "Play one song right now, right after the current song, without losing the rest of the queue.", { id: int() }, ["id"], async (args, ctx) => {
@@ -361,7 +403,7 @@ export const TOOLS_TABLE: DjTool[] = [
       if (isOutcome(picked)) return picked;
       const asked = tagEdit(args);
       if (typeof asked === "string") return fail(asked);
-      const edit = onlyChanges(asked, picked.tracks);
+      const edit = changedFields(asked, picked.tracks);
       if (Object.keys(edit).length === 0) return done("The tags already have those values", { changed: 0, note: "Nothing to change: the tags already match." });
       const out = await ctx.host.writeTags(picked.tracks, edit);
       if (out.problem) return fail(out.problem);
@@ -372,7 +414,7 @@ export const TOOLS_TABLE: DjTool[] = [
       const tracks = ctx.session.resolve(args.ids).tracks;
       const asked = tagEdit(args);
       if (typeof asked === "string") return null; // the tool itself reports it
-      const edit = onlyChanges(asked, tracks);
+      const edit = changedFields(asked, tracks);
       if (Object.keys(edit).length === 0) return null; // nothing would be written, so nothing to approve
       const changes = Object.entries(edit).map(([k, v]) => `${k} → ${v || "(clear)"}`).join(", ");
       return `Write tags (${changes}) into the files of ${named(tracks)}?`;
@@ -399,6 +441,7 @@ export const TOOLS_TABLE: DjTool[] = [
           matches: matches.map((m) => ({ title: m.title, artist: m.artist, album: m.album, album_artist: m.albumArtist, year: m.year, track: m.trackNumber, disc: m.discNumber, genre_hint: m.genreHint || undefined, release_kind: m.releaseKind || undefined, confidence: m.confidence, reasons: m.reasons })),
         },
         note,
+        view: matches.length ? { kind: "tags", song: track, matches } : undefined,
       };
     },
   ),
@@ -407,7 +450,10 @@ export const TOOLS_TABLE: DjTool[] = [
       keep: describe(g.keep, session.idFor(g.keep)),
       extras: g.extras.map((t) => ({ ...describe(t, session.idFor(t)), path: t.path })),
     }));
-    return done(`Found ${groups.length} duplicate ${groups.length === 1 ? "group" : "groups"}`, { groups });
+    return {
+      ...done(`Found ${groups.length} duplicate ${groups.length === 1 ? "group" : "groups"}`, { groups }),
+      view: groups.length ? { kind: "duplicates", groups: host.duplicateGroups().map((g) => ({ keep: g.keep, extras: g.extras })) } : undefined,
+    };
   }),
   define(
     "trash_duplicate_extras",
@@ -458,6 +504,91 @@ export const TOOLS_TABLE: DjTool[] = [
   ),
 
   define(
+    "check_file",
+    "Check a song's file against the library: the length the library holds, the length the file really plays for (read from the audio, not the tags), its size, bitrate and format. Use it when a song's length looks wrong. Give a song id, or leave it out for the song that is playing. Changes nothing.",
+    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    [],
+    async (args, ctx) => {
+      const track = args.id === undefined ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
+      if (!track) return fail(args.id === undefined ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+      let check;
+      try {
+        check = await ctx.host.inspectFile(track);
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e));
+      }
+      return {
+        result: {
+          song: `${track.artist} - ${track.title}`,
+          verdict: check.verdict,
+          library_length: formatClock(check.storedMs),
+          file_length: check.realMs === null ? "unknown (ffprobe not installed)" : formatClock(check.realMs),
+          bitrate_kbps: check.bitrateKbps ?? undefined,
+          implied_kbps: check.impliedKbps ?? undefined,
+          size_mb: Math.round(check.sizeBytes / 10_000) / 100,
+          codec: check.codec ?? undefined,
+          notes: check.notes,
+          next_step: check.verdict === "lengthWrong" ? "Call fix_length to correct it." : undefined,
+        },
+        note: `Checked "${track.title}": ${verdictText(check.verdict)}`,
+        view: { kind: "filecheck", song: track, check },
+      };
+    },
+  ),
+  define(
+    "fix_length",
+    "Correct a song's length in the library when check_file shows it is wrong. It re-checks the file first and only changes the library's record (never the file): the correction lasts while the file is unchanged. Give a song id, or leave it out for the song that is playing.",
+    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    [],
+    async (args, ctx) => {
+      const track = args.id === undefined ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
+      if (!track) return fail(args.id === undefined ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+      let check;
+      try {
+        check = await ctx.host.inspectFile(track);
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e));
+      }
+      if (check.verdict !== "lengthWrong" || check.realMs === null) {
+        return {
+          result: { fixed: false, verdict: check.verdict, notes: check.notes },
+          note: check.verdict === "ok" ? `"${track.title}" already has the right length` : `Could not confirm a wrong length for "${track.title}"`,
+          view: { kind: "filecheck", song: track, check },
+        };
+      }
+      const problem = await ctx.host.fixLength(track, check.realMs);
+      if (problem) return fail(problem);
+      return {
+        result: { fixed: true, was: formatClock(check.storedMs), now: formatClock(check.realMs) },
+        note: `Fixed the length of "${track.title}": ${formatClock(check.storedMs)} → ${formatClock(check.realMs)}`,
+        view: { kind: "filecheck", song: { ...track, durationMs: check.realMs }, check: { ...check, storedMs: check.realMs, verdict: "ok", notes: [`Corrected from ${formatClock(check.storedMs)} to ${formatClock(check.realMs)}.`] } },
+      };
+    },
+  ),
+  define(
+    "get_play_count",
+    "How many times a song has been played, and when it was last played. Give a song id, or leave it out for the song that is playing. Counting began when the feature was added, so older listening is not included.",
+    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    [],
+    async (args, ctx) => {
+      const track = args.id === undefined ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
+      if (!track) return fail(args.id === undefined ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+      const stat = ctx.host.plays()[track.path];
+      const count = stat?.count ?? 0;
+      return {
+        result: { song: `${track.artist} - ${track.title}`, plays: count, last_played: stat ? dayOf(stat.lastPlayedMs) : null },
+        note: `"${track.title}": ${count === 0 ? "never played" : `played ${count} time${count === 1 ? "" : "s"}`}`,
+        view: {
+          kind: "songs",
+          title: "Play count",
+          songs: [track],
+          total: 1,
+          note: count === 0 ? "Never played" : `Played ${count} time${count === 1 ? "" : "s"}, last on ${dayOf(stat!.lastPlayedMs)}`,
+        },
+      };
+    },
+  ),
+  define(
     "get_lyrics",
     "Look up the lyrics of a song on the web (LRCLIB). Give a song id, or leave it out for the song that is playing. Sends only its title, artist, album and length.",
     { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
@@ -472,11 +603,14 @@ export const TOOLS_TABLE: DjTool[] = [
         return fail(e instanceof Error ? e.message : String(e));
       }
       if (!lyrics) return { result: { found: false, song: `${track.artist} - ${track.title}` }, note: `No lyrics found for "${track.title}"` };
-      if (lyrics.instrumental) return { result: { found: true, instrumental: true }, note: `"${track.title}" is an instrumental` };
+      if (lyrics.instrumental) {
+        return { result: { found: true, instrumental: true }, note: `"${track.title}" is an instrumental`, view: { kind: "lyrics", song: track, text: "", instrumental: true } };
+      }
       const cut = lyrics.text.length > MAX_LYRICS_CHARS;
       return {
         result: { found: true, matched: lyrics.matched, lyrics: cut ? lyrics.text.slice(0, MAX_LYRICS_CHARS) : lyrics.text, truncated: cut },
         note: `Fetched lyrics for "${track.title}"`,
+        view: { kind: "lyrics", song: track, text: lyrics.text, instrumental: false },
       };
     },
   ),
@@ -484,7 +618,7 @@ export const TOOLS_TABLE: DjTool[] = [
   // Discovery: bring in new songs
   define("list_imports", "List the songs in Discovery: queued, fetching, ready to review, added or failed.", {}, [], async (_a, { host }) => {
     const items = host.imports().map(importSummary);
-    return done(`${items.length} in Discovery`, { items });
+    return { ...done(`${items.length} in Discovery`, { items }), view: items.length ? { kind: "imports", ids: items.map((i) => i.import_id) } : undefined };
   }),
   define(
     "import_from_link",

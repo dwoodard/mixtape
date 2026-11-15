@@ -5,6 +5,7 @@ import { finalIndex, insertionIndex } from "../lib/reorder";
 import { imports, store } from "../lib/store";
 import { tip } from "../lib/shortcuts";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
+import CoverArt from "./CoverArt.vue";
 
 const total = computed(() => store.queue.value.reduce((sum, t) => sum + t.durationMs, 0));
 
@@ -29,6 +30,7 @@ const menuItems = computed<MenuItem[]>(() => {
     { label: "Move to bottom", action: () => store.moveQueueTrack(index, last), disabled: index === last },
     { label: "Remove from queue", action: () => store.removeFromQueue(index), separated: true },
     { label: "Remove from here down", action: () => store.removeFromQueueDown(index) },
+    { label: "Clear others", action: () => store.clearOtherQueueSongs(index), disabled: last === 0 },
   ];
 });
 
@@ -109,6 +111,7 @@ onBeforeUnmount(() => endDrag(false));
           @pointerdown.prevent="startDrag(i, $event)"
         >⠿</span>
         <span class="n">{{ i + 1 }}.</span>
+        <CoverArt class="art" :path="t.path" :hue-key="`${t.albumArtist || t.artist}\u0000${t.album}`" :title="t.album || t.title" />
         <span class="name ellipsis">{{ t.artist ? `${t.artist} - ${t.title}` : t.title }}</span>
         <span class="dur">{{ formatTime(t.durationMs) }}</span>
         <button class="rm" :aria-label="`Remove ${t.title}`" title="Remove" @click="store.removeFromQueue(i)">×</button>
@@ -121,9 +124,10 @@ onBeforeUnmount(() => endDrag(false));
 <style scoped>
 .queue { flex: 1; min-height: 0; }
 ol { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; flex: 1; background: var(--panel-3); }
-li { position: relative; display: grid; grid-template-columns: 14px 30px 1fr auto 20px; align-items: center; gap: 6px; height: 28px; padding: 0 10px; font-size: 13px; }
+li { position: relative; display: grid; grid-template-columns: 14px 30px 22px 1fr auto 20px; align-items: center; gap: 6px; height: 28px; padding: 0 10px; font-size: 13px; }
 li:hover { background: var(--panel-2); }
 li.current { background: var(--accent); color: var(--accent-text); }
+.art { width: 22px; height: 22px; border-radius: 3px; }
 .n, .dur { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
 li.current .n, li.current .dur { color: rgba(255, 255, 255, 0.8); }
 .grip { color: var(--muted); cursor: grab; font-size: 13px; line-height: 1; opacity: 0; text-align: center; user-select: none; touch-action: none; }

@@ -4,7 +4,7 @@ import { createStore } from "./store";
 import type { FlagStorage } from "./ui";
 import { makePlayerState, makeTrack } from "./testing";
 import { panelWantedHeight } from "./thinBar";
-import type { CleanupReport, PlayerState, ScanProgress, Track, WindowMode } from "./types";
+import type { CleanupReport, PlayerState, PlayStat, ScanProgress, Track, WindowMode } from "./types";
 
 function fakeApi(overrides: Partial<Api> = {}) {
   const listeners = {
@@ -14,10 +14,12 @@ function fakeApi(overrides: Partial<Api> = {}) {
     mode: [] as ((m: WindowMode) => void)[],
     scan: [] as ((p: ScanProgress) => void)[],
     scanTracks: [] as ((t: Track[]) => void)[],
+    played: [] as ((p: { path: string } & PlayStat) => void)[],
   };
   const unlisten = vi.fn();
   const api: Api = {
     snapshot: vi.fn(async () => ({ state: makePlayerState(), queue: [] })),
+    playStats: vi.fn(async () => ({}) as Record<string, PlayStat>),
     windowMode: vi.fn(async () => "large" as WindowMode),
     pickFolder: vi.fn(async () => "/music"),
     scanFolder: vi.fn(async () => [makeTrack()]),
@@ -26,6 +28,8 @@ function fakeApi(overrides: Partial<Api> = {}) {
     cancelScan: vi.fn(async () => {}),
     cachedLibrary: vi.fn(async () => null),
     removeFromLibrary: vi.fn(async () => {}),
+    inspectFile: vi.fn(async () => ({}) as never),
+    fixLength: vi.fn(async () => makeTrack()),
     revealInFinder: vi.fn(async () => {}),
     writeTags: vi.fn(async () => []),
     importTools: vi.fn(async () => ({ ytDlp: "/bin/yt-dlp", ffmpeg: "/bin/ffmpeg", picard: "/Applications/MusicBrainz Picard.app" })),
@@ -74,6 +78,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     onWindowMode: vi.fn(async (cb) => (listeners.mode.push(cb), unlisten)),
     onScanProgress: vi.fn(async (cb) => (listeners.scan.push(cb), unlisten)),
     onScanTracks: vi.fn(async (cb) => (listeners.scanTracks.push(cb), unlisten)),
+    onPlayed: vi.fn(async (cb) => (listeners.played.push(cb), unlisten)),
     ...overrides,
   };
   return { api, listeners, unlisten };
@@ -119,7 +124,7 @@ describe("init", () => {
     const { api, unlisten } = fakeApi();
     const cleanup = await createStore(api).init();
     cleanup();
-    expect(unlisten).toHaveBeenCalledTimes(6);
+    expect(unlisten).toHaveBeenCalledTimes(7);
   });
 });
 
@@ -1083,3 +1088,147 @@ describe("songs appear while a new folder is scanned", () => {
     expect(store.library.value).toEqual([]);
   });
 });
+
+describe("play counts", () => {
+  it("loads the saved counts at start and follows each new play", async () => {
+    const { api, listeners } = fakeApi({ playStats: vi.fn(async () => ({ "/a.mp3": { count: 2, lastPlayedMs: 100 } })) });
+    const store = createStore(api);
+    await store.init();
+    expect(store.plays.value["/a.mp3"]).toEqual({ count: 2, lastPlayedMs: 100 });
+
+    listeners.played[0]({ path: "/a.mp3", count: 3, lastPlayedMs: 200 });
+    listeners.played[0]({ path: "/b.mp3", count: 1, lastPlayedMs: 300 });
+
+    expect(store.plays.value).toEqual({
+      "/a.mp3": { count: 3, lastPlayedMs: 200 },
+      "/b.mp3": { count: 1, lastPlayedMs: 300 },
+    });
+  });
+
+  it("a failed load of the counts does not stop the app starting", async () => {
+    const { api } = fakeApi({ playStats: vi.fn(async () => Promise.reject("no file")) });
+    const store = createStore(api);
+    await store.init();
+    expect(store.plays.value).toEqual({});
+  });
+});
+
+describe("clear others", () => {
+  async function queueOf(n: number) {
+    const tracks = Array.from({ length: n }, (_, i) => makeTrack({ path: `/m/${i}.mp3`, title: `S${i}` }));
+    const { api, listeners } = fakeApi({ snapshot: vi.fn(async () => ({ state: makePlayerState(), queue: tracks })) });
+    const store = createStore(api);
+    await store.init();
+    return { api, store, listeners };
+  }
+
+  it("removes everything below in one step, then everything above from the bottom up", async () => {
+    const { api, store } = await queueOf(5);
+    await store.clearOtherQueueSongs(2);
+    expect(api.removeFromQueueDown).toHaveBeenCalledWith(3);
+    expect(vi.mocked(api.removeFromQueue).mock.calls).toEqual([[1], [0]]);
+  });
+
+  it("leaves out the step with nothing to remove, for the first and the last song", async () => {
+    const first = await queueOf(3);
+    await first.store.clearOtherQueueSongs(0);
+    expect(first.api.removeFromQueueDown).toHaveBeenCalledWith(1);
+    expect(first.api.removeFromQueue).not.toHaveBeenCalled();
+
+    const last = await queueOf(3);
+    await last.store.clearOtherQueueSongs(2);
+    expect(last.api.removeFromQueueDown).not.toHaveBeenCalled();
+    expect(vi.mocked(last.api.removeFromQueue).mock.calls).toEqual([[1], [0]]);
+  });
+
+  it("does nothing for a one-song queue or a row that is not there", async () => {
+    const one = await queueOf(1);
+    await one.store.clearOtherQueueSongs(0);
+    const many = await queueOf(3);
+    await many.store.clearOtherQueueSongs(9);
+    for (const { api } of [one, many]) {
+      expect(api.removeFromQueueDown).not.toHaveBeenCalled();
+      expect(api.removeFromQueue).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("thin bar panel: queue and DJ", () => {
+  it("opens the DJ at its own height and closes it when asked again", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.toggleThinView("dj", 500);
+    expect(api.openThinPanel).toHaveBeenCalledWith(420);
+    expect(store.thinPanelView.value).toBe("dj");
+    expect(api.resizeThin).not.toHaveBeenCalled();
+
+    await store.toggleThinView("dj", 500);
+    expect(store.thinPanelOpen.value).toBe(false);
+    expect(api.closeThinPanel).toHaveBeenCalledOnce();
+  });
+
+  it("widens a bar that is too narrow for the chat before opening it", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.toggleThinView("dj", 200);
+    expect(api.resizeThin).toHaveBeenCalledWith(340);
+    // The queue does not need the room.
+    await store.toggleThinView("queue", 200);
+    expect(vi.mocked(api.resizeThin)).toHaveBeenCalledTimes(1);
+  });
+
+  it("switching between the queue and the DJ re-opens the panel at the other height", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.toggleThinPanel();
+    expect(store.thinPanelView.value).toBe("queue");
+    expect(api.openThinPanel).toHaveBeenLastCalledWith(panelWantedHeight(0));
+
+    await store.toggleThinView("dj", 500);
+    expect(api.closeThinPanel).toHaveBeenCalledOnce();
+    expect(api.openThinPanel).toHaveBeenLastCalledWith(420);
+    expect(store.thinPanelView.value).toBe("dj");
+    expect(store.thinPanelOpen.value).toBe(true);
+  });
+});
+
+describe("fixing a wrong length", () => {
+  it("updates the song in the library and the queue, never touching the file", async () => {
+    const wrong = makeTrack({ path: "/m/blue.mp3", title: "Blue", durationMs: 1_513_926 });
+    const fixed = { ...wrong, durationMs: 252_317 };
+    const { api } = fakeApi({
+      cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: [wrong], scannedAtMs: 1 })),
+      snapshot: vi.fn(async () => ({ state: makePlayerState(), queue: [wrong] })),
+      fixLength: vi.fn(async () => fixed),
+    });
+    const store = createStore(api);
+    await store.init();
+
+    expect(await store.fixLength(wrong, 252_317)).toBeNull();
+
+    expect(api.fixLength).toHaveBeenCalledWith("/m/blue.mp3", 252_317);
+    expect(store.library.value[0].durationMs).toBe(252_317);
+    expect(store.lastChange.value?.message).toBe("Length corrected: Blue");
+    expect(api.replaceQueueTracks).toHaveBeenCalled();
+  });
+
+  it("reports what went wrong and changes nothing", async () => {
+    const song = makeTrack({ path: "/m/a.mp3", durationMs: 9 });
+    const { api } = fakeApi({
+      cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: [song], scannedAtMs: 1 })),
+      fixLength: vi.fn(async () => Promise.reject("That song is not in the saved library.")),
+    });
+    const store = createStore(api);
+    await store.init();
+    expect(await store.fixLength(song, 100)).toBe("That song is not in the saved library.");
+    expect(store.library.value[0].durationMs).toBe(9);
+  });
+
+  it("checks a song against its stored length", async () => {
+    const song = makeTrack({ path: "/m/a.mp3", durationMs: 1234 });
+    const { api } = fakeApi();
+    await createStore(api).inspectFile(song);
+    expect(api.inspectFile).toHaveBeenCalledWith("/m/a.mp3", 1234);
+  });
+});
+

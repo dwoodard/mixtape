@@ -4,7 +4,7 @@ import type { Lyrics } from "./lyrics";
 import type { TagMatch } from "./musicbrainz";
 import type { TagEditPayload } from "./tagEdit";
 import { TOOLS_TABLE } from "./djTools";
-import type { CleanupReport, ImportItem, PlayerState, Repeat, TagsPatch, Track, WindowMode } from "./types";
+import type { CleanupReport, FileCheck, ImportItem, PlayerState, PlayStat, Repeat, TagsPatch, Track, WindowMode } from "./types";
 
 /** An error message when the app could not do it, or null when it did. */
 export type Problem = string | null;
@@ -16,6 +16,8 @@ export interface DjHost {
   queue(): Track[];
   player(): PlayerState;
   imports(): ImportItem[];
+  /** How often each song was played, by file path. Songs never played are missing. */
+  plays(): Record<string, PlayStat>;
   /** The songs picked in the song list on screen. */
   selection(): Track[];
   /** What the window is showing now. */
@@ -44,6 +46,10 @@ export interface DjHost {
   loadSavedFolder(): Promise<Problem>;
   restoreRemoved(): Promise<Problem>;
   removeFromLibrary(tracks: Track[]): Promise<Problem>;
+  /** Compares a song's file with the length the library holds for it. */
+  inspectFile(track: Track): Promise<FileCheck>;
+  /** Corrects the length the library holds for a song. */
+  fixLength(track: Track, lengthMs: number): Promise<Problem>;
   trashDuplicates(extras: Track[]): Promise<{ report: CleanupReport | null; problem: Problem }>;
   writeTags(tracks: Track[], edit: TagEditPayload): Promise<{ saved: number; failed: string[]; problem: Problem }>;
   reveal(tracks: Track[]): Promise<Problem>;
@@ -73,10 +79,20 @@ export interface DjHost {
   quit(): Promise<void>;
 }
 
-/** A tool's answer for the model, and a short line for the person watching. */
+/** What the chat can draw for the person, with controls, for the kind of thing being talked about. */
+export type DjView =
+  | { kind: "songs"; title: string; songs: Track[]; total: number; note?: string }
+  | { kind: "tags"; song: Track; matches: TagMatch[] }
+  | { kind: "filecheck"; song: Track; check: FileCheck }
+  | { kind: "lyrics"; song: Track; text: string; instrumental: boolean }
+  | { kind: "duplicates"; groups: { keep: Track; extras: Track[] }[] }
+  | { kind: "imports"; ids: number[] };
+
+/** A tool's answer for the model, a short line for the person watching, and optionally something to show them. */
 export interface ToolOutcome {
   result: unknown;
   note: string;
+  view?: DjView;
 }
 
 export interface ToolContext {
@@ -93,6 +109,11 @@ export interface DjTool {
 
 const MAX_ROUNDS = 10;
 
+const CARD_NOTE = "The user is already looking at a card with these results and its controls. Do not list, repeat or describe them. Reply with nothing, or one short sentence about something the card does not show.";
+/** After a card, only a short plain word is kept: a list or a paragraph is the card read back. */
+const MAX_AFTER_CARD = 160;
+const isReadBack = (text: string) => text.length > MAX_AFTER_CARD || /\n/.test(text.trim());
+
 export const TOOLS: ToolSpec[] = TOOLS_TABLE.map((t) => t.spec);
 
 const countBy = (values: string[]) => {
@@ -103,6 +124,8 @@ const countBy = (values: string[]) => {
 
 /** The instructions for the model, with a short sketch of the library so it knows what to search for. */
 export function systemPrompt(library: Track[]): string {
+  const tagged = library.filter((t) => t.genre).length;
+  const dated = library.filter((t) => t.year).length;
   const genres = countBy(library.map((t) => t.genre)).slice(0, 15).map(([g, n]) => `${g} (${n})`);
   const artists = countBy(library.map((t) => t.albumArtist || t.artist)).slice(0, 30).map(([a, n]) => `${a} (${n})`);
   return [
@@ -116,13 +139,18 @@ export function systemPrompt(library: Track[]): string {
     "Every message ends with a Context block: what is playing, what is selected, what is on screen, the queue and Discovery. Read it before you answer.",
     "'this song', 'it' or 'the current song' means the song playing now. 'these' or 'the selected songs' means the selection. If the message refers to a song and both are empty, ask which song, once.",
     "Never show the user the Context block, ids or tool names: they are for you. Speak about songs by title and artist.",
+    "Play counts are kept by the app. Use the History line in Context or get_play_count to answer how often a song was played. Counting began when the feature was added, so older listening is not in it. 'Most played' and 'never played' searches use search_library.",
+    "If a song's length looks wrong to you or the user (a pop song of 25 minutes, a bar that does not match the sound), call check_file: it compares the library's length with what the file really plays for. If it says the length is wrong, call fix_length. Say what you found in plain words.",
     "The Context block gives the tags the playing song has now. To show or check a song's current tags, read them from there. Use lookup_tags only to find what the tags should be.",
     "Songs in the Context block already have ids: use them directly. For any other song, call search_library first and use the ids it returns. Never invent ids, titles or artists. Queue positions are numbered from 1.",
+    "Most songs have no genre tag, and none has a mood. For a style, era or mood ('80s synth-pop', 'chill', 'workout'), do not search by genre words. Search the era with year_from and year_to (or '80s' in the query) and a limit of 50 to 100, then choose the songs that fit by what you know of the artists and titles. Also try artists you know fit. Never answer 'none found' after one genre search.",
+    "When asked to queue 'some' songs without a number, queue 10 to 15 if the library has that many that fit.",
     "To build a set, search a few times (different genres, artists or years), pick songs that flow well together, and call start_queue (new queue) or add_to_queue (keep the current queue).",
     "Some actions change or delete files. The app asks the user first, so just call the tool. If the user says no, do not retry.",
     "If a search finds nothing, try broader words. If the library has nothing that fits, say so plainly.",
-    "After acting, answer in one or two short sentences: what you did and why. Do not list every song.",
-    `The library has ${library.length} songs.`,
+    "Searches, the queue, play counts, tag matches, lyrics, duplicates, Discovery items and file checks are shown to the user as cards under your action. The card already has the songs, numbers and controls, so never repeat or list what a card shows, and never describe the card. After a card, say nothing at all unless you have something the card does not show (why you picked these songs, what you suggest next), and then one short sentence.",
+    "When you act without a card, answer in one short sentence: what you did and why. Do not list every song.",
+    `The library has ${library.length} songs. ${tagged} have a genre tag and ${dated} have a year.`,
     genres.length ? `Most common genres: ${genres.join(", ")}.` : "",
     artists.length ? `Most common artists: ${artists.join(", ")}.` : "",
   ].filter(Boolean).join("\n");
@@ -131,6 +159,10 @@ export function systemPrompt(library: Track[]): string {
 const clock = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
 const brief = (t: Track, id: number) => `[${id}] "${t.title}" by ${t.artist || "unknown artist"}${t.album ? ` (${t.album}${t.year ? `, ${t.year}` : ""})` : ""}`;
 const SHOWN_SELECTED = 10;
+const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+/** "played 3 times, last on 2026-11-14" or "never played". */
+export const playsText = (stat?: PlayStat) =>
+  stat && stat.count > 0 ? `played ${stat.count} time${stat.count === 1 ? "" : "s"}, last on ${day(stat.lastPlayedMs)}` : "never played";
 const blank = (v: string | number | null | undefined) => (v === null || v === undefined || v === "" ? "(empty)" : String(v));
 /** Every tag the editor can change, as the file has it now. */
 const tagsOf = (t: Track) =>
@@ -143,7 +175,7 @@ export function contextNote(host: DjHost, session: DjSession): string {
 
   lines.push(
     player.currentTrack
-      ? `- Playing: ${brief(player.currentTrack, session.idFor(player.currentTrack))}, ${player.status}, at ${clock(player.positionMs)} of ${clock(player.durationMs)}\n  Its tags now: ${tagsOf(player.currentTrack)}`
+      ? `- Playing: ${brief(player.currentTrack, session.idFor(player.currentTrack))}, ${player.status}, at ${clock(player.positionMs)} of ${clock(player.durationMs)}\n  History: ${playsText(host.plays()[player.currentTrack.path])}\n  Its tags now: ${tagsOf(player.currentTrack)}`
       : "- Playing: nothing",
   );
 
@@ -243,13 +275,18 @@ export async function runTurn(
   history: ChatMessage[],
   host: DjHost,
   session: DjSession,
-  onNote: (note: string) => void,
+  onNote: (note: string, view?: DjView) => void,
   approve?: (question: string) => Promise<boolean>,
 ): Promise<string> {
+  /** Whether the person has been shown a card this turn: then an empty answer is fine, they already have what they asked for. */
+  let shown = false;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const reply = await client.complete(model, history, TOOLS);
     history.push({ role: "assistant", content: reply.content || null, tool_calls: reply.toolCalls.length ? reply.toolCalls : undefined });
-    if (reply.toolCalls.length === 0) return reply.content || "Done.";
+    if (reply.toolCalls.length === 0) {
+      if (shown) return isReadBack(reply.content) ? "" : reply.content;
+      return reply.content || "Done.";
+    }
     for (const call of reply.toolCalls) {
       const args = parseArguments(call);
       let outcome: ToolOutcome;
@@ -261,8 +298,11 @@ export async function runTurn(
           outcome = { result: { error: String(e) }, note: `${call.function.name} failed: ${String(e)}` };
         }
       }
-      onNote(outcome.note);
-      history.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(outcome.result) });
+      if (outcome.view) shown = true;
+      onNote(outcome.note, outcome.view);
+      // A model follows what a result says: tell it the person already has the card, so it does not read it back.
+      const result = outcome.view && outcome.result && typeof outcome.result === "object" ? { ...outcome.result, shown_to_user: CARD_NOTE } : outcome.result;
+      history.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
     }
   }
   return "I stopped after too many steps. Check the queue and tell me what to change.";

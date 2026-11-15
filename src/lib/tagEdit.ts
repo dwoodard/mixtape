@@ -89,3 +89,11 @@ export function buildEdit(
   }
   return { edit, changes, error };
 }
+
+/** `edit` without the fields every one of `tracks` already has: writing those again changes nothing. */
+export function changedFields(edit: TagEditPayload, tracks: Track[]): TagEditPayload {
+  return Object.fromEntries(
+    Object.entries(edit).filter(([field, value]) => !tracks.every((t) => read(t, field as TagField) === value)),
+  );
+}
+

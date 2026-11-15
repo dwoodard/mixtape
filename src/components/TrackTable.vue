@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { formatDate, formatTime } from "../lib/format";
 import type { SortDirection, SortKey } from "../lib/trackList";
-import type { Track } from "../lib/types";
+import type { PlayStat, Track } from "../lib/types";
 
-defineProps<{
+const props = withDefaults(defineProps<{
   tracks: Track[];
   currentPath: string | null;
   selected: ReadonlySet<string>;
   sortKey: SortKey;
   sortDirection: SortDirection;
-}>();
+  /** How often each song was played, by path. Without it the Plays column is simply empty. */
+  plays?: Record<string, PlayStat>;
+}>(), { plays: () => ({}) });
 const emit = defineEmits<{
   rowClick: [index: number, event: MouseEvent];
   play: [index: number];
@@ -24,6 +26,7 @@ const columns: { key: SortKey; label: string }[] = [
   { key: "album", label: "Album" },
   { key: "addedMs", label: "Date Added" },
   { key: "durationMs", label: "Time" },
+  { key: "plays", label: "Plays" },
 ];
 </script>
 
@@ -63,6 +66,10 @@ const columns: { key: SortKey; label: string }[] = [
         <span class="cell ellipsis muted">{{ t.album }}</span>
         <span class="cell ellipsis muted">{{ formatDate(t.addedMs) }}</span>
         <span class="cell time">{{ formatTime(t.durationMs) }}</span>
+        <span
+          class="cell time plays"
+          :title="props.plays[t.path] ? `Last played ${formatDate(props.plays[t.path].lastPlayedMs)}` : 'Not played yet'"
+        >{{ props.plays[t.path]?.count || "" }}</span>
         <button class="add" aria-label="Add to queue" title="Add to queue" @click.stop="emit('enqueue', t)">+</button>
       </div>
       <p v-if="tracks.length === 0" class="empty">No tracks.</p>
@@ -73,10 +80,10 @@ const columns: { key: SortKey; label: string }[] = [
 <style scoped>
 .table { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .body { flex: 1; overflow-y: auto; }
-.row { display: grid; grid-template-columns: 34px 3fr 2fr 2fr 96px 52px 24px; align-items: center; gap: 8px; padding: 0 10px; }
+.row { display: grid; grid-template-columns: 34px 3fr 2fr 2fr 96px 52px 44px 24px; align-items: center; gap: 8px; padding: 0 10px; }
 .head { border-bottom: 1px solid var(--line); }
 .head-cell { background: none; border: none; border-radius: 0; text-align: left; color: var(--muted); padding: 5px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-.head-cell.durationMs { text-align: right; }
+.head-cell.durationMs, .head-cell.plays { text-align: right; }
 .item { height: 28px; cursor: default; font-size: 13px; }
 .item:hover { background: var(--panel-2); }
 .item.selected { background: var(--accent); color: var(--accent-text); }

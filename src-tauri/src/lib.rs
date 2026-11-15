@@ -3,6 +3,7 @@ pub mod cache;
 pub mod cleanup;
 pub mod config;
 pub mod cover;
+pub mod filecheck;
 pub mod fsutil;
 pub mod importer;
 pub mod imports;
@@ -215,6 +216,37 @@ async fn cached_library(
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Compares a song's file with the length the library holds for it.
+#[tauri::command]
+async fn inspect_file(path: String, stored_ms: u64) -> Result<filecheck::FileCheck, String> {
+    tauri::async_runtime::spawn_blocking(move || filecheck::inspect(std::path::Path::new(&path), stored_ms))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Corrects the length the library holds for a song. Only the saved library changes, never the file: the correction
+/// lasts for as long as the file itself is unchanged.
+#[tauri::command]
+async fn fix_length(cache: State<'_, CacheDir>, path: String, length_ms: u64) -> Result<Track, String> {
+    if length_ms == 0 {
+        return Err("A length of zero is not a length.".to_string());
+    }
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = cache.last_root().ok_or("No library is loaded.")?;
+        let mut entry = cache
+            .load(&root)
+            .and_then(|c| c.tracks.into_iter().find(|t| t.track.path == path))
+            .ok_or("That song is not in the saved library.")?;
+        entry.track.duration_ms = length_ms;
+        let track = entry.track.clone();
+        cache.update_tracks(&root, vec![entry]).map_err(|e| e.to_string())?;
+        Ok(track)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Removes tracks from the library (the files stay on disk).
@@ -882,6 +914,8 @@ pub fn run() {
             import_library,
             cached_library,
             remove_from_library,
+            inspect_file,
+            fix_length,
             reveal_in_finder,
             import_tools,
             import_list,

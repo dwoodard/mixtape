@@ -3,7 +3,6 @@ import type { Store } from "./store";
 import { allowedWhileFocused, COMMANDS, findCommand, type CommandDef, type FocusKind, type KeyLike } from "./shortcuts";
 import {
   appMode,
-  djPanelOpen,
   helpOpen,
   libraryView,
   paletteOpen,
@@ -80,16 +79,8 @@ export function createCommands(store: Store): Command[] {
     viewArtists: { run: showView("artists") },
     viewDuplicates: { enabled: store.duplicateGroups.value.length > 0, run: showView("duplicates") },
     discovery: { run: () => setAppMode(appMode.value === "player" ? "discovery" : "player") },
-    // The thin bar has no room for a chat: from there the key opens the large window with the DJ out.
-    dj: {
-      run: async () => {
-        if (!large) {
-          await store.toggleMode();
-          djPanelOpen.value = false;
-        }
-        toggleDjPanel();
-      },
-    },
+    // In the thin bar the chat shares the queue's panel; in the large window it slides out on the right.
+    dj: { run: () => (large ? toggleDjPanel() : store.toggleThinView("dj", window.innerWidth)) },
     toggleMode: { run: () => void store.toggleMode() },
 
     play: { enabled: songs.length > 0, run: () => store.playTracks(songs, 0) },

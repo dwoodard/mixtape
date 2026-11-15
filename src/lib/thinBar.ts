@@ -25,6 +25,8 @@ export interface ThinParts {
   prev: boolean;
   /** Opens and closes the queue panel. Stays reachable when the title is gone. */
   queueButton: boolean;
+  /** Opens the DJ chat in the same panel. Appears with the queue button. */
+  djButton: boolean;
   title: boolean;
   time: boolean;
   /** Switch to the large window, and quit. */
@@ -49,7 +51,7 @@ export const THIN_TIERS: readonly { min: number; adds: (keyof ThinParts)[] }[] =
   { min: THIN_MIN_WIDTH, adds: ["playPause", "volume"] },
   { min: 160, adds: ["next"] },
   { min: 200, adds: ["prev"] },
-  { min: 240, adds: ["queueButton"] },
+  { min: 240, adds: ["queueButton", "djButton"] },
   { min: 300, adds: ["title"] },
   { min: 380, adds: ["time", "expandQuit"] },
   { min: 460, adds: ["seek"] },
@@ -72,12 +74,16 @@ export function thinTier(width: number): number {
 /** What the bar shows at `tier`. */
 export function thinParts(tier: number): ThinParts {
   const parts: ThinParts = {
-    playPause: false, volume: false, next: false, prev: false, queueButton: false, title: false, time: false, expandQuit: false,
+    playPause: false, volume: false, next: false, prev: false, queueButton: false, djButton: false, title: false, time: false, expandQuit: false,
     seek: false, repeat: false, shuffle: false, artist: false, cover: false, album: false, queueSummary: false,
   };
   THIN_TIERS.slice(0, tier + 1).forEach((t) => t.adds.forEach((key) => (parts[key] = true)));
   return parts;
 }
+
+/** What the DJ chat needs to be usable in the thin bar's panel: its height, and the bar's least width, in logical pixels. */
+export const DJ_PANEL_HEIGHT = 420;
+export const DJ_PANEL_MIN_WIDTH = 340;
 
 /** The height of one queue row, and of the panel's header and tools above the rows (logical pixels). */
 const PANEL_ROW = 28;

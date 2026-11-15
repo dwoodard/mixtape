@@ -2,13 +2,13 @@ import { computed, ref } from "vue";
 import { tauriApi, type Api } from "./api";
 import type { TagEditPayload } from "./tagEdit";
 import { changedTracks, queueReplacements } from "./changes";
-import { panelWantedHeight } from "./thinBar";
+import { DJ_PANEL_HEIGHT, DJ_PANEL_MIN_WIDTH, panelWantedHeight } from "./thinBar";
 import { applyFolderRefresh, inScanOrder, insertSorted } from "./librarySort";
 import { dirName } from "./format";
 import { createImports } from "./imports";
 import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
 import { persistedSet, type FlagStorage } from "./ui";
-import type { CleanupReport, DuplicatePair, PlayerState, PlayStat, TagWriteResult, Repeat, ScanProgress, Track, WindowMode } from "./types";
+import type { CleanupReport, DuplicatePair, FileCheck, PlayerState, PlayStat, TagWriteResult, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 /** What the backend returns when a scan was cancelled. */
 const SCAN_CANCELLED = "cancelled";
@@ -73,6 +73,8 @@ export function createStore(api: Api, storage?: FlagStorage) {
   /** The thin bar's queue panel: closed, or open on a side at a height (from the window). Not saved. */
   const thinPanel = ref<{ side: "down" | "up"; height: number } | null>(null);
   const thinPanelOpen = computed(() => thinPanel.value !== null);
+  /** What the open panel shows: the queue, or the DJ chat. */
+  const thinPanelView = ref<"queue" | "dj">("queue");
   /** Identifies the latest scan so a cancelled older one cannot clobber its state. */
   let scanId = 0;
   /** Unknown (null) until the backend says which window mode this launch is in. */
@@ -232,11 +234,33 @@ export function createStore(api: Api, storage?: FlagStorage) {
     return api.playIndex(at);
   }
 
-  /** Opens the thin bar's queue panel (the window grows to fit it), or closes it if it is open. */
-  async function toggleThinPanel() {
-    if (thinPanel.value) return closeThinPanel();
-    thinPanel.value = await api.openThinPanel(panelWantedHeight(queue.value.length));
+  /**
+   * Takes every other song out of the queue and keeps the one at `index`. The songs below go in one step, then the
+   * ones above from the bottom up so each removal leaves the next index where it was. If a different song was playing,
+   * it goes too, and the queue carries on with the one that is left.
+   */
+  async function clearOtherQueueSongs(index: number) {
+    const total = queue.value.length;
+    if (index < 0 || index >= total || total < 2) return;
+    if (index < total - 1) await api.removeFromQueueDown(index + 1);
+    for (let i = index - 1; i >= 0; i--) await api.removeFromQueue(i);
   }
+
+  /**
+   * Opens the thin bar's panel on `view`, or closes it if that view is already showing. The other view needs another
+   * height, so switching closes the panel and opens it again at the right size. The chat needs room to be usable, so a
+   * bar narrower than that is widened first (`barWidth` is how wide it is now).
+   */
+  async function toggleThinView(view: "queue" | "dj", barWidth?: number) {
+    if (thinPanel.value && thinPanelView.value === view) return closeThinPanel();
+    if (thinPanel.value) await closeThinPanel();
+    if (view === "dj" && barWidth !== undefined && barWidth < DJ_PANEL_MIN_WIDTH) await api.resizeThin(DJ_PANEL_MIN_WIDTH);
+    thinPanelView.value = view;
+    thinPanel.value = await api.openThinPanel(view === "dj" ? DJ_PANEL_HEIGHT : panelWantedHeight(queue.value.length));
+  }
+
+  /** Opens the thin bar's queue panel (the window grows to fit it), or closes it if it is open. */
+  const toggleThinPanel = () => toggleThinView("queue");
 
   async function closeThinPanel() {
     if (!thinPanel.value) return;
@@ -257,6 +281,31 @@ export function createStore(api: Api, storage?: FlagStorage) {
     const gone = new Set(tracks.map((t) => t.path));
     library.value = library.value.filter((t) => !gone.has(t.path));
     removedCount.value = await api.removedCount();
+  }
+
+  /** Compares a song's file with the length the library holds for it. */
+  const inspectFile = (track: Track): Promise<FileCheck> => api.inspectFile(track.path, track.durationMs);
+
+  /** Corrects a song's length in the library and the queue (never the file). Returns what went wrong, if anything. */
+  async function fixLength(track: Track, lengthMs: number): Promise<string | null> {
+    let fresh: Track;
+    try {
+      fresh = await api.fixLength(track.path, lengthMs);
+    } catch (e) {
+      return String(e);
+    }
+    library.value = library.value.map((t) => (t.path === fresh.path ? fresh : t));
+    noteChange(`Length corrected: ${fresh.title}`, fresh);
+    // The queue's own copy has the old length too, and that is what the seek bar and the total use. (Only tags are
+    // compared when the queue follows the library, so a length alone does not trigger that.)
+    if (queue.value.some((t) => t.path === fresh.path)) {
+      try {
+        await api.replaceQueueTracks([{ oldPath: fresh.path, track: fresh }]);
+      } catch (e) {
+        console.error("could not update the queue:", e);
+      }
+    }
+    return null;
   }
 
   /**
@@ -485,6 +534,8 @@ export function createStore(api: Api, storage?: FlagStorage) {
     importLibrary,
     refresh,
     removeFromLibrary,
+    inspectFile,
+    fixLength,
     addToLibrary,
     dropFromLibrary,
     writeTags,
@@ -530,11 +581,14 @@ export function createStore(api: Api, storage?: FlagStorage) {
     /** Moves a queue entry so it ends up at `to`. */
     moveQueueTrack: (from: number, to: number) => api.moveQueueTrack(from, to),
     clearQueue: () => api.clearQueue(),
+    clearOtherQueueSongs,
     quit: () => api.quit(),
     resizeThin: (width: number) => api.resizeThin(width),
     /** The thin bar's drop-down queue panel. */
     thinPanel,
     thinPanelOpen,
+    thinPanelView,
+    toggleThinView,
     toggleThinPanel,
     closeThinPanel,
   };

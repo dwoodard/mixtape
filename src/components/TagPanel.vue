@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { formatTime } from "../lib/format";
 import type { Track } from "../lib/types";
 import { persistedFlag } from "../lib/ui";
+import CoverArt from "./CoverArt.vue";
 
 const props = defineProps<{ track: Track | null }>();
 
@@ -36,12 +37,15 @@ const rows = computed(() => {
       </button>
     </h2>
     <div v-show="open" id="tag-details">
-      <dl v-if="track" class="body">
-        <template v-for="[label, value] in rows" :key="label">
-          <dt>{{ label }}</dt>
-          <dd class="ellipsis" :title="String(value)">{{ value || "—" }}</dd>
-        </template>
-      </dl>
+      <div v-if="track" class="body with-art">
+        <CoverArt class="art" :path="track.path" :hue-key="`${track.albumArtist || track.artist}\u0000${track.album}`" :title="track.album || track.title" />
+        <dl>
+          <template v-for="[label, value] in rows" :key="label">
+            <dt>{{ label }}</dt>
+            <dd class="ellipsis" :title="String(value)">{{ value || "—" }}</dd>
+          </template>
+        </dl>
+      </div>
       <p v-else class="empty body">Nothing playing.</p>
     </div>
   </section>
@@ -60,7 +64,9 @@ const rows = computed(() => {
 .chevron.open { transform: rotate(90deg); }
 #tag-details { border-top: 1px solid var(--line); }
 .body { padding: 8px 12px 10px; margin: 0; }
-dl { display: grid; grid-template-columns: 80px 1fr; gap: 3px 8px; }
+.with-art { display: flex; align-items: flex-start; gap: 12px; }
+.art { flex: none; width: 96px; height: 96px; border-radius: 8px; }
+dl { flex: 1; min-width: 0; margin: 0; display: grid; grid-template-columns: 80px 1fr; gap: 3px 8px; }
 dt { color: var(--muted); }
 dd { margin: 0; min-width: 0; user-select: text; -webkit-user-select: text; }
 .empty { color: var(--muted); }

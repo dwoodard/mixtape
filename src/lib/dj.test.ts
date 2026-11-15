@@ -5,7 +5,7 @@ import type { Lyrics } from "./lyrics";
 import type { TagMatch } from "./musicbrainz";
 import type { ChatMessage, Completion, LmClient } from "./lm";
 import { makePlayerState, makeTrack } from "./testing";
-import type { CleanupReport, ImportItem, PlayerState, Track } from "./types";
+import type { CleanupReport, FileCheck, ImportItem, PlayerState, PlayStat, Track } from "./types";
 
 const library = [
   makeTrack({ path: "/m/1.mp3", title: "Blue Monday", artist: "New Order", genre: "Synthpop", year: 1983 }),
@@ -21,6 +21,7 @@ function fakeHost(player: Partial<PlayerState> = {}, queue: Track[] = [], extra:
     queue: () => queue,
     player: () => makePlayerState(player),
     imports: () => [] as ImportItem[],
+    plays: () => ({}) as Record<string, PlayStat>,
     selection: () => [] as Track[],
     screen: () => ({ tab: "player", libraryView: "tracks", filter: "", windowMode: "large" }),
     duplicateGroups: () => [] as DuplicateGroup[],
@@ -44,6 +45,8 @@ function fakeHost(player: Partial<PlayerState> = {}, queue: Track[] = [], extra:
     loadSavedFolder: ok(),
     restoreRemoved: ok(),
     removeFromLibrary: ok(),
+    inspectFile: vi.fn(async () => ({ path: "/m/3.mp3", sizeBytes: 6_094_087, storedMs: 180_000, realMs: 180_000, codec: "mp3", bitrateKbps: 192, sampleRate: 44100, impliedKbps: 271, verdict: "ok", notes: [] }) as FileCheck),
+    fixLength: ok(),
     trashDuplicates: vi.fn(async () => ({ report: null as CleanupReport | null, problem: null as string | null })),
     writeTags: vi.fn(async () => ({ saved: 1, failed: [] as string[], problem: null as string | null })),
     reveal: ok(),
@@ -77,6 +80,32 @@ describe("search_library", () => {
   it("matches every word across title, artist, album and genre, ignoring case and accents", async () => {
     const out = await runTool("search_library", { query: "beyonce pop" }, fakeHost(), new DjSession());
     expect(titles(out.result)).toEqual(["Halo", "Heart Glow"]);
+  });
+
+  it("ignores spaces and hyphens, so synth-pop finds Synthpop", async () => {
+    const host = fakeHost();
+    const session = new DjSession();
+    for (const args of [{ query: "synth-pop" }, { query: "synth pop" }, { genre: "Synth-Pop" }]) {
+      expect(titles((await runTool("search_library", args, host, session)).result)).toEqual(["Blue Monday"]);
+    }
+  });
+
+  it("reads a decade in the words as a range of years", async () => {
+    const host = fakeHost();
+    const session = new DjSession();
+    expect(titles((await runTool("search_library", { query: "80s" }, host, session)).result)).toEqual(["Atmosphere", "Blue Monday"]);
+    expect(titles((await runTool("search_library", { query: "1980s synthpop" }, host, session)).result)).toEqual(["Blue Monday"]);
+    expect(titles((await runTool("search_library", { query: "eighties" }, host, session)).result)).toEqual(["Atmosphere", "Blue Monday"]);
+    expect(titles((await runTool("search_library", { query: "2000s" }, host, session)).result)).toEqual(["Halo"]);
+    // Years given outright win over the words.
+    expect(titles((await runTool("search_library", { query: "80s", year_from: 2008, year_to: 2011 }, host, session)).result)).toEqual(["Halo", "Heart Glow"]);
+  });
+
+  it("tells the model what to try when nothing matches", async () => {
+    const out = await runTool("search_library", { genre: "zydeco" }, fakeHost(), new DjSession());
+    expect((out.result as { hint: string }).hint).toContain("year range");
+    const found = await runTool("search_library", { query: "halo" }, fakeHost(), new DjSession());
+    expect((found.result as { hint?: string }).hint).toBeUndefined();
   });
 
   it("filters by artist, genre and years", async () => {
@@ -230,6 +259,44 @@ describe("runTurn", () => {
     await runTurn(client, "m", history, fakeHost(), new DjSession(), () => {});
     expect(history[2]).toMatchObject({ role: "tool" });
     expect((history[2] as { content: string }).content).toContain("error");
+  });
+
+  it("says Done when it acted without a card, and nothing when a card already showed the answer", async () => {
+    const reply = (name: string, args: unknown): Completion => ({ content: "", toolCalls: [call("a", name, args)] });
+    const quiet = (first: Completion): LmClient => ({ models: async () => [], complete: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce({ content: "", toolCalls: [] }) });
+
+    const acted = await runTurn(quiet(reply("clear_queue", {})), "m", [{ role: "user", content: "x" }], fakeHost(), new DjSession(), () => {});
+    expect(acted).toBe("Done.");
+    const shown = await runTurn(quiet(reply("search_library", { query: "halo" })), "m", [{ role: "user", content: "x" }], fakeHost(), new DjSession(), () => {});
+    expect(shown).toBe("");
+  });
+
+  it("tells the model a card is on screen, and drops a written list that reads it back", async () => {
+    const asks = (final: string): LmClient => ({
+      models: async () => [],
+      complete: vi.fn()
+        .mockResolvedValueOnce({ content: "", toolCalls: [call("a", "search_library", { query: "halo" })] })
+        .mockResolvedValueOnce({ content: final, toolCalls: [] }),
+    });
+    const history: ChatMessage[] = [{ role: "user", content: "x" }];
+    const list = await runTurn(asks("Here you go:\n\n1. Halo - Beyoncé\n2. More"), "m", history, fakeHost(), new DjSession(), () => {});
+    expect(list).toBe("");
+    expect((history[2] as { content: string }).content).toContain("shown_to_user");
+
+    const short = await runTurn(asks("Picked these for the beat."), "m", [{ role: "user", content: "x" }], fakeHost(), new DjSession(), () => {});
+    expect(short).toBe("Picked these for the beat.");
+    const long = await runTurn(asks("x".repeat(200)), "m", [{ role: "user", content: "x" }], fakeHost(), new DjSession(), () => {});
+    expect(long).toBe("");
+  });
+
+  it("does not add the card note to a result that has no card", async () => {
+    const history: ChatMessage[] = [{ role: "user", content: "x" }];
+    const client: LmClient = {
+      models: async () => [],
+      complete: vi.fn().mockResolvedValueOnce({ content: "", toolCalls: [call("a", "clear_queue", {})] }).mockResolvedValueOnce({ content: "Cleared.", toolCalls: [] }),
+    };
+    await runTurn(client, "m", history, fakeHost(), new DjSession(), () => {});
+    expect((history[2] as { content: string }).content).not.toContain("shown_to_user");
   });
 
   it("gives up after too many rounds", async () => {
@@ -562,6 +629,47 @@ describe("edit_tags skips what is already right", () => {
   });
 });
 
+describe("play counts", () => {
+  const plays = { "/m/2.mp3": { count: 7, lastPlayedMs: Date.UTC(2026, 10, 14) }, "/m/3.mp3": { count: 1, lastPlayedMs: Date.UTC(2026, 10, 1) } };
+
+  it("answers how often the playing song was played, and says when never", async () => {
+    const some = fakeHost({ currentTrack: library[1] }, [], { plays: () => plays });
+    const out = await runTool("get_play_count", {}, some, new DjSession());
+    expect(out.result).toEqual({ song: "Beyoncé - Heart Glow", plays: 7, last_played: "2026-11-14" });
+
+    const none = fakeHost({ currentTrack: library[0] }, [], { plays: () => plays });
+    expect((await runTool("get_play_count", {}, none, new DjSession())).result).toMatchObject({ plays: 0, last_played: null });
+  });
+
+  it("works for another song by id, and needs a song when nothing is playing", async () => {
+    const host = fakeHost({}, [], { plays: () => plays });
+    const session = new DjSession();
+    const found = await runTool("search_library", { query: "halo" }, host, session);
+    const id = (found.result as { songs: { id: number }[] }).songs[0].id;
+    expect((await runTool("get_play_count", { id }, host, session)).result).toMatchObject({ plays: 1 });
+    expect((await runTool("get_play_count", {}, host, session)).result).toHaveProperty("error");
+  });
+
+  it("searches by most played, never played and a minimum", async () => {
+    const host = fakeHost({}, [], { plays: () => plays });
+    const titles = async (args: Record<string, unknown>) =>
+      ((await runTool("search_library", args, host, new DjSession())).result as { songs: { title: string }[] }).songs.map((s) => s.title);
+
+    expect(await titles({ sort: "most_played", limit: 2 })).toEqual(["Heart Glow", "Halo"]);
+    expect((await titles({ max_plays: 0 })).sort()).toEqual(["Atmosphere", "Blue Monday"]);
+    expect(await titles({ min_plays: 5 })).toEqual(["Heart Glow"]);
+    expect((await titles({ sort: "recently_played", limit: 1 }))[0]).toBe("Heart Glow");
+  });
+
+  it("shows plays in search results and in the context of the playing song", async () => {
+    const host = fakeHost({ currentTrack: library[1] }, [], { plays: () => plays });
+    const found = await runTool("search_library", { query: "heart glow" }, host, new DjSession());
+    expect((found.result as { songs: { plays: number }[] }).songs[0].plays).toBe(7);
+    expect(contextNote(host, new DjSession())).toContain("History: played 7 times, last on 2026-11-14");
+    expect(contextNote(fakeHost({ currentTrack: library[0] }), new DjSession())).toContain("History: never played");
+  });
+});
+
 describe("systemPrompt guidance", () => {
   it("explains what the DJ can do and how to read 'this song'", () => {
     const prompt = systemPrompt(library);
@@ -569,5 +677,93 @@ describe("systemPrompt guidance", () => {
     expect(prompt).toContain("'this song'");
     expect(prompt).toContain("MusicBrainz");
     expect(prompt).toContain("Do not list tool names");
+    expect(prompt).toContain("4 have a genre tag and 4 have a year");
+    expect(prompt).toContain("do not search by genre words");
+    expect(prompt).toContain("never repeat or list what a card shows");
   });
 });
+
+describe("views the chat draws", () => {
+  it("search shows the songs it found, queue tools show what they queued, and nothing found shows nothing", async () => {
+    const host = fakeHost();
+    const session = new DjSession();
+    const found = await runTool("search_library", { query: "beyonce" }, host, session);
+    expect(found.view).toMatchObject({ kind: "songs", total: 2 });
+    expect((found.view as { songs: Track[] }).songs.map((t) => t.title).sort()).toEqual(["Halo", "Heart Glow"]);
+    expect((await runTool("search_library", { query: "zzzz" }, host, session)).view).toBeUndefined();
+
+    const id = (found.result as { songs: { id: number }[] }).songs[0].id;
+    expect((await runTool("start_queue", { ids: [id] }, host, session)).view).toMatchObject({ kind: "songs", title: "New queue" });
+    expect((await runTool("add_to_queue", { ids: [id], where: "next" }, host, session)).view).toMatchObject({ title: "Playing next" });
+  });
+
+  it("the queue, play count, lyrics, tag matches, duplicates and imports each get their own view", async () => {
+    const match = { title: "Halo", artist: "Beyoncé", album: "I Am", albumArtist: "Beyoncé", year: "2008", trackNumber: "3", discNumber: "1", genreHint: "", releaseKind: "Album", confidence: 90, reasons: [] } as TagMatch;
+    const group: DuplicateGroup = { key: "k", keep: library[1], extras: [library[2]] };
+    const item = { id: 4, stage: "ready", url: "u", videoTitle: "v", proposal: { title: "T" }, confidence: 1, picard: "none" } as ImportItem;
+    const host = fakeHost({ currentTrack: library[2] }, [library[0]], {
+      lookupTags: vi.fn(async () => [match]),
+      duplicateGroups: () => [group],
+      imports: () => [item],
+      plays: () => ({ "/m/3.mp3": { count: 2, lastPlayedMs: Date.UTC(2026, 10, 14) } }),
+    });
+    const run = async (name: string) => (await runTool(name, {}, host, new DjSession())).view;
+
+    expect(await run("get_queue")).toMatchObject({ kind: "songs", title: "Queue", total: 1 });
+    expect(await run("get_play_count")).toMatchObject({ kind: "songs", title: "Play count", note: "Played 2 times, last on 2026-11-14" });
+    expect(await run("get_lyrics")).toMatchObject({ kind: "lyrics", text: "la la", instrumental: false });
+    expect(await run("lookup_tags")).toMatchObject({ kind: "tags", matches: [{ album: "I Am" }] });
+    expect(await run("find_duplicates")).toMatchObject({ kind: "duplicates", groups: [{ extras: [library[2]] }] });
+    expect(await run("list_imports")).toEqual({ kind: "imports", ids: [4] });
+  });
+
+  it("runTurn hands the view to whoever is watching, with the note", async () => {
+    const client: LmClient = {
+      models: async () => [],
+      complete: vi.fn()
+        .mockResolvedValueOnce({ content: "", toolCalls: [{ id: "a", type: "function", function: { name: "search_library", arguments: '{"query":"halo"}' } }] })
+        .mockResolvedValueOnce({ content: "Found it.", toolCalls: [] }),
+    };
+    const seen: unknown[] = [];
+    await runTurn(client, "m", [{ role: "user", content: "x" }], fakeHost(), new DjSession(), (note, view) => seen.push([note, view?.kind]));
+    expect(seen).toEqual([["Searched halo: 1 found", "songs"]]);
+  });
+});
+
+describe("file check", () => {
+  const wrong: FileCheck = { path: "/m/3.mp3", sizeBytes: 6_094_087, storedMs: 1_513_926, realMs: 252_317, codec: "mp3", bitrateKbps: 192, sampleRate: 44100, impliedKbps: 32, verdict: "lengthWrong", notes: ["The library says 25:13 but the file plays for 4:12 (6.0× as long)."] };
+
+  it("check_file compares the library's length with the file's and shows a card, changing nothing", async () => {
+    const host = fakeHost({ currentTrack: library[2] }, [], { inspectFile: vi.fn(async () => wrong) });
+    const out = await runTool("check_file", {}, host, new DjSession());
+    expect(host.inspectFile).toHaveBeenCalledWith(library[2]);
+    expect(host.fixLength).not.toHaveBeenCalled();
+    expect(out.result).toMatchObject({ verdict: "lengthWrong", library_length: "25:13", file_length: "4:12", implied_kbps: 32, next_step: "Call fix_length to correct it." });
+    expect(out.view).toMatchObject({ kind: "filecheck", check: { verdict: "lengthWrong" } });
+  });
+
+  it("fix_length re-checks, then corrects to the length the file really has", async () => {
+    const host = fakeHost({ currentTrack: library[2] }, [], { inspectFile: vi.fn(async () => wrong) });
+    const out = await runTool("fix_length", {}, host, new DjSession());
+    expect(host.fixLength).toHaveBeenCalledWith(library[2], 252_317);
+    expect(out.result).toEqual({ fixed: true, was: "25:13", now: "4:12" });
+  });
+
+  it("fix_length leaves a song alone when its length is already right or cannot be confirmed", async () => {
+    const right = fakeHost({ currentTrack: library[2] });
+    expect((await runTool("fix_length", {}, right, new DjSession())).result).toMatchObject({ fixed: false, verdict: "ok" });
+    const unsure = fakeHost({ currentTrack: library[2] }, [], { inspectFile: vi.fn(async () => ({ ...wrong, realMs: null, verdict: "looksWrong" as const })) });
+    expect((await runTool("fix_length", {}, unsure, new DjSession())).result).toMatchObject({ fixed: false, verdict: "looksWrong" });
+    expect(right.fixLength).not.toHaveBeenCalled();
+    expect(unsure.fixLength).not.toHaveBeenCalled();
+  });
+
+  it("passes on a problem from the app, an unreadable file, and needs a song", async () => {
+    const fails = fakeHost({ currentTrack: library[2] }, [], { inspectFile: vi.fn(async () => wrong), fixLength: vi.fn(async () => "That song is not in the saved library.") });
+    expect((await runTool("fix_length", {}, fails, new DjSession())).result).toEqual({ error: "That song is not in the saved library." });
+    const missing = fakeHost({ currentTrack: library[2] }, [], { inspectFile: vi.fn(async () => { throw new Error("Cannot read /m/3.mp3: No such file"); }) });
+    expect((await runTool("check_file", {}, missing, new DjSession())).result).toEqual({ error: "Cannot read /m/3.mp3: No such file" });
+    expect((await runTool("check_file", {}, fakeHost(), new DjSession())).result).toHaveProperty("error");
+  });
+});
+

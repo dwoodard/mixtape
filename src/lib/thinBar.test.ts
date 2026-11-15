@@ -65,7 +65,7 @@ describe("thin bar tiers", () => {
   it("growing from the minimum adds next, previous, the queue button, title, time, scrubber, then the extras", () => {
     expect(on(1)).toEqual(["playPause", "volume", "next"]);
     expect(on(2)).toEqual(["playPause", "volume", "next", "prev"]);
-    expect(on(3)).toEqual(["playPause", "volume", "next", "prev", "queueButton"]);
+    expect(on(3)).toEqual(["playPause", "volume", "next", "prev", "queueButton", "djButton"]);
     expect(on(4)).toContain("title");
     expect(on(4)).not.toContain("time");
     expect(on(5)).toContain("time");

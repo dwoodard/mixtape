@@ -1,107 +1,87 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from "vue";
-import { djChat as chat } from "../lib/djChat";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { clampPanelWidth, PANEL_DEFAULT_WIDTH, widthFromDrag } from "../lib/panelSize";
 import { djPanelOpen, toggleDjPanel } from "../lib/ui";
-import MarkdownText from "./MarkdownText.vue";
+import DjChat from "./DjChat.vue";
 
-const draft = ref("");
-const log = ref<HTMLElement | null>(null);
-const input = ref<HTMLTextAreaElement | null>(null);
+/** The DJ chat as a panel that slides out over the right of the large window. */
+const chat = ref<InstanceType<typeof DjChat> | null>(null);
 
-const scrollDown = async () => {
-  await nextTick();
-  if (log.value) log.value.scrollTop = log.value.scrollHeight;
+// The width is the person's to set, with the handle on the panel's left edge. It is remembered between launches.
+const WIDTH_KEY = "mixtape.djPanelWidth";
+const saved = Number(typeof localStorage === "undefined" ? NaN : localStorage.getItem(WIDTH_KEY));
+const windowWidth = ref(typeof window === "undefined" ? 1200 : window.innerWidth);
+const width = ref(Number.isFinite(saved) && saved > 0 ? saved : PANEL_DEFAULT_WIDTH);
+const shownWidth = () => clampPanelWidth(width.value, windowWidth.value);
+const onResize = () => (windowWidth.value = window.innerWidth);
+onMounted(() => window.addEventListener("resize", onResize));
+onBeforeUnmount(() => window.removeEventListener("resize", onResize));
+const remember = () => {
+  try {
+    localStorage.setItem(WIDTH_KEY, String(width.value));
+  } catch {
+    // Not being able to remember is fine.
+  }
 };
-watch(() => [chat.lines.value.length, chat.pending.value, chat.busy.value], scrollDown);
 
-// Opening the panel looks up the models and puts the cursor in the box.
+const dragging = ref(false);
+let drag: { startX: number; startWidth: number } | null = null;
+function startDrag(event: PointerEvent) {
+  drag = { startX: event.clientX, startWidth: shownWidth() };
+  dragging.value = true;
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+}
+function moveDrag(event: PointerEvent) {
+  if (drag) width.value = widthFromDrag(drag.startWidth, drag.startX, event.clientX, windowWidth.value);
+}
+function endDrag() {
+  if (!drag) return;
+  drag = null;
+  dragging.value = false;
+  remember();
+}
+/** The keyboard way: arrows move the edge 20 pixels, Home goes back to the usual width. */
+function onHandleKey(event: KeyboardEvent) {
+  const step = event.shiftKey ? 80 : 20;
+  if (event.key === "ArrowLeft") width.value = clampPanelWidth(shownWidth() + step, windowWidth.value);
+  else if (event.key === "ArrowRight") width.value = clampPanelWidth(shownWidth() - step, windowWidth.value);
+  else if (event.key === "Home") width.value = PANEL_DEFAULT_WIDTH;
+  else return;
+  event.preventDefault();
+  remember();
+}
+// The chat is made the first time the panel opens, so nothing talks to LM Studio until the person asks for it.
+const everOpened = ref(djPanelOpen.value);
 watch(
   djPanelOpen,
   async (open) => {
     if (!open) return;
-    if (chat.models.value.length === 0) void chat.loadModels();
+    everOpened.value = true;
     await nextTick();
-    input.value?.focus({ preventScroll: true });
+    chat.value?.focus();
   },
   { immediate: true },
 );
-
-function submit() {
-  const text = draft.value;
-  draft.value = "";
-  void chat.send(text);
-}
-
-function onKey(event: KeyboardEvent) {
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-    event.preventDefault();
-    submit();
-  } else if (event.key === "Escape") {
-    toggleDjPanel();
-  }
-  // Typing here must not trigger the player's shortcuts.
-  event.stopPropagation();
-}
 </script>
 
 <template>
-  <aside class="dj-panel" :class="{ open: djPanelOpen }" aria-label="DJ chat" :inert="!djPanelOpen">
-    <header>
-      <h2>DJ</h2>
-      <select
-        :value="chat.model.value"
-        :disabled="chat.models.value.length === 0"
-        aria-label="Model"
-        title="Which LM Studio model the DJ uses"
-        @change="chat.setModel(($event.target as HTMLSelectElement).value)"
-      >
-        <option v-if="chat.models.value.length === 0" value="">No model</option>
-        <option v-for="m in chat.models.value" :key="m" :value="m">{{ m }}</option>
-      </select>
-      <button title="Look for models in LM Studio again" @click="chat.loadModels()">↻</button>
-      <button title="Start a new chat" :disabled="chat.lines.value.length === 0" @click="chat.reset()">New</button>
-      <button class="close" aria-label="Close the DJ" title="Close (Esc)" @click="toggleDjPanel()">×</button>
-    </header>
-
-    <p v-if="chat.modelsError.value" class="problem" role="status">{{ chat.modelsError.value }}</p>
-
-    <div ref="log" class="log" role="log" aria-live="polite">
-      <p v-if="chat.lines.value.length === 0" class="hint">
-        Ask the DJ to build a queue, add songs, fix tags, find duplicates, bring in a link or change the look.
-        For example: “Queue 15 upbeat songs from the 80s and shuffle them.”
-      </p>
-      <template v-for="(line, i) in chat.lines.value" :key="i">
-        <p v-if="line.kind === 'action'" class="action">{{ line.text }}</p>
-        <div v-else-if="line.kind === 'dj'" class="msg dj"><MarkdownText :source="line.text" /></div>
-        <p v-else class="msg" :class="line.kind">{{ line.text }}</p>
-      </template>
-      <p v-if="chat.busy.value && !chat.pending.value" class="action">Thinking…</p>
-      <div v-if="chat.pending.value" class="ask" role="alertdialog" aria-label="Confirm">
-        <p>{{ chat.pending.value }}</p>
-        <div class="buttons">
-          <button class="on" @click="chat.respond(true)">Allow</button>
-          <button @click="chat.respond(false)">Deny</button>
-        </div>
-      </div>
-    </div>
-
-    <footer>
-      <label class="confirm" title="When off, the DJ changes and deletes files without asking">
-        <input type="checkbox" :checked="chat.confirmRisky.value" @change="chat.setConfirmRisky(($event.target as HTMLInputElement).checked)" />
-        Ask before risky actions
-      </label>
-      <div class="compose">
-        <textarea
-          ref="input"
-          v-model="draft"
-          rows="2"
-          placeholder="Tell the DJ what to play…"
-          aria-label="Message to the DJ"
-          @keydown="onKey"
-        />
-        <button class="on" :disabled="chat.busy.value || !draft.trim()" @click="submit">Send</button>
-      </div>
-    </footer>
+  <aside class="dj-panel" :class="{ open: djPanelOpen, dragging }" :style="{ width: `${shownWidth()}px` }" aria-label="DJ" :inert="!djPanelOpen">
+    <div
+      class="handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the DJ panel"
+      :aria-valuenow="shownWidth()"
+      tabindex="0"
+      title="Drag to resize (double-click to reset)"
+      @pointerdown.prevent="startDrag"
+      @pointermove="moveDrag"
+      @pointerup="endDrag"
+      @pointercancel="endDrag"
+      @dblclick="(width = PANEL_DEFAULT_WIDTH, remember())"
+      @keydown="onHandleKey"
+    />
+    <DjChat v-if="everOpened" ref="chat" @close="toggleDjPanel()" />
   </aside>
 </template>
 
@@ -111,7 +91,7 @@ function onKey(event: KeyboardEvent) {
   top: 8px;
   right: 8px;
   bottom: 8px;
-  width: min(380px, calc(100% - 16px));
+  max-width: calc(100% - 16px);
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -124,29 +104,10 @@ function onKey(event: KeyboardEvent) {
   visibility: hidden;
   transition: transform 0.22s ease, visibility 0s linear 0.22s;
 }
+.dj-panel.dragging { transition: none; user-select: none; }
+.handle { position: absolute; z-index: 1; top: 0; bottom: 0; left: -4px; width: 9px; cursor: ew-resize; touch-action: none; }
+.handle::after { content: ""; position: absolute; top: 50%; left: 3px; width: 3px; height: 36px; margin-top: -18px; border-radius: 2px; background: var(--muted); opacity: 0; transition: opacity 0.15s; }
+.handle:hover::after, .handle:focus-visible::after, .dragging .handle::after { opacity: 0.8; }
 .dj-panel.open { transform: none; visibility: visible; transition: transform 0.22s ease; }
 @media (prefers-reduced-motion: reduce) { .dj-panel, .dj-panel.open { transition: none; } }
-header { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--panel-3); border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; }
-h2 { margin: 0 auto 0 4px; font-size: 12px; font-weight: 600; }
-header select { width: 150px; font-size: 12px; }
-header button { padding: 1px 8px; font-size: 12px; }
-header .close { font-size: 16px; line-height: 1; padding: 0 8px; }
-.log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
-.log p { margin: 0; }
-.hint, .action { color: var(--muted); font-size: 12px; }
-.action::before { content: "• "; }
-.msg { padding: 6px 10px; border-radius: 8px; line-height: 1.35; max-width: 92%; }
-.msg.user, .msg.error { white-space: pre-wrap; }
-.msg.dj { min-width: 0; }
-.msg.user { align-self: flex-end; background: var(--accent); color: var(--accent-text); }
-.msg.dj { align-self: flex-start; background: var(--panel-2); }
-.msg.error { align-self: stretch; max-width: none; background: #4a2328; color: #ffb4b4; font-size: 12px; }
-.problem { margin: 8px 10px 0; padding: 6px 10px; background: #4a2328; color: #ffb4b4; font-size: 12px; border-radius: 8px; }
-.ask { border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; background: var(--panel-2); }
-.ask p { margin-bottom: 8px; }
-.ask .buttons { display: flex; gap: 6px; }
-footer { border-top: 1px solid var(--line); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-.confirm { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
-.compose { display: flex; gap: 6px; align-items: flex-end; }
-textarea { flex: 1; resize: none; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 </style>

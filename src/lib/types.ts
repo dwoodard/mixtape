@@ -13,6 +13,23 @@ export interface Track {
   addedMs: number;
 }
 
+/** What the app found when it compared a song's file with the library's record of it. */
+export interface FileCheck {
+  path: string;
+  sizeBytes: number;
+  /** The length the library holds. */
+  storedMs: number;
+  /** The length the file really plays for, when ffprobe is installed. */
+  realMs: number | null;
+  codec: string | null;
+  bitrateKbps: number | null;
+  sampleRate: number | null;
+  /** The bitrate the stored length would mean. Absurd values give a wrong length away. */
+  impliedKbps: number | null;
+  verdict: "ok" | "lengthWrong" | "looksWrong" | "cannotCheck";
+  notes: string[];
+}
+
 /** How often a song was played and when it was last played (ms since the epoch). */
 export interface PlayStat {
   count: number;

@@ -1,6 +1,6 @@
 import { ref } from "vue";
 import { tauriApi, type Api } from "./api";
-import { contextNote, DjSession, runTurn, systemPrompt, type DjHost, type Problem } from "./dj";
+import { contextNote, DjSession, type DjView, runTurn, systemPrompt, type DjHost, type Problem } from "./dj";
 import { createLmClient, DEFAULT_LM_ENDPOINT, type ChatMessage, type LmClient } from "./lm";
 import { fetchLyrics } from "./lyrics";
 import { lookupTags } from "./musicbrainz";
@@ -14,6 +14,8 @@ import { appMode, libraryQuery, libraryView, persistedFlag, selectedSongs, setAp
 export interface ChatLine {
   kind: "user" | "dj" | "action" | "error";
   text: string;
+  /** Something drawn under an action, with controls. */
+  view?: DjView;
 }
 
 interface TextStorage {
@@ -74,6 +76,7 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
     queue: () => store.queue.value,
     player: () => store.player.value,
     imports: () => imports.items.value,
+    plays: () => store.plays.value,
     selection: () => selectedSongs.value,
     screen: () => ({ tab: appMode.value, libraryView: libraryView.value, filter: libraryQuery.value, windowMode: store.mode.value ?? "large" }),
     duplicateGroups: () => store.duplicateGroups.value,
@@ -101,6 +104,8 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
     },
     restoreRemoved: () => soft(() => store.restoreRemoved()),
     removeFromLibrary: (tracks) => soft(() => store.removeFromLibrary(tracks)),
+    inspectFile: (track) => store.inspectFile(track),
+    fixLength: (track, lengthMs) => store.fixLength(track, lengthMs),
     trashDuplicates: async (extras) => {
       const keepers = new Map(store.duplicateGroups.value.flatMap((g) => g.extras.map((t) => [t.path, g.keep.path] as const)));
       const pairs = extras.flatMap((t) => (keepers.has(t.path) ? [{ keep: keepers.get(t.path)!, extra: t.path }] : []));
@@ -220,8 +225,8 @@ export function createDjChat(host: DjHost, makeClient: (endpoint: () => string) 
     lines.value.push({ kind: "user", text: message });
     busy.value = true;
     try {
-      const answer = await runTurn(client, model.text.value, history, host, session, (note) => lines.value.push({ kind: "action", text: note }), approve);
-      lines.value.push({ kind: "dj", text: answer });
+      const answer = await runTurn(client, model.text.value, history, host, session, (note, view) => lines.value.push({ kind: "action", text: note, view }), approve);
+      if (answer.trim()) lines.value.push({ kind: "dj", text: answer });
     } catch (e) {
       lines.value.push({ kind: "error", text: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -236,7 +241,7 @@ export function createDjChat(host: DjHost, makeClient: (endpoint: () => string) 
     lines.value = [];
   }
 
-  return { lines, pending, respond, confirmRisky, setConfirmRisky, models, modelsError, busy, model: model.text, endpoint: endpoint.text, loadModels, send, reset, setModel: model.set, setEndpoint: endpoint.set };
+  return { host, lines, pending, respond, confirmRisky, setConfirmRisky, models, modelsError, busy, model: model.text, endpoint: endpoint.text, loadModels, send, reset, setModel: model.set, setEndpoint: endpoint.set };
 }
 
 export const djChat = createDjChat(hostFor(appStore, tauriApi, appImports), (endpoint) => createLmClient(endpoint));
