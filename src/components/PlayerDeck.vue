@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { formatClock, formatTime } from "../lib/format";
 import { store } from "../lib/store";
 import { tip } from "../lib/shortcuts";
-import { appMode, setAppMode } from "../lib/ui";
+import { appMode, djPanelOpen, setAppMode, toggleDjPanel } from "../lib/ui";
 import CoverArt from "./CoverArt.vue";
 import SeekBar from "./SeekBar.vue";
 import VolumeControl from "./VolumeControl.vue";
@@ -23,6 +23,7 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
         <button role="tab" :aria-selected="appMode === 'discovery'" :class="{ on: appMode === 'discovery' }" :title="tip('Discovery: bring in new songs and fix their tags', 'discovery')" @click="setAppMode('discovery')">Discovery</button>
         <button role="tab" :aria-selected="appMode === 'settings'" :class="{ on: appMode === 'settings' }" title="Settings: themes and other options" @click="setAppMode('settings')">Settings</button>
       </span>
+      <button class="dj-toggle" :class="{ on: djPanelOpen }" :aria-pressed="djPanelOpen" :title="tip('DJ: ask an AI to run the queue and the library', 'dj')" @click="toggleDjPanel()">DJ</button>
     </h2>
     <div class="top">
       <CoverArt
@@ -79,6 +80,8 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
 
 <style scoped>
 .deck { padding-bottom: 10px; }
+.panel-title { position: relative; }
+.dj-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); padding: 0 12px; font-size: 12px; font-weight: 600; }
 .modes-switch { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg); border-radius: 8px; }
 .modes-switch button { border: none; background: transparent; padding: 1px 14px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .modes-switch button.on { background: var(--accent); color: var(--accent-text); }

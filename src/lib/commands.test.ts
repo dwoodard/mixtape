@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCommands, dispatchKey, type Command, type KeyEventLike } from "./commands";
 import type { Store } from "./store";
 import { makePlayerState, makeTrack } from "./testing";
-import { appMode, helpOpen, libraryView, paletteOpen, publishSelection, selectedSongs, tagEditPaths } from "./ui";
+import { appMode, djPanelOpen, helpOpen, libraryView, paletteOpen, publishSelection, selectedSongs, tagEditPaths } from "./ui";
 
 function fakeStore(over: Record<string, unknown> = {}) {
   const store = {
@@ -98,6 +98,34 @@ describe("commands", () => {
     expect(appMode.value).toBe("player");
     expect(libraryView.value).toBe("albums");
     expect(get(createCommands(store), "viewDuplicates").enabled).toBe(false);
+  });
+
+  it("slides the DJ panel out and back, in the large window only", async () => {
+    djPanelOpen.value = false;
+    await get(createCommands(fakeStore()), "dj").run!();
+    expect(djPanelOpen.value).toBe(true);
+    await get(createCommands(fakeStore()), "dj").run!();
+    expect(djPanelOpen.value).toBe(false);
+  });
+
+  it("does not fire the DJ key while typing in a text box", () => {
+    const commands = createCommands(fakeStore());
+    const event = { key: "\\", metaKey: false, shiftKey: false, altKey: false, ctrlKey: false, repeat: false, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    djPanelOpen.value = false;
+    expect(dispatchKey(event, commands, { editable: true, pressable: false })).toBe(false);
+    expect(djPanelOpen.value).toBe(false);
+    expect(dispatchKey(event, commands, { editable: false, pressable: false })).toBe(true);
+    expect(djPanelOpen.value).toBe(true);
+  });
+
+  it("from the thin bar, the DJ key opens the large window with the DJ out", async () => {
+    djPanelOpen.value = true; // a stale value from an earlier session must not hide it
+    const store = fakeStore({ mode: { value: "thin" } });
+    const dj = get(createCommands(store), "dj");
+    expect(dj.enabled).toBe(true);
+    await dj.run!();
+    expect(store.toggleMode).toHaveBeenCalledOnce();
+    expect(djPanelOpen.value).toBe(true);
   });
 
   it("limits the thin bar to playback and the window switch", () => {

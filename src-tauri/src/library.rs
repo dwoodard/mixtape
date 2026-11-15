@@ -28,6 +28,9 @@ pub enum ScanPhase {
 /// huge libraries do not flood the UI.
 const PROGRESS_EVERY: usize = 25;
 
+/// How many songs are delivered together while a scan streams its results.
+const BATCH: usize = 25;
+
 /// A track plus the file facts that tell us whether its tags can be reused.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CachedTrack {
@@ -62,6 +65,20 @@ pub fn scan_folder_with(
     removed: &Removed,
     on_progress: impl Fn(ScanProgress) + Sync,
 ) -> Option<Vec<CachedTrack>> {
+    scan_folder_streaming(root, cancel, known, removed, on_progress, |_| {})
+}
+
+/// Like [`scan_folder_with`], and also hands over the songs in batches (in no
+/// particular order) as their tags are read, so a list can fill in while the
+/// scan is still running. Every song of the result is delivered exactly once.
+pub fn scan_folder_streaming(
+    root: &Path,
+    cancel: &AtomicBool,
+    known: &Known,
+    removed: &Removed,
+    on_progress: impl Fn(ScanProgress) + Sync,
+    on_tracks: impl Fn(Vec<Track>) + Sync,
+) -> Option<Vec<CachedTrack>> {
     let mut files = Vec::new();
     let walker = WalkDir::new(root)
         .follow_links(true)
@@ -92,6 +109,7 @@ pub fn scan_folder_with(
     let total = files.len();
     on_progress(ScanProgress { phase: ScanPhase::Reading, done: 0, total });
     let done = AtomicUsize::new(0);
+    let pending = std::sync::Mutex::new(Vec::<Track>::new());
     let read: Vec<Option<CachedTrack>> = files
         .par_iter()
         .map(|(path, modified_ms, size)| {
@@ -117,6 +135,15 @@ pub fn scan_folder_with(
                 }
                 c
             });
+            if let Some(c) = &cached {
+                let mut waiting = pending.lock().unwrap();
+                waiting.push(c.track.clone());
+                if waiting.len() >= BATCH {
+                    let batch = std::mem::take(&mut *waiting);
+                    drop(waiting);
+                    on_tracks(batch);
+                }
+            }
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n % PROGRESS_EVERY == 0 || n == total {
                 on_progress(ScanProgress { phase: ScanPhase::Reading, done: n, total });
@@ -126,6 +153,10 @@ pub fn scan_folder_with(
         .collect();
     if cancel.load(Ordering::Relaxed) {
         return None;
+    }
+    let rest = std::mem::take(&mut *pending.lock().unwrap());
+    if !rest.is_empty() {
+        on_tracks(rest);
     }
 
     let mut tracks: Vec<CachedTrack> = read.into_iter().flatten().collect();
@@ -212,6 +243,35 @@ mod tests {
             .map(|t| (t.artist.as_str(), t.track_number.unwrap()))
             .collect();
         assert_eq!(order, vec![("alpha", 9), ("Beta", 1), ("Beta", 2)]);
+    }
+
+    #[test]
+    fn streams_every_song_exactly_once_in_batches() {
+        use std::sync::Mutex;
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..60 {
+            write_wav(&dir.path().join(format!("{i:02}.wav")), 0.1);
+        }
+        let batches = Mutex::new(Vec::<Vec<Track>>::new());
+
+        let result = scan_folder_streaming(
+            dir.path(),
+            &AtomicBool::new(false),
+            &Known::new(),
+            &Removed::new(),
+            |_| {},
+            |batch| batches.lock().unwrap().push(batch),
+        )
+        .unwrap();
+
+        let batches = batches.into_inner().unwrap();
+        assert!(batches.len() >= 2, "arrives in more than one piece");
+        assert!(batches.iter().all(|b| b.len() <= BATCH));
+        let mut streamed: Vec<String> = batches.into_iter().flatten().map(|t| t.path).collect();
+        let mut expected: Vec<String> = result.into_iter().map(|c| c.track.path).collect();
+        streamed.sort();
+        expected.sort();
+        assert_eq!(streamed, expected);
     }
 
     #[test]

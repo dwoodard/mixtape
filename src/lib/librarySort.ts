@@ -18,6 +18,11 @@ function compare(a: Track, b: Track): number {
   return 0;
 }
 
+/** `tracks` in the order a scan produces. */
+export function inScanOrder(tracks: Track[]): Track[] {
+  return [...tracks].sort(compare);
+}
+
 /** `tracks` with `track` added in scan order (or replacing the entry with the same path). */
 export function insertSorted(tracks: Track[], track: Track): Track[] {
   const rest = tracks.filter((t) => t.path !== track.path);

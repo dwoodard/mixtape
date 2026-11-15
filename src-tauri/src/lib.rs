@@ -133,9 +133,19 @@ async fn scan(
         let previous = cache.load(&root);
         let known = previous.as_ref().map(|c| c.known()).unwrap_or_default();
         let removed = cache.removed(&root);
-        let mut scanned = library::scan_folder_with(&root, &cancel, &known, &removed, |p| {
-            let _ = app.emit("scan-progress", p);
-        })
+        let mut scanned = library::scan_folder_streaming(
+            &root,
+            &cancel,
+            &known,
+            &removed,
+            |p| {
+                let _ = app.emit("scan-progress", p);
+            },
+            // The list fills in while the scan runs.
+            |batch| {
+                let _ = app.emit("scan-tracks", batch);
+            },
+        )
         .ok_or_else(|| SCAN_CANCELLED.to_string())?;
 
         // An unmounted share can leave an empty folder behind. Keep the
@@ -768,6 +778,7 @@ fn setup_window(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_http::init())
         .register_asynchronous_uri_scheme_protocol("cover", |ctx, request, responder| {
             let service = ctx.app_handle().state::<Arc<CoverService>>().inner().clone();
             let path = request.uri().path().to_string();

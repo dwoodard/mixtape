@@ -40,6 +40,7 @@ export const COMMANDS: readonly CommandDef[] = [
   { id: "viewArtists", title: "Show Artists", group: "Navigation", keys: cmd("3") },
   { id: "viewDuplicates", title: "Show Duplicates", group: "Navigation", keys: cmd("4") },
   { id: "discovery", title: "Switch between Player and Discovery", group: "Navigation", keys: cmd("d") },
+  { id: "dj", title: "Show or hide the DJ", group: "Navigation", keys: { key: "\\" } },
   { id: "toggleMode", title: "Switch between thin bar and large window", group: "Navigation", keys: cmd("t", { shift: true }) },
 
   { id: "play", title: "Play selected songs (one song asks what to do first)", group: "Selection", keys: { key: "Enter" }, local: true },

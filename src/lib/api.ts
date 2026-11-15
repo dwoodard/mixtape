@@ -77,6 +77,8 @@ export interface Api {
   onPosition(cb: (positionMs: number) => void): Promise<Unlisten>;
   onWindowMode(cb: (mode: WindowMode) => void): Promise<Unlisten>;
   onScanProgress(cb: (progress: ScanProgress) => void): Promise<Unlisten>;
+  /** Songs the running scan has read so far, in batches and in no particular order. */
+  onScanTracks(cb: (tracks: Track[]) => void): Promise<Unlisten>;
 }
 
 export const tauriApi: Api = {
@@ -149,4 +151,5 @@ export const tauriApi: Api = {
   onPosition: (cb) => listen<number>("player-position", (e) => cb(e.payload)),
   onWindowMode: (cb) => listen<WindowMode>("window-mode", (e) => cb(e.payload)),
   onScanProgress: (cb) => listen<ScanProgress>("scan-progress", (e) => cb(e.payload)),
+  onScanTracks: (cb) => listen<Track[]>("scan-tracks", (e) => cb(e.payload)),
 };

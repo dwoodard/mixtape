@@ -57,6 +57,11 @@ describe("shortcut table", () => {
     expect(findCommand(press("Enter", { metaKey: true, shiftKey: true }))?.id).toBe("playNext");
   });
 
+  it("shows and hides the DJ with the backslash key", () => {
+    expect(findCommand(press("\\"))?.id).toBe("dj");
+    expect(shortcutText("dj")).toBe("\\");
+  });
+
   it("opens the palette with Cmd+K and the help with Cmd+/", () => {
     expect(findCommand(press("k", { metaKey: true }))?.id).toBe("palette");
     expect(findCommand(press("/", { metaKey: true }))?.id).toBe("help");

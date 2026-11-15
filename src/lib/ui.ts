@@ -104,6 +104,11 @@ export function persistedSet(key: string, storage?: FlagStorage) {
   };
 }
 
+const djPanel = persistedFlag("mixtape.djPanelOpen", false);
+/** Whether the DJ chat panel is slid out on the right of the large window. */
+export const djPanelOpen = djPanel.flag;
+export const toggleDjPanel = djPanel.toggle;
+
 export type AppMode = "player" | "discovery" | "settings";
 const appModeChoice = persistedChoice<AppMode>("mixtape.appMode", "player", ["player", "discovery", "settings"]);
 /** Which workspace the large window shows: playing music, discovering and fixing it, or settings. */

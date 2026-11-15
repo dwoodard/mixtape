@@ -20,7 +20,8 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #app { height: 100%; margin: 0; overflow: hidden; }
+/* clip, unlike hidden, can never be scrolled by focus or an off-screen panel, so the app cannot shift sideways. */
+html, body, #app { height: 100%; margin: 0; overflow: hidden; overflow: clip; }
 body { user-select: none; -webkit-user-select: none; }
 
 button {

@@ -13,6 +13,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     position: [] as ((ms: number) => void)[],
     mode: [] as ((m: WindowMode) => void)[],
     scan: [] as ((p: ScanProgress) => void)[],
+    scanTracks: [] as ((t: Track[]) => void)[],
   };
   const unlisten = vi.fn();
   const api: Api = {
@@ -72,6 +73,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     onPosition: vi.fn(async (cb) => (listeners.position.push(cb), unlisten)),
     onWindowMode: vi.fn(async (cb) => (listeners.mode.push(cb), unlisten)),
     onScanProgress: vi.fn(async (cb) => (listeners.scan.push(cb), unlisten)),
+    onScanTracks: vi.fn(async (cb) => (listeners.scanTracks.push(cb), unlisten)),
     ...overrides,
   };
   return { api, listeners, unlisten };
@@ -117,7 +119,7 @@ describe("init", () => {
     const { api, unlisten } = fakeApi();
     const cleanup = await createStore(api).init();
     cleanup();
-    expect(unlisten).toHaveBeenCalledTimes(5);
+    expect(unlisten).toHaveBeenCalledTimes(6);
   });
 });
 
@@ -1014,5 +1016,70 @@ describe("updates reach the queue and are easy to find", () => {
     store.addToLibrary(readded);
     store.dismissChange();
     expect(store.lastChange.value).toBeNull();
+  });
+});
+
+describe("songs appear while a new folder is scanned", () => {
+  const song = (artist: string, title: string) => makeTrack({ path: `/new/${title}.mp3`, artist, title });
+
+  async function startScan(existing: Track[] = []) {
+    let finish!: (tracks: Track[]) => void;
+    let fail!: (e: unknown) => void;
+    const { api, listeners } = fakeApi({
+      cachedLibrary: vi.fn(async () => (existing.length ? { folder: "/old", tracks: existing, scannedAtMs: 1 } : null)),
+      scanFolder: vi.fn(() => new Promise<Track[]>((resolve, reject) => ((finish = resolve), (fail = reject)))),
+    });
+    const store = createStore(api);
+    await store.init();
+    const opening = store.openFolder();
+    await vi.waitFor(() => expect(api.scanFolder).toHaveBeenCalled());
+    return { store, listeners, finish: (t: Track[]) => finish(t), fail: (e: unknown) => fail(e), opening };
+  }
+
+  it("shows batches in scan order as they arrive, then the final list", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, listeners, finish, opening } = await startScan([makeTrack({ path: "/old/a.mp3", title: "Old" })]);
+      expect(store.library.value).toEqual([]);
+
+      listeners.scanTracks[0]([song("Zed", "z1"), song("Abba", "a1")]);
+      listeners.scanTracks[0]([song("Mid", "m1")]);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(store.library.value.map((t) => t.title)).toEqual(["a1", "m1", "z1"]);
+
+      finish([song("Abba", "a1"), song("Mid", "m1"), song("Zed", "z1")]);
+      await opening;
+      expect(store.library.value.map((t) => t.title)).toEqual(["a1", "m1", "z1"]);
+      expect(store.scanning.value).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("puts the previous library back when the scan is cancelled", async () => {
+    vi.useFakeTimers();
+    try {
+      const old = [makeTrack({ path: "/old/a.mp3", title: "Old" })];
+      const { store, listeners, fail, opening } = await startScan(old);
+      listeners.scanTracks[0]([song("Abba", "a1")]);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(store.library.value.map((t) => t.title)).toEqual(["a1"]);
+
+      fail("cancelled");
+      await opening;
+      expect(store.library.value).toEqual(old);
+      expect(store.folder.value).toBe("/old");
+      expect(store.scanError.value).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores songs that arrive when no scan is streaming", async () => {
+    const { api, listeners } = fakeApi();
+    const store = createStore(api);
+    await store.init();
+    listeners.scanTracks[0]([song("Abba", "late")]);
+    expect(store.library.value).toEqual([]);
   });
 });

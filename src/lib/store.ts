@@ -3,7 +3,7 @@ import { tauriApi, type Api } from "./api";
 import type { TagEditPayload } from "./tagEdit";
 import { changedTracks, queueReplacements } from "./changes";
 import { panelWantedHeight } from "./thinBar";
-import { applyFolderRefresh, insertSorted } from "./librarySort";
+import { applyFolderRefresh, inScanOrder, insertSorted } from "./librarySort";
 import { dirName } from "./format";
 import { createImports } from "./imports";
 import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
@@ -93,6 +93,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
         thinPanel.value = null;
       }),
       api.onScanProgress((p) => (scanProgress.value = p)),
+      api.onScanTracks(receiveScanned),
     ]);
     // Subscribe first, then read the snapshot, so no update is missed in between.
     const snapshot = await api.snapshot();
@@ -126,24 +127,71 @@ export function createStore(api: Api, storage?: FlagStorage) {
     seenDuplicates.add(...fresh.map((g) => g.key));
   }
 
+  /** While a scan of another folder runs: the songs it has read so far, shown in the list as they arrive. */
+  let streamed: Track[] | null = null;
+  let streamedWaiting: Track[] = [];
+  let streamTimer: ReturnType<typeof setTimeout> | null = null;
+  let scanBefore: { library: Track[]; folder: string | null } | null = null;
+  /** How often the list catches up with what the scan has read (sorting a big list on every batch would stall). */
+  const STREAM_EVERY_MS = 200;
+
+  function showStreamed() {
+    streamTimer = null;
+    if (!streamed) return;
+    streamed = inScanOrder([...streamed, ...streamedWaiting]);
+    streamedWaiting = [];
+    library.value = streamed;
+  }
+
+  function receiveScanned(tracks: Track[]) {
+    if (!streamed) return;
+    streamedWaiting.push(...tracks);
+    streamTimer ??= setTimeout(showStreamed, STREAM_EVERY_MS);
+  }
+
+  function stopStreaming() {
+    if (streamTimer) clearTimeout(streamTimer);
+    streamTimer = null;
+    streamed = null;
+    streamedWaiting = [];
+  }
+
   async function scan(path: string, load: () => Promise<Track[]>) {
     const id = ++scanId;
+    // What to put back if this scan ends without a result. A scan that replaces a running one inherits its "before".
+    const before = scanning.value && scanBefore ? scanBefore : { library: library.value, folder: folder.value };
+    scanBefore = before;
     scanning.value = true;
     scanError.value = null;
     scanProgress.value = null;
+    // A rescan of the folder on screen keeps its list until the new one is ready. Another folder,
+    // or an empty list, fills in as the songs are read.
+    stopStreaming();
+    if (path !== folder.value || library.value.length === 0) {
+      streamed = [];
+      library.value = [];
+      folder.value = path;
+    }
     try {
       const tracks = await load();
       if (id !== scanId) return;
+      stopStreaming();
       library.value = tracks;
       folder.value = path;
       scannedAt.value = Date.now();
       announceDuplicates();
     } catch (e) {
-      // A cancelled scan keeps the previous library and is not an error.
-      if (id === scanId && String(e) !== SCAN_CANCELLED) scanError.value = String(e);
+      // A cancelled or failed scan puts the previous library back; only a failure is an error.
+      if (id === scanId) {
+        stopStreaming();
+        library.value = before.library;
+        folder.value = before.folder;
+        if (String(e) !== SCAN_CANCELLED) scanError.value = String(e);
+      }
     } finally {
       if (id === scanId) {
         scanning.value = false;
+        scanBefore = null;
         scanProgress.value = null;
       }
     }

@@ -3,12 +3,14 @@ import type { Store } from "./store";
 import { allowedWhileFocused, COMMANDS, findCommand, type CommandDef, type FocusKind, type KeyLike } from "./shortcuts";
 import {
   appMode,
+  djPanelOpen,
   helpOpen,
   libraryView,
   paletteOpen,
   selectedSongs,
   setAppMode,
   tagEditPaths,
+  toggleDjPanel,
   type LibraryView,
 } from "./ui";
 
@@ -23,7 +25,7 @@ export interface Command extends CommandDef {
 }
 
 /** What still works in the thin bar: it has no lists, queue or overlays. */
-const THIN_BAR = new Set(["playPause", "next", "prev", "seekForward", "seekBack", "volumeUp", "volumeDown", "mute", "shuffle", "repeat", "stop", "toggleMode"]);
+const THIN_BAR = new Set(["playPause", "next", "prev", "seekForward", "seekBack", "volumeUp", "volumeDown", "mute", "shuffle", "repeat", "stop", "toggleMode", "dj"]);
 
 let volumeBeforeMute = 0.5;
 
@@ -78,6 +80,16 @@ export function createCommands(store: Store): Command[] {
     viewArtists: { run: showView("artists") },
     viewDuplicates: { enabled: store.duplicateGroups.value.length > 0, run: showView("duplicates") },
     discovery: { run: () => setAppMode(appMode.value === "player" ? "discovery" : "player") },
+    // The thin bar has no room for a chat: from there the key opens the large window with the DJ out.
+    dj: {
+      run: async () => {
+        if (!large) {
+          await store.toggleMode();
+          djPanelOpen.value = false;
+        }
+        toggleDjPanel();
+      },
+    },
     toggleMode: { run: () => void store.toggleMode() },
 
     play: { enabled: songs.length > 0, run: () => store.playTracks(songs, 0) },
