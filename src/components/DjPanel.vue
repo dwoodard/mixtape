@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { clampPanelWidth, PANEL_DEFAULT_WIDTH, widthFromDrag } from "../lib/panelSize";
-import { djPanelOpen, toggleDjPanel } from "../lib/ui";
+import { clampPanelWidth, PANEL_DEFAULT_WIDTH, pressClosesPanel, widthFromDrag } from "../lib/panelSize";
+import { closeDjPanel, djPanelOpen, toggleDjPanel } from "../lib/ui";
 import DjChat from "./DjChat.vue";
 
 /** The DJ chat as a panel that slides out over the right of the large window. */
@@ -14,8 +14,19 @@ const windowWidth = ref(typeof window === "undefined" ? 1200 : window.innerWidth
 const width = ref(Number.isFinite(saved) && saved > 0 ? saved : PANEL_DEFAULT_WIDTH);
 const shownWidth = () => clampPanelWidth(width.value, windowWidth.value);
 const onResize = () => (windowWidth.value = window.innerWidth);
-onMounted(() => window.addEventListener("resize", onResize));
-onBeforeUnmount(() => window.removeEventListener("resize", onResize));
+// A click anywhere outside the open panel closes it.
+const panel = ref<HTMLElement | null>(null);
+function onPress(event: PointerEvent) {
+  if (djPanelOpen.value && event.button === 0 && pressClosesPanel(event.target, panel.value)) closeDjPanel();
+}
+onMounted(() => {
+  window.addEventListener("resize", onResize);
+  document.addEventListener("pointerdown", onPress, true);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", onResize);
+  document.removeEventListener("pointerdown", onPress, true);
+});
 const remember = () => {
   try {
     localStorage.setItem(WIDTH_KEY, String(width.value));
@@ -65,7 +76,7 @@ watch(
 </script>
 
 <template>
-  <aside class="dj-panel" :class="{ open: djPanelOpen, dragging }" :style="{ width: `${shownWidth()}px` }" aria-label="DJ" :inert="!djPanelOpen">
+  <aside ref="panel" class="dj-panel" :class="{ open: djPanelOpen, dragging }" :style="{ width: `${shownWidth()}px` }" aria-label="DJ" :inert="!djPanelOpen">
     <div
       class="handle"
       role="separator"

@@ -126,6 +126,7 @@ const djPanel = persistedFlag("mixtape.djPanelOpen", false);
 export const djPanelOpen = djPanel.flag;
 export const toggleDjPanel = djPanel.toggle;
 export const openDjPanel = () => djPanel.set(true);
+export const closeDjPanel = () => djPanel.set(false);
 
 export type AppMode = "player" | "discovery" | "settings";
 const appModeChoice = persistedChoice<AppMode>("mixtape.appMode", "player", ["player", "discovery", "settings"]);

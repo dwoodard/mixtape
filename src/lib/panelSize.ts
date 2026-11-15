@@ -16,3 +16,13 @@ export function clampPanelWidth(width: number, windowWidth: number): number {
 export function widthFromDrag(startWidth: number, startX: number, x: number, windowWidth: number): number {
   return clampPanelWidth(startWidth + (startX - x), windowWidth);
 }
+
+/**
+ * Whether a press at `target` should close the DJ panel: it landed outside the panel, and not on the DJ button
+ * (which toggles it itself) or on a menu or dialog, which the chat may have opened.
+ */
+export function pressClosesPanel(target: EventTarget | null, panel: Element | null): boolean {
+  if (!(target instanceof Element) || !panel) return false;
+  if (panel.contains(target)) return false;
+  return !target.closest('.dj-toggle, [role="menu"], [role="dialog"], .backdrop');
+}
