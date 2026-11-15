@@ -65,7 +65,7 @@ h3 { margin: 0 0 10px; font-size: 12px; letter-spacing: 0.06em; text-transform: 
 h3.next { margin-top: 22px; }
 .accents { display: flex; flex-wrap: wrap; gap: 8px; }
 .accent { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; }
-.accent.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.accent.on { background: var(--panel-2); color: var(--text); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .dot { width: 12px; height: 12px; border-radius: 50%; }
 .dot.auto { background: conic-gradient(#2f7bc4, #2f9a5b, #d9822b, #d6568f, #8a5fd1, #2f7bc4); }
 .check { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
