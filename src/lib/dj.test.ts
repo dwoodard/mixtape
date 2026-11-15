@@ -371,6 +371,27 @@ describe("whole-app tools", () => {
     expect(out.result).toHaveProperty("error");
   });
 
+  it("sets cover art from an https link after asking, and refuses any other link before asking", async () => {
+    const session = new DjSession();
+    const id = await idOf(session, "halo");
+    const url = "https://example.com/cover.webp";
+
+    const asked: string[] = [];
+    const host = fakeHost();
+    await runTool("edit_tags", { ids: [id], cover_url: url }, host, session, async (q) => (asked.push(q), true));
+    expect(host.writeTags).toHaveBeenCalledWith([library[2]], { coverUrl: url });
+    expect(asked[0]).toContain("cover art");
+
+    for (const bad of ["http://example.com/c.jpg", "file:///tmp/c.jpg", "not a link"]) {
+      const refused = fakeHost();
+      const prompt = vi.fn(async () => true);
+      const out = await runTool("edit_tags", { ids: [id], cover_url: bad }, refused, session, prompt);
+      expect(refused.writeTags, bad).not.toHaveBeenCalled();
+      expect(prompt, bad).not.toHaveBeenCalled();
+      expect(out.result, bad).toHaveProperty("error");
+    }
+  });
+
   it("trashes only the extras it was given, paired with their duplicates", async () => {
     const group: DuplicateGroup = { key: "k", keep: library[1], extras: [library[2]] };
     const host = fakeHost({}, [], { duplicateGroups: () => [group] });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coverUrl } from "./cover";
+import { coverUrl, refreshCovers } from "./cover";
 
 describe("coverUrl", () => {
   it("percent-encodes the whole path so it survives as one URL segment", () => {
@@ -12,5 +12,18 @@ describe("coverUrl", () => {
     const path = "/Music/Björk/Homogénic/01 Hunter.flac";
     const encoded = coverUrl(path).replace("cover://localhost/", "");
     expect(decodeURIComponent(encoded)).toBe(path);
+  });
+});
+
+describe("refreshCovers", () => {
+  it("changes the address of just the songs given, so the window loads their new picture", () => {
+    const [a, b] = ["/m/a.mp3", "/m/b.mp3"];
+    const before = coverUrl(a);
+    refreshCovers([a]);
+    expect(coverUrl(a)).not.toBe(before);
+    expect(coverUrl(a)).toContain("?v=1");
+    expect(coverUrl(b)).not.toContain("?v=");
+    refreshCovers([a]);
+    expect(coverUrl(a)).toContain("?v=2");
   });
 });

@@ -5,6 +5,7 @@
 use crate::track::{is_audio_file, read_track, Track};
 use lofty::config::WriteOptions;
 use lofty::file::{FileType, TaggedFileExt};
+use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::tag::items::Timestamp;
 use lofty::tag::{Accessor, ItemKey, Tag, TagExt, TagType};
 use serde::Deserialize;
@@ -26,6 +27,11 @@ pub struct TagEdit {
     pub genre: Option<String>,
     /// The words of the song, kept in the file's own lyrics tag (USLT in an mp3). Line breaks are kept.
     pub lyrics: Option<String>,
+    /// An https link to a picture to embed as the front cover. The app downloads it once and fills `cover`.
+    pub cover_url: Option<String>,
+    /// The JPEG bytes of the cover to embed. Never sent by the UI.
+    #[serde(skip)]
+    pub cover: Option<Vec<u8>>,
 }
 
 /// The most lyrics text accepted: far more than any song has, so a mistake cannot fill a tag with a book.
@@ -46,6 +52,9 @@ impl TagEdit {
         number(self.track_number.as_deref(), "Track", u32::MAX)?;
         number(self.disc_number.as_deref(), "Disc", u32::MAX)?;
         number(self.year.as_deref(), "Year", 9999)?;
+        if let Some(url) = self.cover_url.as_deref() {
+            crate::coverart::check_url(url)?;
+        }
         if self.lyrics.as_deref().is_some_and(|l| l.chars().count() > MAX_LYRICS_CHARS) {
             return Err(format!("Lyrics are limited to {MAX_LYRICS_CHARS} characters."));
         }
@@ -97,6 +106,11 @@ fn apply(tag: &mut Tag, edit: &TagEdit) -> Result<(), String> {
         if !lyrics.is_empty() && !insert_lyrics(tag, &lyrics) {
             return Err("This kind of file cannot hold lyrics in its tags.".into());
         }
+    }
+    if let Some(bytes) = edit.cover.as_ref().filter(|b| !b.is_empty()) {
+        // Only the front cover is replaced; any other pictures stay.
+        tag.remove_picture_type(PictureType::CoverFront);
+        tag.push_picture(Picture::unchecked(bytes.clone()).pic_type(PictureType::CoverFront).mime_type(MimeType::Jpeg).build());
     }
     if let Some(v) = number(edit.track_number.as_deref(), "Track", u32::MAX)? {
         match v { Some(n) => tag.set_track(n), None => tag.remove_track() }
@@ -187,6 +201,11 @@ pub fn write_tags(path: &Path, edit: &TagEdit) -> Result<Track, String> {
                 return Err("The edited copy did not contain the lyrics, so nothing was changed.".into());
             }
         }
+        if let Some(wanted) = edit.cover.as_ref().filter(|b| !b.is_empty()) {
+            if crate::cover::embedded(&temp).as_ref() != Some(wanted) {
+                return Err("The edited copy did not contain the cover art, so nothing was changed.".into());
+            }
+        }
         if after.duration_ms.abs_diff(before.duration_ms) > 100 {
             return Err("The audio length changed, so nothing was changed.".into());
         }
@@ -225,6 +244,8 @@ mod tests {
             year: Some("1995".into()),
             genre: Some("Ska".into()),
             lyrics: None,
+            cover_url: None,
+            cover: None,
         }
     }
 
@@ -283,6 +304,36 @@ mod tests {
 
             assert_eq!(read_lyrics(&path).as_deref(), Some(WORDS), "{ext}");
         }
+    }
+
+    fn tiny_jpeg() -> Vec<u8> {
+        let mut out = Vec::new();
+        image::DynamicImage::new_rgb8(8, 8).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg).unwrap();
+        out
+    }
+
+    #[test]
+    fn a_cover_is_embedded_in_every_supported_format_and_other_tags_stay() {
+        let jpeg = tiny_jpeg();
+        for ext in ["mp3", "flac", "m4a", "ogg"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = fixture(dir.path(), ext);
+            assert_eq!(crate::cover::embedded(&path), None, "{ext}: none to start with");
+
+            let before = read_track(&path).unwrap();
+            write_tags(&path, &TagEdit { cover: Some(jpeg.clone()), ..Default::default() }).unwrap_or_else(|e| panic!("{ext}: {e}"));
+
+            assert_eq!(crate::cover::embedded(&path), Some(jpeg.clone()), "{ext}");
+            assert_eq!(read_track(&path).unwrap().title, before.title, "{ext}: other tags are untouched");
+        }
+    }
+
+    #[test]
+    fn a_cover_link_must_be_https() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fixture(dir.path(), "mp3");
+        let err = write_tags(&path, &TagEdit { cover_url: Some("http://example.com/a.jpg".into()), ..Default::default() }).unwrap_err();
+        assert!(err.contains("https"), "{err}");
     }
 
     #[test]

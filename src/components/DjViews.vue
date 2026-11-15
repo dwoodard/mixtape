@@ -60,17 +60,25 @@ const fieldLabel = (key: string) => TAG_FIELDS.find((f) => f.key === key)?.label
 function changesFor(song: Track, match: TagMatch) {
   const edit = changedFields(tagEditFromMatch(match), [song]);
   return Object.entries(edit).map(([field, to]) => ({
+    field,
     label: fieldLabel(field),
     from: String(song[field as keyof Track] ?? "") || "(empty)",
     to: String(to),
   }));
 }
+/** Changes the person turned off with their checkbox, as "matchIndex:field". Everything that differs starts turned on. */
+const skipped = ref<Record<string, boolean>>({});
+const skipKey = (index: number, field: string) => `${index}:${field}`;
+const isChosen = (index: number, field: string) => !skipped.value[skipKey(index, field)];
+const toggleChange = (index: number, field: string) => (skipped.value = { ...skipped.value, [skipKey(index, field)]: isChosen(index, field) });
+const chosenChanges = (song: Track, match: TagMatch, index: number) => changesFor(song, match).filter((c) => isChosen(index, c.field));
 function apply(song: Track, match: TagMatch, index: number) {
   // The write copies the whole file and checks it before swapping it in, which takes a while on a network drive.
   say(`tags-${index}`, "Saving to the file… this can take a while on a network drive.");
   void run(`tags-${index}`, async () => {
-    const edit = changedFields(tagEditFromMatch(match), [song]);
-    if (Object.keys(edit).length === 0) return "Already matches.";
+    const wanted = new Set(chosenChanges(song, match, index).map((c) => c.field));
+    const edit = Object.fromEntries(Object.entries(changedFields(tagEditFromMatch(match), [song])).filter(([field]) => wanted.has(field)));
+    if (Object.keys(edit).length === 0) return "Nothing selected to change.";
     const out = await props.host.writeTags([song], edit);
     if (out.problem) return out.problem;
     return out.failed.length ? out.failed[0] : "Saved to the file.";
@@ -82,6 +90,9 @@ function apply(song: Track, match: TagMatch, index: number) {
  */
 const liveByPath = computed(() => new Map(props.host.library().map((t) => [t.path, t])));
 const songNow = (song: Track): Track => liveByPath.value.get(song.path) ?? song;
+
+const applyLabel = (chosen: number, all: number) =>
+  chosen === all ? `Apply ${all} change${all === 1 ? "" : "s"}` : `Apply ${chosen} of ${all} changes`;
 
 const level = (confidence: number) => (confidence >= 75 ? "high" : confidence >= 50 ? "mid" : "low");
 
@@ -112,7 +123,8 @@ onMounted(() => {
 /** Every tag the song has now beside what MusicBrainz says. Genre is only a hint there, so it is never counted as a change. */
 function compareRows(song: Track, m: TagMatch) {
   const text = (v: string | number | null | undefined) => (v === null || v === undefined ? "" : String(v));
-  const row = (label: string, now: string | number | null, there: string, hint = false) => ({
+  const row = (field: string, label: string, now: string | number | null, there: string, hint = false) => ({
+    field,
     label,
     now: text(now) || "(empty)",
     there: there || "—",
@@ -120,14 +132,14 @@ function compareRows(song: Track, m: TagMatch) {
     hint,
   });
   return [
-    row("Title", song.title, m.title),
-    row("Artist", song.artist, m.artist),
-    row("Album", song.album, m.album),
-    row("Album artist", song.albumArtist, m.albumArtist),
-    row("Track", song.trackNumber, m.trackNumber),
-    row("Disc", song.discNumber, m.discNumber),
-    row("Year", song.year, m.year),
-    row("Genre", song.genre, m.genreHint, true),
+    row("title", "Title", song.title, m.title),
+    row("artist", "Artist", song.artist, m.artist),
+    row("album", "Album", song.album, m.album),
+    row("albumArtist", "Album artist", song.albumArtist, m.albumArtist),
+    row("trackNumber", "Track", song.trackNumber, m.trackNumber),
+    row("discNumber", "Disc", song.discNumber, m.discNumber),
+    row("year", "Year", song.year, m.year),
+    row("genre", "Genre", song.genre, m.genreHint, true),
   ];
 }
 const isThisSong = (song: Track, m: TagMatch, t: { title: string; recordingId: string }) =>
@@ -280,9 +292,12 @@ const stageText = (i: ImportItem) => (i.stage === "held" ? "Held, not fetched" :
 
         <template v-if="isOpen(i)">
           <table class="compare">
-            <thead><tr><th /><th>Now</th><th>MusicBrainz</th></tr></thead>
+            <thead><tr><th /><th /><th>Now</th><th>MusicBrainz</th></tr></thead>
             <tbody>
-              <tr v-for="r in compareRows(songNow(view.song), m)" :key="r.label" :class="{ differs: r.differs }">
+              <tr v-for="r in compareRows(songNow(view.song), m)" :key="r.label" :class="{ differs: r.differs, off: r.differs && !isChosen(i, r.field) }">
+                <th class="pick">
+                  <input v-if="r.differs" type="checkbox" :checked="isChosen(i, r.field)" :aria-label="`Change ${r.label}`" @change="toggleChange(i, r.field)" />
+                </th>
                 <th>{{ r.label }}</th>
                 <td>{{ r.now }}</td>
                 <td>
@@ -315,17 +330,14 @@ const stageText = (i: ImportItem) => (i.stage === "held" ? "Held, not fetched" :
         </template>
 
         <div class="apply">
-          <button v-if="changesFor(songNow(view.song), m).length" class="on" :disabled="busy[`tags-${i}`]" @click="apply(songNow(view.song), m, i)">
-            {{ busy[`tags-${i}`] ? "Saving…" : `Apply ${changesFor(songNow(view.song), m).length} change${changesFor(songNow(view.song), m).length === 1 ? "" : "s"}` }}
+          <button v-if="changesFor(songNow(view.song), m).length" class="on" :disabled="busy[`tags-${i}`] || !chosenChanges(songNow(view.song), m, i).length" @click="apply(songNow(view.song), m, i)">
+            {{ busy[`tags-${i}`] ? "Saving…" : applyLabel(chosenChanges(songNow(view.song), m, i).length, changesFor(songNow(view.song), m).length) }}
           </button>
           <span v-else class="ok">✓ Already matches</span>
           <button v-if="isOpen(i)" title="Open this release on musicbrainz.org" :disabled="busy[`web-${i}`] || !m.releaseId && !m.recordingId" @click="openOnMusicBrainz(m, `web-${i}`)">MusicBrainz ↗</button>
           <button v-if="isOpen(i)" title="Tag this song in MusicBrainz Picard" @click="openInPicard(view.song, `picard-${i}`)">Picard</button>
           <button v-if="isOpen(i)" title="Show the song in the library" @click="host.showInLibrary(view.song)">Show</button>
         </div>
-        <ul v-if="isOpen(i) && changesFor(songNow(view.song), m).length" class="changes">
-          <li v-for="c in changesFor(songNow(view.song), m)" :key="c.label"><span class="muted">{{ c.label }}</span> {{ c.from }} → <b>{{ c.to }}</b></li>
-        </ul>
         <span v-for="k in [`tags-${i}`, `genre-${i}`, `web-${i}`, `picard-${i}`]" :key="k" v-show="outcome[k]" class="note">{{ outcome[k] }}</span>
       </div>
     </template>
@@ -471,7 +483,7 @@ const stageText = (i: ImportItem) => (i.stage === "held" ? "Held, not fetched" :
 </template>
 
 <style scoped>
-.view { align-self: stretch; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 6px 8px; font-size: 12px; }
+.view { flex: none; align-self: stretch; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 6px 8px; font-size: 12px; }
 header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .spacer { flex: 1; }
 .muted { color: var(--muted); }
@@ -512,7 +524,10 @@ button { padding: 0 7px; font-size: 11px; }
 .genre-row:first-child { border-top: none; }
 .genre-row.written { opacity: 0.55; }
 .genre-row.failed { color: #ffb4b4; }
+.compare .pick { width: 18px; padding-right: 0; }
+.compare .pick input { margin: 0; vertical-align: middle; accent-color: var(--accent); }
 .compare tr.differs td:last-child { font-weight: 700; color: var(--accent); }
+.compare tr.off td:last-child { font-weight: 400; color: var(--muted); text-decoration: line-through; }
 .release { margin: 2px 0; }
 .tracks { max-height: 150px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
 .trk { display: grid; grid-template-columns: 22px 1fr auto; gap: 6px; font-size: 11px; padding: 1px 0; }

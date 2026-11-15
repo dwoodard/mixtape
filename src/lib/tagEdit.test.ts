@@ -35,6 +35,16 @@ describe("buildEdit", () => {
     expect(buildEdit([a], draftFor([a]))).toEqual({ edit: {}, changes: [], error: null });
   });
 
+  it("adds a cover link as a change, and rejects one that is not https", () => {
+    const ok = buildEdit([a], draftFor([a]), "  https://example.com/c.webp ");
+    expect(ok.edit).toEqual({ coverUrl: "https://example.com/c.webp" });
+    expect(ok.changes).toEqual([{ field: "coverUrl", label: "Cover art", from: "(current art)", to: "https://example.com/c.webp" }]);
+    const bad = buildEdit([a], draftFor([a]), "http://example.com/c.jpg");
+    expect(bad.error).toContain("https");
+    expect(bad.edit).toEqual({});
+    expect(buildEdit([a], draftFor([a]), "  ")).toEqual({ edit: {}, changes: [], error: null });
+  });
+
   it("sends only the fields that changed, with before and after", () => {
     const draft = { ...draftFor([a]), title: "Renamed", genre: "Ska" };
     const { edit, changes, error } = buildEdit([a], draft);

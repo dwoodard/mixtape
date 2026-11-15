@@ -1,5 +1,6 @@
 import { computed, ref } from "vue";
 import { tauriApi, type Api } from "./api";
+import { refreshCovers } from "./cover";
 import type { TagEditPayload } from "./tagEdit";
 import { changedTracks, queueReplacements } from "./changes";
 import { DJ_PANEL_HEIGHT, DJ_PANEL_MIN_WIDTH, panelWantedHeight } from "./thinBar";
@@ -376,6 +377,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
       tagResults.value = results;
       const fresh = new Map(results.flatMap((r) => (r.track ? [[r.path, r.track] as const] : [])));
       if (fresh.size > 0) {
+        if (edit.coverUrl) refreshCovers([...fresh.keys()]);
         library.value = library.value.map((t) => fresh.get(t.path) ?? t);
         const first = [...fresh.values()][0];
         noteChange(fresh.size === 1 ? `Saved tags: ${first.title}` : `Saved tags for ${fresh.size} songs`, first);

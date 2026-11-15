@@ -25,7 +25,7 @@ pub fn find_source(track: &Path) -> Option<Vec<u8>> {
     embedded(track).or_else(|| folder_picture(track))
 }
 
-fn embedded(track: &Path) -> Option<Vec<u8>> {
+pub fn embedded(track: &Path) -> Option<Vec<u8>> {
     let tagged = lofty::read_from_path(track).ok()?;
     let pictures: Vec<_> = tagged.tags().iter().flat_map(|t| t.pictures()).collect();
     pictures

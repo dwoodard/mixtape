@@ -212,6 +212,7 @@ const TAG_KEYS: Record<string, keyof TagEditPayload> = {
   disc: "discNumber",
   year: "year",
   genre: "genre",
+  cover_url: "coverUrl",
 };
 
 function tagEdit(args: Args): TagEditPayload | string {
@@ -221,6 +222,8 @@ function tagEdit(args: Args): TagEditPayload | string {
     if (value === undefined || value === null) continue;
     const text = String(value).trim();
     if (["track", "disc", "year"].includes(arg) && text !== "" && !/^\d+$/.test(text)) return `${arg} must be a whole number.`;
+    if (arg === "cover_url" && text !== "" && !/^https:\/\/\S+$/i.test(text)) return "cover_url must be a full https:// link to a picture.";
+    if (arg === "cover_url" && text === "") continue;
     edit[field] = text;
   }
   return Object.keys(edit).length ? edit : "Give at least one tag to change.";
@@ -452,8 +455,8 @@ export const TOOLS_TABLE: DjTool[] = [
   ),
   define(
     "edit_tags",
-    "Change tags in the files of these songs. Only the fields you give change; an empty string clears a field.",
-    { ids: ids(), title: str(), artist: str(), album: str(), album_artist: str(), track: str(), disc: str(), year: str(), genre: str() },
+    "Change tags in the files of these songs. Only the fields you give change; an empty string clears a field. cover_url sets the cover art: give an https link to a picture and it is downloaded and embedded in each song (all the songs get the same picture).",
+    { ids: ids(), title: str(), artist: str(), album: str(), album_artist: str(), track: str(), disc: str(), year: str(), genre: str(), cover_url: str("https link to a cover picture") },
     ["ids"],
     async (args, ctx) => {
       const picked = pick(args, ctx);
@@ -473,7 +476,7 @@ export const TOOLS_TABLE: DjTool[] = [
       if (typeof asked === "string") return null; // the tool itself reports it
       const edit = changedFields(asked, tracks);
       if (Object.keys(edit).length === 0) return null; // nothing would be written, so nothing to approve
-      const changes = Object.entries(edit).map(([k, v]) => `${k} → ${v || "(clear)"}`).join(", ");
+      const changes = Object.entries(edit).map(([k, v]) => (k === "coverUrl" ? `cover art ← ${v}` : `${k} → ${v || "(clear)"}`)).join(", ");
       return `Write tags (${changes}) into the files of ${named(tracks)}?`;
     },
   ),

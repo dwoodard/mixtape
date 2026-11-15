@@ -444,6 +444,8 @@ pub fn to_edit(p: &Proposal) -> TagEdit {
         genre: Some(p.genre.clone()),
         // A proposal has no lyrics: whatever the file already has stays.
         lyrics: None,
+        cover_url: None,
+        cover: None,
     }
 }
 

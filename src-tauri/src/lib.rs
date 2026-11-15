@@ -3,6 +3,7 @@ pub mod cache;
 pub mod cleanup;
 pub mod config;
 pub mod cover;
+pub mod coverart;
 pub mod filecheck;
 pub mod fsutil;
 pub mod importer;
@@ -320,11 +321,15 @@ struct TagWriteResult {
 async fn write_tags(
     cache: State<'_, CacheDir>,
     paths: Vec<String>,
-    edit: tags::TagEdit,
+    mut edit: tags::TagEdit,
 ) -> Result<Vec<TagWriteResult>, String> {
     edit.validate()?;
     let cache = cache.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // The picture is downloaded once, then embedded in every file. A bad link stops before any file is touched.
+        if let Some(url) = edit.cover_url.as_deref() {
+            edit.cover = Some(coverart::fetch(url)?);
+        }
         let mut results = Vec::new();
         let mut updated = Vec::new();
         for path in paths {
@@ -348,10 +353,10 @@ async fn write_tags(
                 eprintln!("could not update the library cache after editing tags: {e}");
             }
         }
-        results
+        Ok(results)
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize)]
