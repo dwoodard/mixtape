@@ -99,12 +99,23 @@ pub fn scan_folder_with(
                 return None;
             }
             let key = path.to_string_lossy();
-            let reused = known
-                .get(key.as_ref())
-                .filter(|c| c.modified_ms == *modified_ms && c.size == *size)
-                .cloned();
+            let previous = known.get(key.as_ref());
+            let reused = previous.filter(|c| c.modified_ms == *modified_ms && c.size == *size).cloned();
             let cached = reused.or_else(|| {
-                read_track(path).map(|track| CachedTrack { modified_ms: *modified_ms, size: *size, track })
+                read_track(path).map(|mut track| {
+                    // A retagged file keeps the date it was first added.
+                    if let Some(p) = previous.filter(|p| p.track.added_ms > 0) {
+                        track.added_ms = p.track.added_ms;
+                    }
+                    CachedTrack { modified_ms: *modified_ms, size: *size, track }
+                })
+            });
+            // Libraries cached before dates existed get theirs from the file.
+            let cached = cached.map(|mut c| {
+                if c.track.added_ms == 0 {
+                    c.track.added_ms = crate::track::added_ms(path);
+                }
+                c
             });
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n % PROGRESS_EVERY == 0 || n == total {
@@ -323,7 +334,7 @@ mod tests {
         let entry = |path: &str, title: &str| CachedTrack {
             modified_ms: 1,
             size: 1,
-            track: Track { path: path.into(), title: title.into(), artist: "A".into(), album: "B".into(), album_artist: String::new(), track_number: None, disc_number: None, year: None, genre: String::new(), duration_ms: 1 },
+            track: Track { path: path.into(), title: title.into(), artist: "A".into(), album: "B".into(), album_artist: String::new(), track_number: None, disc_number: None, year: None, genre: String::new(), duration_ms: 1, added_ms: 0 },
         };
         let mut cache = vec![
             entry("/lib/A/B/old name.mp3", "Old"),

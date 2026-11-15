@@ -9,6 +9,8 @@ export interface Track {
   year: number | null;
   genre: string;
   durationMs: number;
+  /** When the file arrived in the library (ms since the epoch), 0 if unknown. */
+  addedMs: number;
 }
 
 export type PlaybackStatus = "stopped" | "playing" | "paused";

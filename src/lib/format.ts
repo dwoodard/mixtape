@@ -17,6 +17,12 @@ export function trackLabel(track: Track | null): string {
   return track.artist ? `${track.artist} - ${track.title}` : track.title;
 }
 
+/** A short local date for a column: "Nov 14, 2026". Blank when unknown (0). */
+export function formatDate(ms: number): string {
+  if (ms <= 0) return "";
+  return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
 /** "just now", "5 min ago", "3 h ago", "2 days ago". */
 export function formatAgo(thenMs: number, nowMs: number): string {
   const minutes = Math.floor(Math.max(0, nowMs - thenMs) / 60_000);

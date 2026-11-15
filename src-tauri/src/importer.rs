@@ -1017,6 +1017,7 @@ mod tests {
                 year: None,
                 genre: String::new(),
                 duration_ms: 1000,
+                added_ms: 0,
             },
         }
     }
@@ -1138,7 +1139,7 @@ mod tests {
 
     #[test]
     fn a_proposal_can_be_read_back_from_a_tagged_track() {
-        let t = Track { path: "/x.mp3".into(), title: "T".into(), artist: "A".into(), album: "B".into(), album_artist: "AA".into(), track_number: Some(3), disc_number: None, year: Some(1999), genre: "G".into(), duration_ms: 1 };
+        let t = Track { path: "/x.mp3".into(), title: "T".into(), artist: "A".into(), album: "B".into(), album_artist: "AA".into(), track_number: Some(3), disc_number: None, year: Some(1999), genre: "G".into(), duration_ms: 1, added_ms: 0 };
         let p = proposal_from_track(&t);
         assert_eq!((p.title.as_str(), p.artist.as_str(), p.album.as_str(), p.album_artist.as_str(), p.year.as_str(), p.track.as_str(), p.genre.as_str()), ("T", "A", "B", "AA", "1999", "3", "G"));
         let none = proposal_from_track(&Track { year: None, track_number: None, ..t });

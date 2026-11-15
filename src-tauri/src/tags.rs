@@ -156,7 +156,10 @@ pub fn write_tags(path: &Path, edit: &TagEdit) -> Result<Track, String> {
         let _ = std::fs::remove_file(&temp);
         return Err(e);
     }
-    read_track(path).ok_or_else(|| "Saved, but the file could not be read back.".to_string())
+    let mut track = read_track(path).ok_or_else(|| "Saved, but the file could not be read back.".to_string())?;
+    // The swap gave the file a new creation time; it was added when the original was.
+    track.added_ms = before.added_ms;
+    Ok(track)
 }
 
 #[cfg(test)]

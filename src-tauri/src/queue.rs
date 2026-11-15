@@ -255,6 +255,7 @@ pub fn test_track(name: &str) -> Track {
         year: None,
         genre: String::new(),
         duration_ms: 180_000,
+        added_ms: 0,
     }
 }
 

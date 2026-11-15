@@ -12,6 +12,7 @@ export function makeTrack(overrides: Partial<Track> = {}): Track {
     year: null,
     genre: "",
     durationMs: 180_000,
+    addedMs: 0,
     ...overrides,
   };
 }

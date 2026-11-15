@@ -1295,6 +1295,7 @@ mod tests {
                 year: None,
                 genre: String::new(),
                 duration_ms: 1,
+                added_ms: 0,
             },
         };
         let (r2, e2) = (root.clone(), existing.clone());
