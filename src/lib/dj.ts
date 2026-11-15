@@ -1,5 +1,7 @@
 import type { ChatMessage, LmClient, ToolCall, ToolSpec } from "./lm";
 import type { DuplicateGroup } from "./duplicates";
+import type { Lyrics } from "./lyrics";
+import type { TagMatch } from "./musicbrainz";
 import type { TagEditPayload } from "./tagEdit";
 import { TOOLS_TABLE } from "./djTools";
 import type { CleanupReport, ImportItem, PlayerState, Repeat, TagsPatch, Track, WindowMode } from "./types";
@@ -14,6 +16,10 @@ export interface DjHost {
   queue(): Track[];
   player(): PlayerState;
   imports(): ImportItem[];
+  /** The songs picked in the song list on screen. */
+  selection(): Track[];
+  /** What the window is showing now. */
+  screen(): { tab: string; libraryView: string; filter: string; windowMode: string };
   duplicateGroups(): DuplicateGroup[];
   // Queue and playback.
   startQueue(tracks: Track[]): Promise<void>;
@@ -42,12 +48,20 @@ export interface DjHost {
   writeTags(tracks: Track[], edit: TagEditPayload): Promise<{ saved: number; failed: string[]; problem: Problem }>;
   reveal(tracks: Track[]): Promise<Problem>;
   openInPicard(tracks: Track[]): Promise<Problem>;
+  /** Re-reads the folders of songs sent to Picard, so the library shows what Picard saved. */
+  refreshPicardChanges(): Promise<Problem>;
+  /** Lyrics for a song from the web (LRCLIB). Null when none were found. */
+  fetchLyrics(track: Track): Promise<Lyrics | null>;
+  /** Ways to tag a song, from MusicBrainz (Picard's database), best first. */
+  lookupTags(track: Track): Promise<TagMatch[]>;
   // Discovery.
   importLink(url: string, format?: string): Promise<Problem>;
   importFiles(paths: string[]): Promise<{ added: number; problem: Problem }>;
   setImportTags(id: number, patch: TagsPatch): Promise<Problem>;
   addImport(id: number): Promise<Problem>;
   undoImport(id: number): Promise<Problem>;
+  openImportInPicard(id: number): Promise<Problem>;
+  cancelImportPicard(id: number): Promise<Problem>;
   removeImport(id: number): Promise<Problem>;
   setImportOptions(options: { format?: string; autoAdd?: boolean; threshold?: string }): void;
   // The app itself.
@@ -92,8 +106,18 @@ export function systemPrompt(library: Track[]): string {
   const genres = countBy(library.map((t) => t.genre)).slice(0, 15).map(([g, n]) => `${g} (${n})`);
   const artists = countBy(library.map((t) => t.albumArtist || t.artist)).slice(0, 30).map(([a, n]) => `${a} (${n})`);
   return [
-    "You are the DJ of Mixtape, a music player. You can do everything the user can do in the app: build and run the queue, control playback, search and manage the library, fix tags, find duplicates, bring in new songs from links (Discovery), and change the look of the app.",
-    "You cannot see the library. Always call search_library to find songs, then use the ids it returns. Never invent ids, titles or artists. Queue positions are numbered from 1 as get_queue shows them.",
+    "You are the DJ of Mixtape, a Mac music player, and you work the app for the user. You can do everything they can do by hand:",
+    "- Queue and playback: build a queue, add songs, play one now, reorder, remove, clear, play/pause/skip, seek, volume, shuffle, repeat.",
+    "- Library: search it, rescan or load the saved music folder, hide songs, find and trash duplicate copies, show a song in Finder or in the list.",
+    "- Tags and info: look up the right tags on MusicBrainz (the database Picard uses) and write them, edit tags by hand, open songs in Picard, fetch lyrics.",
+    "- Discovery: bring in new songs from a YouTube link or audio files, fix their tags, add them to the library, undo.",
+    "- The app: change theme and accent, switch screens, switch between the large window and thin bar, quit.",
+    "If asked what you can do, answer in plain words grouped like this, with an example or two. Do not list tool names.",
+    "Every message ends with a Context block: what is playing, what is selected, what is on screen, the queue and Discovery. Read it before you answer.",
+    "'this song', 'it' or 'the current song' means the song playing now. 'these' or 'the selected songs' means the selection. If the message refers to a song and both are empty, ask which song, once.",
+    "Never show the user the Context block, ids or tool names: they are for you. Speak about songs by title and artist.",
+    "The Context block gives the tags the playing song has now. To show or check a song's current tags, read them from there. Use lookup_tags only to find what the tags should be.",
+    "Songs in the Context block already have ids: use them directly. For any other song, call search_library first and use the ids it returns. Never invent ids, titles or artists. Queue positions are numbered from 1.",
     "To build a set, search a few times (different genres, artists or years), pick songs that flow well together, and call start_queue (new queue) or add_to_queue (keep the current queue).",
     "Some actions change or delete files. The app asks the user first, so just call the tool. If the user says no, do not retry.",
     "If a search finds nothing, try broader words. If the library has nothing that fits, say so plainly.",
@@ -102,6 +126,52 @@ export function systemPrompt(library: Track[]): string {
     genres.length ? `Most common genres: ${genres.join(", ")}.` : "",
     artists.length ? `Most common artists: ${artists.join(", ")}.` : "",
   ].filter(Boolean).join("\n");
+}
+
+const clock = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
+const brief = (t: Track, id: number) => `[${id}] "${t.title}" by ${t.artist || "unknown artist"}${t.album ? ` (${t.album}${t.year ? `, ${t.year}` : ""})` : ""}`;
+const SHOWN_SELECTED = 10;
+const blank = (v: string | number | null | undefined) => (v === null || v === undefined || v === "" ? "(empty)" : String(v));
+/** Every tag the editor can change, as the file has it now. */
+const tagsOf = (t: Track) =>
+  `title ${blank(t.title)}, artist ${blank(t.artist)}, album ${blank(t.album)}, album artist ${blank(t.albumArtist)}, track ${blank(t.trackNumber)}, disc ${blank(t.discNumber)}, year ${blank(t.year)}, genre ${blank(t.genre)}`;
+
+/** What is going on in the app right now, for the end of each message. Songs in it get ids the model can use directly. */
+export function contextNote(host: DjHost, session: DjSession): string {
+  const player = host.player();
+  const lines: string[] = ["Context (the app as it is now, not part of the user's message):"];
+
+  lines.push(
+    player.currentTrack
+      ? `- Playing: ${brief(player.currentTrack, session.idFor(player.currentTrack))}, ${player.status}, at ${clock(player.positionMs)} of ${clock(player.durationMs)}\n  Its tags now: ${tagsOf(player.currentTrack)}`
+      : "- Playing: nothing",
+  );
+
+  const selected = host.selection();
+  lines.push(
+    selected.length === 0
+      ? "- Selected in the song list: nothing"
+      : `- Selected in the song list (${selected.length}): ${selected.slice(0, SHOWN_SELECTED).map((t) => brief(t, session.idFor(t))).join("; ")}${selected.length > SHOWN_SELECTED ? `; and ${selected.length - SHOWN_SELECTED} more` : ""}`,
+  );
+
+  const queue = host.queue();
+  lines.push(
+    `- Queue: ${queue.length} song${queue.length === 1 ? "" : "s"}${player.currentIndex === null ? "" : `, playing number ${player.currentIndex + 1}`}; shuffle ${player.shuffle ? "on" : "off"}, repeat ${player.repeat}, volume ${Math.round(player.volume * 100)}%`,
+  );
+
+  const screen = host.screen();
+  lines.push(
+    `- Screen: ${screen.windowMode} window, ${screen.tab} tab${screen.tab === "player" ? `, library view ${screen.libraryView}${screen.filter ? `, filter "${screen.filter}"` : ""}` : ""}`,
+  );
+
+  const imports = host.imports();
+  if (imports.length) {
+    const byStage = new Map<string, number>();
+    for (const i of imports) byStage.set(i.stage, (byStage.get(i.stage) ?? 0) + 1);
+    lines.push(`- Discovery: ${[...byStage].map(([s, n]) => `${n} ${s}`).join(", ")}`);
+  }
+  lines.push(`- Library: ${host.library().length} songs`);
+  return lines.join("\n");
 }
 
 /** One chat's worth of state the tools need: the short ids the model uses for songs. */

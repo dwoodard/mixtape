@@ -1,12 +1,14 @@
 import { ref } from "vue";
 import { tauriApi, type Api } from "./api";
-import { DjSession, runTurn, systemPrompt, type DjHost, type Problem } from "./dj";
+import { contextNote, DjSession, runTurn, systemPrompt, type DjHost, type Problem } from "./dj";
 import { createLmClient, DEFAULT_LM_ENDPOINT, type ChatMessage, type LmClient } from "./lm";
+import { fetchLyrics } from "./lyrics";
+import { lookupTags } from "./musicbrainz";
 import { THRESHOLDS, type Imports } from "./imports";
 import { imports as appImports, store as appStore, type Store } from "./store";
 import { setAccent, setTheme } from "./themes";
 import type { TagWriteResult } from "./types";
-import { libraryView, persistedFlag, setAppMode, showInLibrary, type AppMode, type LibraryView } from "./ui";
+import { appMode, libraryQuery, libraryView, persistedFlag, selectedSongs, setAppMode, showInLibrary, type AppMode, type LibraryView } from "./ui";
 
 /** What the chat window shows: the person's words, the DJ's words, and each thing the DJ did. */
 export interface ChatLine {
@@ -72,6 +74,8 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
     queue: () => store.queue.value,
     player: () => store.player.value,
     imports: () => imports.items.value,
+    selection: () => selectedSongs.value,
+    screen: () => ({ tab: appMode.value, libraryView: libraryView.value, filter: libraryQuery.value, windowMode: store.mode.value ?? "large" }),
     duplicateGroups: () => store.duplicateGroups.value,
     startQueue: (tracks) => api.playTracks(tracks, 0),
     addToQueue: (tracks, where) => (where === "next" ? api.enqueueNext(tracks) : api.enqueue(tracks)),
@@ -116,6 +120,9 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
     },
     reveal: (tracks) => soft(() => store.revealInFinder(tracks)),
     openInPicard: (tracks) => soft(() => store.openInPicard(tracks)),
+    fetchLyrics: (track) => fetchLyrics(track),
+    lookupTags: (track) => lookupTags(track),
+    refreshPicardChanges: () => soft(() => store.refreshPicardFolders()),
     importLink: async (url, format) => {
       if (format === "mp3" || format === "m4a" || format === "flac") imports.setFormat(format);
       imports.error.value = null;
@@ -131,6 +138,8 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
     setImportTags: (id, patch) => importProblem(id, () => imports.setTags(id, patch)),
     addImport: (id) => importProblem(id, () => imports.add(id)),
     undoImport: (id) => importProblem(id, () => imports.undo(id)),
+    openImportInPicard: (id) => importProblem(id, () => imports.openInPicard(id)),
+    cancelImportPicard: (id) => importProblem(id, () => imports.cancelPicard(id)),
     removeImport: (id) => guard(() => imports.remove(id)),
     setImportOptions: ({ format, autoAdd, threshold }) => {
       if (format === "mp3" || format === "m4a" || format === "flac") imports.setFormat(format);
@@ -206,7 +215,8 @@ export function createDjChat(host: DjHost, makeClient: (endpoint: () => string) 
       }
     }
     if (history.length === 0) history = [{ role: "system", content: systemPrompt(host.library()) }];
-    history.push({ role: "user", content: message });
+    // The model sees what the app shows right now; the person only sees what they typed.
+    history.push({ role: "user", content: `${message}\n\n${contextNote(host, session)}` });
     lines.value.push({ kind: "user", text: message });
     busy.value = true;
     try {

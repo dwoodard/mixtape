@@ -9,7 +9,7 @@
     "dialog:allow-open",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "http://localhost:*" }, { "url": "http://127.0.0.1:*" }]
+      "allow": [{ "url": "http://localhost:*" }, { "url": "http://127.0.0.1:*" }, { "url": "https://lrclib.net/*" }, { "url": "https://musicbrainz.org/*" }]
     }
   ]
 }

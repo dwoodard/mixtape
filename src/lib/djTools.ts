@@ -1,4 +1,5 @@
 import type { DjTool, ToolContext, ToolOutcome } from "./dj";
+import { MAX_LYRICS_CHARS } from "./lyrics";
 import { ACCENTS, THEMES } from "./themes";
 import type { TagEditPayload } from "./tagEdit";
 import type { ImportItem, TagsPatch, Track } from "./types";
@@ -129,6 +130,15 @@ const TAG_KEYS: Record<string, keyof TagEditPayload> = {
   genre: "genre",
 };
 
+/** The edit without the fields every one of `tracks` already has: writing those again changes nothing. */
+function onlyChanges(edit: TagEditPayload, tracks: Track[]): TagEditPayload {
+  const have = (t: Track, field: keyof TagEditPayload) => {
+    const v = t[field as keyof Track];
+    return v === null || v === undefined ? "" : String(v);
+  };
+  return Object.fromEntries(Object.entries(edit).filter(([field, value]) => !tracks.every((t) => have(t, field as keyof TagEditPayload) === value)));
+}
+
 function tagEdit(args: Args): TagEditPayload | string {
   const edit: TagEditPayload = {};
   for (const [arg, field] of Object.entries(TAG_KEYS)) {
@@ -144,6 +154,7 @@ function tagEdit(args: Args): TagEditPayload | string {
 const importSummary = (item: ImportItem) => ({
   import_id: item.id,
   stage: item.stage,
+  picard: item.picard,
   url: item.url,
   video_title: item.videoTitle,
   title: item.proposal.title,
@@ -348,17 +359,47 @@ export const TOOLS_TABLE: DjTool[] = [
     async (args, ctx) => {
       const picked = pick(args, ctx);
       if (isOutcome(picked)) return picked;
-      const edit = tagEdit(args);
-      if (typeof edit === "string") return fail(edit);
+      const asked = tagEdit(args);
+      if (typeof asked === "string") return fail(asked);
+      const edit = onlyChanges(asked, picked.tracks);
+      if (Object.keys(edit).length === 0) return done("The tags already have those values", { changed: 0, note: "Nothing to change: the tags already match." });
       const out = await ctx.host.writeTags(picked.tracks, edit);
       if (out.problem) return fail(out.problem);
       if (out.failed.length) return { result: { saved: out.saved, failed: out.failed }, note: `Saved tags for ${songs(out.saved)}; ${out.failed.length} failed` };
       return done(`Saved tags for ${songs(out.saved)}`, { saved: out.saved });
     },
     (args, ctx) => {
-      const edit = tagEdit(args);
-      const changes = typeof edit === "string" ? "" : Object.entries(edit).map(([k, v]) => `${k} → ${v || "(clear)"}`).join(", ");
-      return `Write tags (${changes}) into the files of ${named(ctx.session.resolve(args.ids).tracks)}?`;
+      const tracks = ctx.session.resolve(args.ids).tracks;
+      const asked = tagEdit(args);
+      if (typeof asked === "string") return null; // the tool itself reports it
+      const edit = onlyChanges(asked, tracks);
+      if (Object.keys(edit).length === 0) return null; // nothing would be written, so nothing to approve
+      const changes = Object.entries(edit).map(([k, v]) => `${k} → ${v || "(clear)"}`).join(", ");
+      return `Write tags (${changes}) into the files of ${named(tracks)}?`;
+    },
+  ),
+  define(
+    "lookup_tags",
+    "Look up how a song should be tagged on MusicBrainz (the database Picard uses) by its title and artist. Returns up to 5 matches, best first, each with a confidence 0-100 and reasons. It changes nothing: to apply a match, call edit_tags with its values (the person is asked first). Only apply a match when confidence is high (about 70+) and the reasons include 'same length' or 'same album'; otherwise show the options and ask. Give a song id, or leave it out for the song that is playing. Sends only title and artist.",
+    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    [],
+    async (args, ctx) => {
+      const track = args.id === undefined ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
+      if (!track) return fail(args.id === undefined ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+      let matches;
+      try {
+        matches = await ctx.host.lookupTags(track);
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e));
+      }
+      const note = matches.length ? `Found ${matches.length} possible ${matches.length === 1 ? "match" : "matches"} for "${track.title}"` : `No match for "${track.title}" on MusicBrainz`;
+      return {
+        result: {
+          song: { id: ctx.session.idFor(track), title: track.title, artist: track.artist, album: track.album },
+          matches: matches.map((m) => ({ title: m.title, artist: m.artist, album: m.album, album_artist: m.albumArtist, year: m.year, track: m.trackNumber, disc: m.discNumber, genre_hint: m.genreHint || undefined, release_kind: m.releaseKind || undefined, confidence: m.confidence, reasons: m.reasons })),
+        },
+        note,
+      };
     },
   ),
   define("find_duplicates", "List songs that are in the library more than once. Each group says which copy to keep and which are extras.", {}, [], async (_a, { host, session }) => {
@@ -397,11 +438,48 @@ export const TOOLS_TABLE: DjTool[] = [
     if (isOutcome(picked)) return picked;
     return problem(await ctx.host.reveal(picked.tracks), `Showed ${songs(picked.tracks.length)} in Finder`);
   }),
-  define("open_in_picard", "Open the songs in MusicBrainz Picard to fix their tags there.", { ids: ids() }, ["ids"], async (args, ctx) => {
-    const picked = pick(args, ctx);
-    if (isOutcome(picked)) return picked;
-    return problem(await ctx.host.openInPicard(picked.tracks), `Opened ${songs(picked.tracks.length)} in Picard`);
-  }),
+  define(
+    "open_in_picard",
+    "Open library songs in MusicBrainz Picard to tag them there (it looks them up and the user saves). Afterwards call refresh_picard_changes to bring the saved tags into the library.",
+    { ids: ids() },
+    ["ids"],
+    async (args, ctx) => {
+      const picked = pick(args, ctx);
+      if (isOutcome(picked)) return picked;
+      return problem(await ctx.host.openInPicard(picked.tracks), `Opened ${songs(picked.tracks.length)} in Picard`);
+    },
+  ),
+  define(
+    "refresh_picard_changes",
+    "Re-read the folders of songs sent to Picard so the library shows the tags Picard saved (and any renamed files). Needs the person to have saved in Picard first.",
+    {},
+    [],
+    async (_a, ctx) => problem(await ctx.host.refreshPicardChanges(), "Refreshed the songs from Picard"),
+  ),
+
+  define(
+    "get_lyrics",
+    "Look up the lyrics of a song on the web (LRCLIB). Give a song id, or leave it out for the song that is playing. Sends only its title, artist, album and length.",
+    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    [],
+    async (args, ctx) => {
+      const track = args.id === undefined ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
+      if (!track) return fail(args.id === undefined ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+      let lyrics;
+      try {
+        lyrics = await ctx.host.fetchLyrics(track);
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e));
+      }
+      if (!lyrics) return { result: { found: false, song: `${track.artist} - ${track.title}` }, note: `No lyrics found for "${track.title}"` };
+      if (lyrics.instrumental) return { result: { found: true, instrumental: true }, note: `"${track.title}" is an instrumental` };
+      const cut = lyrics.text.length > MAX_LYRICS_CHARS;
+      return {
+        result: { found: true, matched: lyrics.matched, lyrics: cut ? lyrics.text.slice(0, MAX_LYRICS_CHARS) : lyrics.text, truncated: cut },
+        note: `Fetched lyrics for "${track.title}"`,
+      };
+    },
+  ),
 
   // Discovery: bring in new songs
   define("list_imports", "List the songs in Discovery: queued, fetching, ready to review, added or failed.", {}, [], async (_a, { host }) => {
@@ -434,7 +512,7 @@ export const TOOLS_TABLE: DjTool[] = [
   ),
   define(
     "edit_import_tags",
-    "Change the proposed tags of a song in Discovery before it is added.",
+    "Change the proposed tags of a song in Discovery before it is added. Not possible once Picard has saved its tags (picard is 'saved').",
     { import_id: int(), title: str(), artist: str(), album: str(), album_artist: str(), year: str(), track: str(), genre: str() },
     ["import_id"],
     async (args, ctx) => {
@@ -445,6 +523,29 @@ export const TOOLS_TABLE: DjTool[] = [
       if (typeof args.album_artist === "string") patch.albumArtist = args.album_artist;
       if (Object.keys(patch).length === 0) return fail("Give at least one tag to change.");
       return problem(await ctx.host.setImportTags(item.id, patch), `Updated tags of "${item.proposal.title || item.videoTitle}"`);
+    },
+  ),
+  define(
+    "open_import_in_picard",
+    "Open a song from Discovery in MusicBrainz Picard to tag it there. Its tags come back into Discovery once the person saves in Picard; until then its picard state is 'waiting'.",
+    { import_id: int() },
+    ["import_id"],
+    async (args, ctx) => {
+      const item = findImport(ctx, args.import_id);
+      if (!item) return fail(NO_IMPORT);
+      if (item.stage !== "ready") return fail(`That song is ${item.stage}, not ready.`);
+      return problem(await ctx.host.openImportInPicard(item.id), `Opened "${item.proposal.title || item.videoTitle}" in Picard`);
+    },
+  ),
+  define(
+    "cancel_import_picard",
+    "Stop waiting for Picard on a Discovery song and take it out of Picard. It carries on with its current tags.",
+    { import_id: int() },
+    ["import_id"],
+    async (args, ctx) => {
+      const item = findImport(ctx, args.import_id);
+      if (!item) return fail(NO_IMPORT);
+      return problem(await ctx.host.cancelImportPicard(item.id), `Stopped waiting for Picard on "${item.proposal.title || item.videoTitle}"`);
     },
   ),
   define("add_import_to_library", "Add a ready song from Discovery to the library (the file is filed into the music folder).", { import_id: int() }, ["import_id"], async (args, ctx) => {

@@ -1,3 +1,4 @@
+use crate::plays::listen_needed_ms;
 use crate::queue::{Queue, Repeat};
 use crate::track::Track;
 use serde::Serialize;
@@ -68,6 +69,8 @@ pub enum PlayerEvent {
     Queue(Vec<Track>),
     /// Playback position tick.
     Position(u64),
+    /// A song has been listened to long enough to count as played (its file path).
+    Played(String),
 }
 
 /// Which way to move on from a song that cannot be played.
@@ -87,6 +90,11 @@ pub struct Player {
     token: u64,
     error: Option<String>,
     error_path: Option<String>,
+    /// How much of the current load has really been listened to (jumps in position do not count).
+    listened_ms: u64,
+    last_tick_ms: u64,
+    /// Whether the current load has already counted as a play.
+    counted: bool,
     backend: Box<dyn Backend>,
     emit: Box<dyn Fn(PlayerEvent) + Send>,
 }
@@ -102,6 +110,9 @@ impl Player {
             token: 0,
             error: None,
             error_path: None,
+            listened_ms: 0,
+            last_tick_ms: 0,
+            counted: false,
             backend,
             emit,
         };
@@ -366,6 +377,7 @@ impl Player {
                 if token == self.token && self.status == Status::Playing {
                     self.position_ms = position_ms;
                     (self.emit)(PlayerEvent::Position(position_ms));
+                    self.count_listening(position_ms);
                 }
             }
             BackendEvent::Ended { token } => {
@@ -384,6 +396,26 @@ impl Player {
     }
 
     // --- internals ---
+
+    /// Adds the time since the last tick to what has been listened to, when it is a normal tick and not a jump
+    /// (a seek), and reports the song as played the first time that reaches what a play needs.
+    fn count_listening(&mut self, position_ms: u64) {
+        /// Ticks come every quarter second; anything much bigger is a seek.
+        const MAX_TICK_MS: u64 = 1_000;
+        let step = position_ms.saturating_sub(self.last_tick_ms);
+        if step <= MAX_TICK_MS {
+            self.listened_ms += step;
+        }
+        self.last_tick_ms = position_ms;
+        if self.counted {
+            return;
+        }
+        let Some(track) = self.queue.current() else { return };
+        if self.listened_ms >= listen_needed_ms(track.duration_ms) {
+            self.counted = true;
+            (self.emit)(PlayerEvent::Played(track.path.clone()));
+        }
+    }
 
     /// Loads and plays the queue's current track. Tracks that fail to load are
     /// skipped forward; the last error is reported in the state.
@@ -414,6 +446,9 @@ impl Player {
                             self.position_ms = ms;
                         }
                     }
+                    self.listened_ms = 0;
+                    self.last_tick_ms = self.position_ms;
+                    self.counted = false;
                     break;
                 }
                 Err(message) => {
@@ -536,6 +571,76 @@ mod tests {
             self.player
                 .play_tracks(vec![test_track("a"), test_track("b"), test_track("c")], start);
         }
+    }
+
+    fn played(h: &Harness) -> Vec<String> {
+        h.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| if let PlayerEvent::Played(p) = e { Some(p.clone()) } else { None })
+            .collect()
+    }
+
+    /// Plays on for `ms` in quarter-second ticks, as the audio thread reports it.
+    fn listen(h: &mut Harness, from_ms: u64, ms: u64) {
+        let token = h.token();
+        let mut at = from_ms;
+        while at < from_ms + ms {
+            at += 250;
+            h.player.handle_backend_event(BackendEvent::Position { token, position_ms: at });
+        }
+    }
+
+    #[test]
+    fn a_song_counts_once_after_half_of_it_is_heard() {
+        let mut h = Harness::new();
+        h.load_abc(0); // test tracks are 180 seconds, so 90 are needed
+
+        listen(&mut h, 0, 80_000);
+        assert!(played(&h).is_empty(), "not yet");
+        listen(&mut h, 80_000, 20_000);
+        assert_eq!(played(&h), vec!["/music/a.mp3"]);
+        listen(&mut h, 100_000, 60_000);
+        assert_eq!(played(&h).len(), 1, "only once per play");
+    }
+
+    #[test]
+    fn seeking_ahead_does_not_count_as_listening() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+
+        listen(&mut h, 0, 10_000);
+        // Jump to the end, then a few seconds of it: still only about 13 seconds really heard.
+        let token = h.token();
+        h.player.handle_backend_event(BackendEvent::Position { token, position_ms: 170_000 });
+        listen(&mut h, 170_000, 3_000);
+
+        assert!(played(&h).is_empty());
+    }
+
+    #[test]
+    fn playing_the_song_again_counts_again() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        listen(&mut h, 0, 100_000);
+        h.player.play_index(0); // starts it over
+        listen(&mut h, 0, 100_000);
+
+        assert_eq!(played(&h), vec!["/music/a.mp3", "/music/a.mp3"]);
+    }
+
+    #[test]
+    fn a_paused_song_does_not_gain_listening_time() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        listen(&mut h, 0, 60_000);
+        h.player.pause();
+        listen(&mut h, 60_000, 60_000);
+        assert!(played(&h).is_empty());
+        h.player.resume();
+        listen(&mut h, 60_000, 40_000);
+        assert_eq!(played(&h).len(), 1);
     }
 
     #[test]

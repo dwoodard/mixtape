@@ -9,6 +9,7 @@ pub mod imports;
 pub mod library;
 pub mod media;
 pub mod player;
+pub mod plays;
 pub mod queue;
 pub mod reveal;
 pub mod session;
@@ -23,6 +24,7 @@ use config::Config;
 use cover::CoverCache;
 use media::{MediaCommand, MediaSession};
 use player::{Player, PlayerEvent, PlayerState};
+use plays::{PlayStat, PlayStore};
 use queue::Repeat;
 use session::{SessionStore, SessionWriter};
 use serde::Serialize;
@@ -76,6 +78,21 @@ impl imports::Runner for LazyYtDlp {
 }
 
 struct PlayerHandle(Arc<Mutex<Player>>);
+
+/// Sent to the UI each time a song counts as played.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PlayedSong {
+    path: String,
+    #[serde(flatten)]
+    stat: PlayStat,
+}
+
+/// How often each song has been played and when, by file path.
+#[tauri::command]
+fn play_stats(plays: State<Arc<PlayStore>>) -> std::collections::HashMap<String, PlayStat> {
+    plays.all()
+}
 
 /// Lets the exit handler write the session before the process ends.
 struct SessionFlush(Arc<SessionWriter>);
@@ -721,6 +738,9 @@ fn setup_player(app: &tauri::App) {
     let session = Arc::new(SessionWriter::spawn(session_store));
     app.manage(SessionFlush(session.clone()));
 
+    let plays = Arc::new(PlayStore::load(data_dir.join("plays.json")));
+    app.manage(plays.clone());
+
     let emit_handle = handle.clone();
     let emit = move |event: PlayerEvent| match event {
         PlayerEvent::State(state) => {
@@ -736,6 +756,13 @@ fn setup_player(app: &tauri::App) {
             media.update_position(ms);
             session.position_changed(ms);
             let _ = emit_handle.emit("player-position", ms);
+        }
+        PlayerEvent::Played(song) => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64);
+            let stat = plays.record(&song, now_ms);
+            let _ = emit_handle.emit("song-played", PlayedSong { path: song, stat });
         }
     };
 
@@ -875,6 +902,7 @@ pub fn run() {
             cancel_scan,
             music_folder,
             player_snapshot,
+            play_stats,
             play_tracks,
             enqueue,
             enqueue_next,

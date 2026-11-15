@@ -29,7 +29,7 @@ export interface LmClient {
   complete(model: string, messages: ChatMessage[], tools: ToolSpec[]): Promise<Completion>;
 }
 
-type Fetch = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{
+export type Fetch = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{
   ok: boolean;
   status: number;
   text(): Promise<string>;
