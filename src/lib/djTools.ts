@@ -684,7 +684,7 @@ export const TOOLS_TABLE: DjTool[] = [
   ),
   define(
     "get_lyrics",
-    "Show the lyrics of a song. If they are already saved in the song's own tags they come from there; otherwise they are looked up on the web (LRCLIB), sending only its title, artist, album and length. The card has a button to save them into the song's tags. Give a song id, or leave it out for the song that is playing.",
+    "Show the lyrics of a song. If they are already saved in the song's own tags they come from there; otherwise they are looked up on the web (LRCLIB), sending only its title, artist, album and length. The card shows a button labelled \"Save in the song's tags\" when the lyrics are not saved there yet, and a \"Saved in the song's tags\" tick instead of the button when they are (see card_button in the result). Give a song id, or leave it out for the song that is playing.",
     SONG_PARAMS,
     [],
     async (args, ctx) => {
@@ -699,7 +699,7 @@ export const TOOLS_TABLE: DjTool[] = [
       }
       const cut = lyrics.text.length > MAX_LYRICS_CHARS;
       return {
-        result: { found: true, saved_in_the_songs_tags: saved, matched: lyrics.matched, lyrics: cut ? lyrics.text.slice(0, MAX_LYRICS_CHARS) : lyrics.text, truncated: cut },
+        result: { found: true, saved_in_the_songs_tags: saved, card_button: saved ? "none: the card says Saved in the song's tags" : "Save in the song's tags", matched: lyrics.matched, lyrics: cut ? lyrics.text.slice(0, MAX_LYRICS_CHARS) : lyrics.text, truncated: cut },
         note: `${saved ? "Read the saved" : "Fetched"} lyrics for "${track.title}"`,
         view: { kind: "lyrics", song: track, text: lyrics.text, instrumental: false, matched: lyrics.matched, source: lyrics.source, saved },
       };

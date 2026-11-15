@@ -18,6 +18,12 @@ describe("assess", () => {
     expect(assess(song("/x/Mud (2).mp3"), [lib("/m/Mud.mp3")])).toMatchObject({ advice: "spare-copy", match: { path: "/m/Mud.mp3" } });
   });
 
+  it("treats the same title, artist and length with different tags as a spare copy", () => {
+    const r = assess(song("/x/Mud.mp3"), [lib("/m/Mud.mp3", { album: "", durationMs: 200_900 })]);
+    expect(r.advice).toBe("spare-copy");
+    expect(r.text).toContain("different tags");
+  });
+
   it("notices a different version of the same title and artist", () => {
     const r = assess(song("/x/Mud.mp3"), [lib("/m/Mud.mp3", { album: "Live", durationMs: 250_000 })]);
     expect(r.advice).toBe("other-version");

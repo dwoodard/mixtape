@@ -282,3 +282,7 @@ export function askDj(prompt: string) {
 /** The request that has the DJ look up the right tags for one song. It names the song, so it is not read as "the playing one". */
 export const lookUpTagsPrompt = (song: Pick<Track, "title" | "artist">) =>
   `Look up the right tags for the selected song, “${song.title}”${song.artist ? ` by ${song.artist}` : ""}`;
+
+/** The request that has the DJ find the lyrics for one song. It names the song, so it is not read as "the playing one". */
+export const lookUpLyricsPrompt = (song: Pick<Track, "title" | "artist">) =>
+  `Find the lyrics for the selected song, “${song.title}”${song.artist ? ` by ${song.artist}` : ""}`;

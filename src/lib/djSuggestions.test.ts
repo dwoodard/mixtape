@@ -52,9 +52,9 @@ describe("chat suggestions", () => {
     expect(full[0].label).toBe("Lyrics for this song");
   });
 
-  it("does not offer a surprise from an empty library", () => {
-    expect(labels(host({ library: [] }))).not.toContain("Surprise me");
-    expect(labels(host())).toContain("Surprise me");
+  it("does not offer picks from an empty library", () => {
+    expect(labels(host({ library: [] }))).not.toContain("Queue 10 songs I might like");
+    expect(labels(host())).toContain("Queue 10 songs I might like");
   });
 
   it("offers to fill in genres only when a fair number are missing", () => {

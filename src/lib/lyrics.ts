@@ -96,3 +96,41 @@ export async function fetchLyrics(track: Track, doFetch: Fetch = httpFetch as Fe
   }
   return null;
 }
+
+export interface Stanza {
+  /** A section name such as "Chorus" when the stanza starts with a [Chorus] or (Verse 1) line. */
+  label: string | null;
+  lines: string[];
+}
+
+const SECTION = /^[\[(]\s*([^\])]{1,40}?)\s*[\])]:?$/;
+
+/**
+ * Splits lyrics into stanzas at blank lines so they can be laid out as paragraphs. A line that is only a section
+ * name in brackets becomes the stanza's label. Windows line endings and runs of blank lines are tolerated.
+ */
+export function toStanzas(text: string): Stanza[] {
+  const stanzas: Stanza[] = [];
+  let current: Stanza | null = null;
+  const close = () => {
+    if (current && (current.lines.length > 0 || current.label)) stanzas.push(current);
+    current = null;
+  };
+  for (const raw of text.replace(/\r\n?/g, "\n").split("\n")) {
+    const line = raw.trim();
+    if (line === "") {
+      close();
+      continue;
+    }
+    const section = SECTION.exec(line);
+    if (section) {
+      close();
+      current = { label: section[1], lines: [] };
+      continue;
+    }
+    if (!current) current = { label: null, lines: [] };
+    current.lines.push(line);
+  }
+  close();
+  return stanzas;
+}

@@ -74,8 +74,8 @@ export interface Api {
   restoreRemoved(): Promise<void>;
   /** The removed songs, sorted by path, with whether each file is gone from disk. */
   removedSongs(): Promise<RemovedSong[]>;
-  /** Moves a removed song's file to the Trash and forgets the removal. */
-  deleteRemovedSong(path: string): Promise<void>;
+  /** Moves a removed song's file to the Trash (or, on a drive with none, a holding folder) and forgets the removal. Returns where it went when that wasn't the Trash. */
+  deleteRemovedSong(path: string): Promise<string | null>;
   /** Forgets just these removals. */
   restoreRemovedPaths(paths: string[]): Promise<void>;
   /** Forgets removals whose files are gone from disk. Returns how many. */

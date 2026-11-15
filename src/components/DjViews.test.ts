@@ -104,6 +104,16 @@ describe("DjViews", () => {
     expect(tagged).not.toContain("Write this genre into the song");
   });
 
+  it("gives every field that differs its own Add or Use button, and none for fields that already match", async () => {
+    const html = await render({ kind: "tags", song: makeTrack({ title: "Halo", album: "", year: 1999, trackNumber: 3, genre: "Rock" }), matches: [match] });
+    // The album is empty (Add), the year differs (Use); the title and track already match, and a genre that is set is left alone.
+    expect(html).toContain('title="Write this album into the song"');
+    expect(html).toContain('title="Write this year into the song"');
+    expect(html).not.toContain('title="Write this title into the song"');
+    expect(html).not.toContain('title="Write this track into the song"');
+    expect(html).not.toContain("Write this genre into the song");
+  });
+
   it("keeps several matches closed until one is opened, with only the summary showing", async () => {
     const html = await render({ kind: "tags", song: makeTrack({ title: "Halo" }), matches: [match, { ...match, album: "Other", confidence: 60 }] });
     expect(html).toContain("91%");

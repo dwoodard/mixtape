@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { assess } from "../lib/removed";
-import { dirName, fileName, formatBytes, formatDate } from "../lib/format";
+import { askDj, lookUpLyricsPrompt, lookUpTagsPrompt } from "../lib/djChat";
+import { dirName, fileName, formatBytes, formatDate, formatTime } from "../lib/format";
 import { store } from "../lib/store";
 import type { RemovedSong } from "../lib/types";
 
@@ -47,6 +48,35 @@ const ADVICE_LABEL = {
   gone: "Gone",
 } as const;
 
+// The songs whose tags are open.
+const openTags = ref<Set<string>>(new Set());
+
+function toggleTags(path: string) {
+  const next = new Set(openTags.value);
+  if (!next.delete(path)) next.add(path);
+  openTags.value = next;
+}
+
+/** The tags of a removed song as label/value pairs, skipping the empty ones. */
+function tagRows(s: Removed): [string, string][] {
+  const t = s.track;
+  if (!t) return [];
+  const rows: [string, string | number | null][] = [
+    ["Title", t.title],
+    ["Artist", t.artist],
+    ["Album", t.album],
+    ["Album artist", t.albumArtist],
+    ["Track", t.trackNumber],
+    ["Disc", t.discNumber],
+    ["Year", t.year],
+    ["Genre", t.genre],
+    ["Length", formatTime(t.durationMs)],
+    ["Cover", t.hasCover ? "yes" : "no"],
+    ["Lyrics", t.hasLyrics ? "saved in the file" : "none in the file"],
+  ];
+  return rows.filter(([, v]) => v !== null && v !== "").map(([k, v]) => [k, String(v)]);
+}
+
 const totalSize = computed(() => songs.value.reduce((n, s) => n + s.size, 0));
 
 const onDisk = computed(() => songs.value.filter((s) => !s.missing).length);
@@ -88,8 +118,9 @@ async function restore(paths: string[]) {
 
 async function remove(paths: string[]) {
   confirming.value = null;
-  const { deleted, failed } = await store.deleteRemovedSongs(paths);
-  note.value = failed === 0 ? `Cleaned up ${plural(deleted, "song")}.` : `Cleaned up ${deleted}, ${failed} failed.`;
+  const { deleted, failed, held } = await store.deleteRemovedSongs(paths);
+  const where = held.length > 0 ? ` This drive has no Trash, so ${plural(held.length, "file")} moved to a holding folder (${held[0].replace(/\/[^/]*$/, "")}).` : "";
+  note.value = (failed === 0 ? `Cleaned up ${plural(deleted, "song")}.` : `Cleaned up ${deleted}, ${failed} failed.`) + where;
 }
 
 async function prune() {
@@ -167,6 +198,18 @@ const is = (paths: string[]) => confirming.value?.length === paths.length && pat
             <span v-if="extension(s.path)" class="tag">{{ extension(s.path) }}</span>
             <template v-if="!s.missing">{{ formatBytes(s.size) }}<template v-if="s.modifiedMs"> · changed {{ formatDate(s.modifiedMs) }}</template></template>
           </span>
+          <span v-if="!s.missing" class="quick">
+            <button class="link" :aria-expanded="openTags.has(s.path)" @click="toggleTags(s.path)">{{ openTags.has(s.path) ? "Hide tags" : "Show tags" }}</button>
+            <button class="link" title="Open this file in MusicBrainz Picard" @click="store.openInPicard([s])">Picard</button>
+            <button v-if="s.track" class="link" title="Ask the DJ chat to look up the right tags" @click="askDj(lookUpTagsPrompt(s.track))">Look up tags</button>
+            <button v-if="s.track" class="link" title="Ask the DJ chat to find the lyrics" @click="askDj(lookUpLyricsPrompt(s.track))">Find lyrics</button>
+          </span>
+          <dl v-if="openTags.has(s.path) && s.track" class="tags">
+            <template v-for="[k, v] in tagRows(s)" :key="k">
+              <dt>{{ k }}</dt>
+              <dd>{{ v }}</dd>
+            </template>
+          </dl>
           <span class="verdict">
             <span class="badge" :class="advice.get(s.path)!.advice">{{ ADVICE_LABEL[advice.get(s.path)!.advice] }}</span>
             {{ advice.get(s.path)!.text }}
@@ -174,7 +217,7 @@ const is = (paths: string[]) => confirming.value?.length === paths.length && pat
           </span>
         </span>
         <template v-if="is([s.path])">
-          <span class="sure">{{ s.missing ? "Forget it?" : "Move the file to the Trash?" }}</span>
+          <span class="sure">{{ s.missing ? "Forget it?" : "Move the file to the Trash (or a holding folder if the drive has none)?" }}</span>
           <button class="danger" @click="remove([s.path])">{{ s.missing ? "Forget" : "Delete file" }}</button>
           <button @click="confirming = null">Cancel</button>
         </template>
@@ -216,6 +259,10 @@ const is = (paths: string[]) => confirming.value?.length === paths.length && pat
 .link:hover, .link:focus-visible { text-decoration: underline; }
 .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .tag { font-size: 10px; letter-spacing: 0.05em; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.quick { display: flex; flex-wrap: wrap; gap: 10px; }
+.tags { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 2px 0; font-size: 12px; }
+.tags dt { color: var(--muted); }
+.tags dd { margin: 0; user-select: text; }
 .verdict { font-size: 12px; color: var(--text); }
 .badge { margin-right: 6px; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; border-radius: 4px; padding: 1px 5px; border: 1px solid var(--line); color: var(--muted); }
 .badge.spare-copy, .badge.gone-copy, .badge.gone { color: var(--accent); border-color: var(--accent); }

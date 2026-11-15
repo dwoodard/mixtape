@@ -156,17 +156,22 @@ impl CacheDir {
         self.save_removed(root, &removed)
     }
 
-    /// Moves a removed song's file to the Trash through `trash` and forgets the
-    /// removal. A file that is already gone is just forgotten. Only paths on the
-    /// removed list are touched, and the removal is kept if the Trash fails.
-    pub fn delete_removed(&self, root: &Path, path: &str, trash: impl Fn(&Path) -> Result<(), String>) -> Result<(), String> {
+    /// Gets a removed song's file out of the way through `remove` and forgets the
+    /// removal. `remove` returns where the file went when it wasn't the Trash. A file
+    /// that is already gone is just forgotten. Only paths on the removed list are
+    /// touched, and the removal is kept if `remove` fails.
+    pub fn delete_removed(
+        &self,
+        root: &Path,
+        path: &str,
+        remove: impl Fn(&Path) -> Result<Option<String>, String>,
+    ) -> Result<Option<String>, String> {
         if !self.removed(root).contains(path) {
             return Err("That song isn't on the removed list.".into());
         }
-        if Path::new(path).exists() {
-            trash(Path::new(path))?;
-        }
-        self.restore_paths(root, &[path.to_string()]).map_err(|e| e.to_string())
+        let moved_to = if Path::new(path).exists() { remove(Path::new(path))? } else { None };
+        self.restore_paths(root, &[path.to_string()]).map_err(|e| e.to_string())?;
+        Ok(moved_to)
     }
 
     /// Forgets removals whose files no longer exist, so the list doesn't keep
@@ -297,7 +302,7 @@ mod tests {
         store.remove_tracks(root, &[path.clone(), "/gone/y.mp3".into()]).unwrap();
 
         let trashed = std::cell::RefCell::new(Vec::new());
-        store.delete_removed(root, &path, |p| Ok(trashed.borrow_mut().push(p.to_path_buf()))).unwrap();
+        store.delete_removed(root, &path, |p| Ok(trashed.borrow_mut().push(p.to_path_buf())).map(|()| None)).unwrap();
         assert_eq!(trashed.borrow().len(), 1);
         assert!(!store.removed(root).contains(&path));
 
@@ -317,13 +322,18 @@ mod tests {
         store.remove_tracks(root, &[path.clone()]).unwrap();
 
         assert_eq!(store.delete_removed(root, &path, |_| Err("no trash".into())), Err("no trash".into()));
+        // Where the file went instead of the Trash is passed back.
+        let held = store.delete_removed(root, &path, |_| Ok(Some("/held/x.mp3".into()))).unwrap();
+        assert_eq!(held.as_deref(), Some("/held/x.mp3"));
+        assert!(!store.removed(root).contains(&path));
+        store.remove_tracks(root, &[path.clone()]).unwrap();
         assert!(store.removed(root).contains(&path));
         assert!(file.exists());
 
         let other = dir.path().join("other.mp3");
         std::fs::write(&other, b"x").unwrap();
         let called = std::cell::Cell::new(false);
-        let r = store.delete_removed(root, &other.to_string_lossy(), |_| Ok(called.set(true)));
+        let r = store.delete_removed(root, &other.to_string_lossy(), |_| Ok(called.set(true)).map(|()| None));
         assert!(r.is_err() && !called.get());
     }
 

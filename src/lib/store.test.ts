@@ -62,7 +62,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     pruneRemoved: vi.fn(async () => 0),
     removedSongs: vi.fn(async () => []),
     restoreRemovedPaths: vi.fn(async () => {}),
-    deleteRemovedSong: vi.fn(async () => {}),
+    deleteRemovedSong: vi.fn(async (): Promise<string | null> => null),
     openInFinder: vi.fn(async () => {}),
     enqueueNext: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
@@ -648,7 +648,7 @@ describe("removing from the library", () => {
     const { api, store } = await loaded({ removedCount: vi.fn().mockResolvedValueOnce(3).mockResolvedValue(1) });
     const scans = (api.scanFolder as ReturnType<typeof vi.fn>).mock.calls.length;
 
-    expect(await store.deleteRemovedSongs(["/m/a.mp3", "/m/b.mp3"])).toEqual({ deleted: 2, failed: 0 });
+    expect(await store.deleteRemovedSongs(["/m/a.mp3", "/m/b.mp3"])).toEqual({ deleted: 2, failed: 0, held: [] });
 
     expect(api.deleteRemovedSong).toHaveBeenCalledWith("/m/a.mp3");
     expect(api.deleteRemovedSong).toHaveBeenCalledWith("/m/b.mp3");
@@ -656,13 +656,19 @@ describe("removing from the library", () => {
     expect((api.scanFolder as ReturnType<typeof vi.fn>).mock.calls.length).toBe(scans);
   });
 
+  it("reports where files went when the drive has no Trash", async () => {
+    const { store } = await loaded({ deleteRemovedSong: vi.fn(async () => "/m/.mixtape-duplicates/x/a.mp3") });
+    expect(await store.deleteRemovedSongs(["/m/a.mp3"])).toEqual({ deleted: 1, failed: 0, held: ["/m/.mixtape-duplicates/x/a.mp3"] });
+  });
+
   it("a failed delete shows the error, keeps going and counts the failure", async () => {
-    const del = vi.fn(async (path: string) => {
+    const del = vi.fn(async (path: string): Promise<string | null> => {
       if (path === "/m/a.mp3") throw "no trash";
+      return null;
     });
     const { store } = await loaded({ removedCount: vi.fn(async () => 3), deleteRemovedSong: del });
 
-    expect(await store.deleteRemovedSongs(["/m/a.mp3", "/m/b.mp3"])).toEqual({ deleted: 1, failed: 1 });
+    expect(await store.deleteRemovedSongs(["/m/a.mp3", "/m/b.mp3"])).toEqual({ deleted: 1, failed: 1, held: [] });
     expect(del).toHaveBeenCalledTimes(2);
     expect(store.libraryError.value).toBe("no trash");
   });

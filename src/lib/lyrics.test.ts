@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchLyrics, stripTimestamps } from "./lyrics";
+import { fetchLyrics, stripTimestamps, toStanzas } from "./lyrics";
 import { makeTrack } from "./testing";
 
 const reply = (body: unknown, status = 200) => ({ ok: status < 300, status, text: async () => JSON.stringify(body) });
@@ -51,5 +51,26 @@ describe("fetchLyrics", () => {
 describe("stripTimestamps", () => {
   it("removes one or more leading time tags per line", () => {
     expect(stripTimestamps("[00:01.00][00:20.00] chorus\n[01:02] verse")).toBe("chorus\nverse");
+  });
+});
+
+describe("toStanzas", () => {
+  it("splits at blank lines and ignores extra blanks and Windows line endings", () => {
+    expect(toStanzas("a\r\nb\r\n\r\n\r\nc\n")).toEqual([
+      { label: null, lines: ["a", "b"] },
+      { label: null, lines: ["c"] },
+    ]);
+  });
+
+  it("turns a bracketed section name into the stanza's label", () => {
+    expect(toStanzas("[Chorus]\nla la\n\n(Verse 2):\nhey")).toEqual([
+      { label: "Chorus", lines: ["la la"] },
+      { label: "Verse 2", lines: ["hey"] },
+    ]);
+  });
+
+  it("keeps a lyric line that only starts with a bracket, and gives nothing for empty text", () => {
+    expect(toStanzas("(oh) I said it")).toEqual([{ label: null, lines: ["(oh) I said it"] }]);
+    expect(toStanzas("  \n ")).toEqual([]);
   });
 });

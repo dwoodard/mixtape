@@ -718,15 +718,33 @@ fn restore_removed_paths(cache: State<CacheDir>, paths: Vec<String>) -> Result<(
     }
 }
 
-/// Moves a removed song's file to the Trash and forgets the removal. A file
-/// that is already gone is just forgotten.
+/// Moves a removed song's file to the Trash and forgets the removal. On a drive
+/// with no Trash the file goes to a dated holding folder inside the library
+/// folder instead, and its new place is returned. Nothing is deleted outright.
+/// A file that is already gone is just forgotten.
 #[tauri::command]
-async fn delete_removed_song(cache: State<'_, CacheDir>, path: String) -> Result<(), String> {
-    let Some(root) = cache.last_root() else { return Ok(()) };
+async fn delete_removed_song(cache: State<'_, CacheDir>, path: String) -> Result<Option<String>, String> {
+    let Some(root) = cache.last_root() else { return Ok(None) };
     let cache = cache.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || cache.delete_removed(&root, &path, cleanup::move_to_trash))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let batch = root.join(cleanup::HOLDING_DIR).join(cleanup::utc_stamp(secs));
+        cache.delete_removed(&root, &path, |file| match cleanup::move_to_trash(file) {
+            Ok(()) => Ok(None),
+            Err(trash_error) => cleanup::move_to_holding(&root, file, &batch)
+                .map(|moved| Some(moved.to_string_lossy().into_owned()))
+                .map_err(|e| {
+                    format!(
+                        "Couldn't move to the Trash ({}) or to the holding folder ({e}).",
+                        cleanup::short_reason(&trash_error)
+                    )
+                }),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Forgets removals whose files are gone from disk. Returns how many. Refuses

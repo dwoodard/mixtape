@@ -32,6 +32,16 @@ export function assess(song: RemovedSong, library: Track[]): Assessment {
   if (same) {
     return { advice: "spare-copy", match: same, text: `The library already has this exact song (${fileName(same.path)}). This file is a spare copy: safe to delete.` };
   }
+  const near = library.find(
+    (t) => norm(t.title) === norm(tags.title) && norm(t.artist) === norm(tags.artist) && Math.abs(t.durationMs - tags.durationMs) <= 2000,
+  );
+  if (near) {
+    return {
+      advice: "spare-copy",
+      match: near,
+      text: `The library has ${named(near)} with the same length (${formatTime(near.durationMs)}), so this is almost certainly the same recording with different tags (album: ${tags.album || "none"} vs ${near.album || "none"}). Safe to delete.`,
+    };
+  }
   const other = library.find((t) => norm(t.title) === norm(tags.title) && norm(t.artist) === norm(tags.artist));
   if (other) {
     return {

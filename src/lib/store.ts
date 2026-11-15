@@ -625,16 +625,19 @@ export function createStore(api: Api, storage?: FlagStorage) {
   }
 
   /**
-   * Moves removed songs' files to the Trash and forgets them (a file already gone is just forgotten).
-   * Carries on past a failure, shows the last error, and says how many worked.
+   * Moves removed songs' files to the Trash, or to a holding folder on a drive with no Trash, and forgets them
+   * (a file already gone is just forgotten). Carries on past a failure, shows the last error, and says how many
+   * worked and where files that skipped the Trash went.
    */
-  async function deleteRemovedSongs(paths: string[]): Promise<{ deleted: number; failed: number }> {
+  async function deleteRemovedSongs(paths: string[]): Promise<{ deleted: number; failed: number; held: string[] }> {
     libraryError.value = null;
     let deleted = 0;
     let failed = 0;
+    const held: string[] = [];
     for (const path of paths) {
       try {
-        await api.deleteRemovedSong(path);
+        const movedTo = await api.deleteRemovedSong(path);
+        if (movedTo) held.push(movedTo);
         deleted++;
       } catch (e) {
         libraryError.value = String(e);
@@ -642,7 +645,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
       }
     }
     removedCount.value = await api.removedCount();
-    return { deleted, failed };
+    return { deleted, failed, held };
   }
 
   /** Forgets removals whose files are gone from disk. Returns how many, or null on failure. */

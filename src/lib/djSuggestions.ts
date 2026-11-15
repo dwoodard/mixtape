@@ -37,10 +37,10 @@ export function suggestionsFor(host: DjHost): Suggestion[] {
   if (fill.state.phase !== "idle" || fill.missingCount() > 20) out.push({ label: "Fill in missing genres", prompt: "Fill in the missing genres" });
   out.push(
     { label: "Queue 15 songs I haven't played", prompt: "Queue 15 songs I haven't played yet, mixed up, and shuffle them" },
-    { label: "80s mix", prompt: "Queue a mix of 15 songs from the 80s" },
+    { label: "pick random decade mix", prompt: "Queue a mix of 15 songs from random decade" },
     { label: "My most played", prompt: "Show my most played songs" },
   );
-  if (host.library().length > 0 && !playing) out.push({ label: "Surprise me", prompt: "Pick 10 songs you think I'd enjoy and queue them" });
+  if (host.library().length > 0 && !playing) out.push({ label: "Queue 10 songs I might like", prompt: "Pick 10 songs you think I'd enjoy and queue them" });
 
   return out.slice(0, MAX_SUGGESTIONS);
 }

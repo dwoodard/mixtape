@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import type { DjHost, DjView } from "../lib/dj";
 import { formatDate, formatTime } from "../lib/format";
+import { toStanzas } from "../lib/lyrics";
 import { changedFields, TAG_FIELDS } from "../lib/tagEdit";
 import { musicbrainzUrl, tagEditFromMatch, type ReleaseInfo, type TagMatch } from "../lib/musicbrainz";
 import type { FileCheck, ImportItem, Track } from "../lib/types";
@@ -116,7 +117,16 @@ function toggleMatch(index: number, match: TagMatch) {
   openMatch.value = { ...openMatch.value, [index]: opening };
   if (opening) loadRelease(match);
 }
+// Whether the lyrics box has more below what shows, so its bottom edge can fade to say "keep scrolling".
+const lyricsBox = ref<HTMLElement | null>(null);
+const lyricsMore = ref(false);
+function measureLyrics() {
+  const box = lyricsBox.value;
+  lyricsMore.value = !!box && box.scrollHeight - box.scrollTop - box.clientHeight > 4;
+}
+
 onMounted(() => {
+  void nextTick(measureLyrics);
   if (props.view.kind === "tags" && props.view.matches.length === 1) loadRelease(props.view.matches[0]);
 });
 
@@ -145,14 +155,21 @@ function compareRows(song: Track, m: TagMatch) {
 const isThisSong = (song: Track, m: TagMatch, t: { title: string; recordingId: string }) =>
   (!!m.recordingId && t.recordingId === m.recordingId) || t.title.trim().toLowerCase() === song.title.trim().toLowerCase();
 
-/** Writes just MusicBrainz's genre suggestion into the song, for the person who wants it. Apply never does this on its own. */
-function addGenre(song: Track, match: TagMatch, index: number) {
-  const key = `genre-${index}`;
+/** The value MusicBrainz gives for one field of a match: its genre suggestion, or the tag it would write. */
+function matchValue(match: TagMatch, field: string): string | number | undefined {
+  return field === "genre" ? match.genreHint : (tagEditFromMatch(match) as Record<string, string | number | undefined>)[field];
+}
+
+/** Writes just this one field from MusicBrainz into the song, leaving the rest of the card alone. Genre is only ever written this way. */
+function setField(song: Track, match: TagMatch, index: number, field: string, label: string) {
+  const key = field === "genre" ? `genre-${index}` : `tags-${index}`;
+  const value = matchValue(match, field);
+  if (value === undefined || value === "") return;
   say(key, "Saving to the file… this can take a while on a network drive.");
   void run(key, async () => {
-    const out = await props.host.writeTags([song], { genre: match.genreHint });
+    const out = await props.host.writeTags([song], { [field]: value });
     if (out.problem) return out.problem;
-    return out.failed.length ? out.failed[0] : `Genre set to ${match.genreHint}.`;
+    return out.failed.length ? out.failed[0] : `${label} set to ${value}.`;
   });
 }
 
@@ -302,7 +319,13 @@ const stageText = (i: ImportItem) => (i.stage === "held" ? "Held, not fetched" :
                 <td>{{ r.now }}</td>
                 <td>
                   {{ r.there }}<span v-if="r.hint" class="muted small"> (suggestion, not in the file)</span>
-                  <button v-if="r.hint && r.there !== '—' && r.now === '(empty)'" class="mini" :disabled="busy[`genre-${i}`]" title="Write this genre into the song" @click="addGenre(songNow(view.song), m, i)">{{ busy[`genre-${i}`] ? "Saving…" : "Add" }}</button>
+                  <button
+                    v-if="r.there !== '—' && r.there !== r.now && (!r.hint || r.now === '(empty)')"
+                    class="mini"
+                    :disabled="busy[`tags-${i}`] || busy[`genre-${i}`]"
+                    :title="`Write this ${r.label.toLowerCase()} into the song`"
+                    @click="setField(songNow(view.song), m, i, r.field, r.label)"
+                  >{{ busy[r.field === 'genre' ? `genre-${i}` : `tags-${i}`] ? "Saving…" : r.now === "(empty)" ? "Add" : "Use" }}</button>
                 </td>
               </tr>
             </tbody>
@@ -430,13 +453,18 @@ const stageText = (i: ImportItem) => (i.stage === "held" ? "Held, not fetched" :
       </p>
       <p v-if="view.instrumental" class="note">This one is an instrumental.</p>
       <template v-else>
-        <pre class="lyrics">{{ view.text }}</pre>
-        <div class="apply sticky">
+        <div class="apply lyrics-foot">
           <span v-if="lyricsSaved" class="ok">✓ Saved in the song's tags</span>
           <button v-else class="on" :disabled="busy.lyrics" title="Keep these lyrics in the song's own tags, so any player can show them" @click="saveLyrics()">
             {{ busy.lyrics ? "Saving…" : "Save in the song's tags" }}
           </button>
           <span v-if="outcome.lyrics && !lyricsSaved" class="note">{{ outcome.lyrics }}</span>
+        </div>
+        <div ref="lyricsBox" class="lyrics" :class="{ more: lyricsMore }" tabindex="0" aria-label="Lyrics" @scroll.passive="measureLyrics">
+          <section v-for="(st, n) in toStanzas(view.text)" :key="n" class="stanza">
+            <h4 v-if="st.label" class="section">{{ st.label }}</h4>
+            <p><span v-for="(line, k) in st.lines" :key="k" class="lyric-line">{{ line }}</span></p>
+          </section>
         </div>
       </template>
     </template>
@@ -542,7 +570,17 @@ button { padding: 0 7px; font-size: 11px; }
 .facts dd { margin: 0; font-variant-numeric: tabular-nums; }
 .bad { color: #ffb4b4; font-weight: 700; }
 .warn { margin: 2px 0 4px; padding: 3px 6px; border-radius: 4px; background: #4a3a1f; color: #ffd9a0; }
-.lyrics { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font: inherit; user-select: text; -webkit-user-select: text; }
+/* The lyrics scroll inside their own box, so the save row never covers any text. Stanzas read as paragraphs. */
+.lyrics { margin: 4px 0 0; padding: 12px 16px; max-height: min(46vh, 360px); overflow: auto; scroll-padding-bottom: 24px; font: inherit; font-size: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; user-select: text; -webkit-user-select: text; }
+.lyrics::after { content: ""; display: block; height: 8px; }
+.lyrics.more { -webkit-mask-image: linear-gradient(#000 calc(100% - 36px), transparent); mask-image: linear-gradient(#000 calc(100% - 36px), transparent); }
+.stanza { max-width: 62ch; }
+.stanza + .stanza { margin-top: 1.1em; }
+.stanza p { margin: 0; line-height: 1.55; }
+/* A line that wraps hangs under its first word, so each line of verse stays distinct. */
+.lyric-line { display: block; padding-left: 1.4em; text-indent: -1.4em; }
+.section { margin: 0 0 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lyrics-foot { margin: 4px 0 0; }
 .bar { display: block; height: 3px; background: var(--line); border-radius: 2px; margin-top: 2px; }
 .bar > span { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
 .error { color: #ffb4b4; }
