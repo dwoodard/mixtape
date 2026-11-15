@@ -111,9 +111,13 @@ function onKey(event: KeyboardEvent) {
     event.preventDefault();
     const step = event.key === "ArrowDown" ? 1 : -1;
     active.value = (active.value + step + count) % count;
-  } else if (count > 0 && active.value >= 0 && (event.key === "Enter" || event.key === "Tab")) {
+  } else if (count > 0 && active.value >= 0 && event.key === "Enter") {
     event.preventDefault();
     void choose(items.value[active.value]);
+  } else if (count > 0 && event.key === "Tab" && !event.shiftKey && (active.value >= 0 || parts.value.text.trim() !== "")) {
+    // Tab takes the highlighted suggestion, or the first one while a word is being typed, and goes on to its value.
+    event.preventDefault();
+    void choose(items.value[Math.max(active.value, 0)]);
   }
 }
 </script>

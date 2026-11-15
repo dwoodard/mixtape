@@ -431,7 +431,7 @@ const stageText = (i: ImportItem) => (i.stage === "held" ? "Held, not fetched" :
       <p v-if="view.instrumental" class="note">This one is an instrumental.</p>
       <template v-else>
         <pre class="lyrics">{{ view.text }}</pre>
-        <div class="apply">
+        <div class="apply sticky">
           <span v-if="lyricsSaved" class="ok">✓ Saved in the song's tags</span>
           <button v-else class="on" :disabled="busy.lyrics" title="Keep these lyrics in the song's own tags, so any player can show them" @click="saveLyrics()">
             {{ busy.lyrics ? "Saving…" : "Save in the song's tags" }}
@@ -535,6 +535,8 @@ button { padding: 0 7px; font-size: 11px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .note.error { color: #ffb4b4; }
 .apply { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+/* Stays at the bottom of the chat while a long card scrolls past, and sits flush with the card's edges when it ends. */
+.apply.sticky { position: sticky; bottom: 0; margin: 6px -8px -6px; padding: 6px 8px; background: var(--panel-2); border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; }
 .facts { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; margin: 2px 0; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; font-variant-numeric: tabular-nums; }
