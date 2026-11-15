@@ -273,14 +273,16 @@ export const TOOLS_TABLE: DjTool[] = [
       min_plays: int({ description: "Only songs played at least this many times." }),
       max_plays: int({ description: "Only songs played at most this many times. 0 means never played." }),
       limit: int({ description: `How many songs to return. Default ${DEFAULT_SEARCH}, at most ${MAX_SEARCH}.` }),
+      has_lyrics: { type: "boolean", description: "false: only songs with no lyrics saved in their tags. true: only songs that have them." },
       has_cover: { type: "boolean", description: "false: only songs with no cover art (no picture in the file or its folder). true: only songs that have one." },
     },
     [],
     async (args, ctx) => {
       // Looking for pictures reads every file, so it only happens when asked for.
-      if (typeof args.has_cover !== "boolean") return search(args, ctx);
+      const lyrics = typeof args.has_lyrics === "boolean" ? (t: Track) => t.hasLyrics === args.has_lyrics : () => true;
+      if (typeof args.has_cover !== "boolean") return search(args, ctx, lyrics);
       const missing = new Set((await ctx.host.withoutCover(ctx.host.library())).map((t) => t.path));
-      return search(args, ctx, (t) => missing.has(t.path) === !args.has_cover);
+      return search(args, ctx, (t) => lyrics(t) && missing.has(t.path) === !args.has_cover);
     },
   ),
 

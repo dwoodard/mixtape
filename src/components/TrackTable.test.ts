@@ -32,6 +32,19 @@ describe("TrackTable", () => {
     expect(html.indexOf('class="cell time plays"')).toBeLessThan(html.indexOf('class="add"'));
   });
 
+  it("draws a line on the left edge only for songs missing a cover or lyrics, with a tooltip saying which", async () => {
+    const complete = makeTrack({ path: "/a", title: "Complete" });
+    const noCover = makeTrack({ path: "/b", title: "NoCover", hasCover: false });
+    const noLyrics = makeTrack({ path: "/c", title: "NoLyrics", hasLyrics: false });
+    const html = await render({ tracks: [complete, noCover, noLyrics] });
+    const rows = html.split('class="row item"').slice(1);
+    expect(rows[0]).not.toContain('class="gaps"');
+    expect(rows[1]).toContain("No cover art");
+    expect(rows[1]).not.toContain("No lyrics");
+    expect(rows[2]).toContain("No lyrics saved");
+    expect(rows[2]).not.toContain("No cover art");
+  });
+
   it("still shows the songs when no play counts are given", async () => {
     const html = await render();
     expect(html).toContain("Halo");

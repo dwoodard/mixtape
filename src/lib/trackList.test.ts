@@ -34,6 +34,12 @@ describe("filterTracks by cover art", () => {
     expect(filterTracks(tracks, "nocover", new Set())).toEqual([]);
   });
 
+  it("keeps only songs without saved lyrics for nolyrics, from the song's own flag", () => {
+    const list = [makeTrack({ path: "a", hasLyrics: true }), makeTrack({ path: "b", hasLyrics: false, genre: "Jazz" }), makeTrack({ path: "c", hasLyrics: false })];
+    expect(filterTracks(list, "nolyrics").map((t) => t.path)).toEqual(["b", "c"]);
+    expect(filterTracks(list, "no:lyrics jazz").map((t) => t.path)).toEqual(["b"]);
+  });
+
   it("recognizes the word so the files get checked", () => {
     expect(wantsNoCover("rock NoCover")).toBe(true);
     expect(wantsNoCover("cover")).toBe(false);

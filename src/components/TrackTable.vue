@@ -18,6 +18,8 @@ const emit = defineEmits<{
   enqueue: [track: Track];
   rowMenu: [index: number, event: MouseEvent];
   sort: [key: SortKey];
+  /** The line on a row's left edge was clicked: filter the list to songs missing that. */
+  gap: [filter: "nocover" | "nolyrics"];
 }>();
 
 const columns: { key: SortKey; label: string }[] = [
@@ -61,6 +63,22 @@ const columns: { key: SortKey; label: string }[] = [
         @dblclick="!$event.altKey && emit('play', i)"
         @contextmenu.prevent="emit('rowMenu', i, $event)"
       >
+        <span v-if="!t.hasCover || !t.hasLyrics" class="gaps">
+          <span
+            class="gap"
+            :class="{ on: !t.hasCover }"
+            :title="t.hasCover ? undefined : 'No cover art. Click to list every song without one.'"
+            @click.stop="!t.hasCover && emit('gap', 'nocover')"
+            @dblclick.stop
+          />
+          <span
+            class="gap"
+            :class="{ on: !t.hasLyrics }"
+            :title="t.hasLyrics ? undefined : 'No lyrics saved in the tags. Click to list every song without them.'"
+            @click.stop="!t.hasLyrics && emit('gap', 'nolyrics')"
+            @dblclick.stop
+          />
+        </span>
         <span class="num">{{ i + 1 }}.</span>
         <span class="cell ellipsis">{{ t.title }}</span>
         <span class="cell ellipsis muted">{{ t.artist }}</span>
@@ -86,7 +104,12 @@ const columns: { key: SortKey; label: string }[] = [
 .head { border-bottom: 1px solid var(--line); }
 .head-cell { background: none; border: none; border-radius: 0; text-align: left; color: var(--muted); padding: 5px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
 .head-cell.durationMs, .head-cell.plays { text-align: right; }
-.item { height: 28px; cursor: default; font-size: 13px; }
+.item { position: relative; height: 28px; cursor: default; font-size: 13px; }
+/* A thin line on the row's left edge for what the song lacks: the top half is cover art, the bottom half lyrics. */
+.gaps { position: absolute; left: 0; top: 0; bottom: 0; width: 6px; display: flex; flex-direction: column; }
+.gap { flex: 1; min-height: 0; border-left: 2px solid transparent; }
+.gap.on { border-left-color: #d9a441; cursor: pointer; }
+.gap:not(.on) { pointer-events: none; }
 .item:hover { background: var(--panel-2); }
 .item.selected { background: var(--accent); color: var(--accent-text); }
 .item.selected .muted, .item.selected .num, .item.selected .time { color: rgba(255, 255, 255, 0.8); }

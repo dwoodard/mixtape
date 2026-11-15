@@ -1655,6 +1655,8 @@ mod tests {
                 genre: String::new(),
                 duration_ms: 1,
                 added_ms: 0,
+                has_cover: false,
+                has_lyrics: false,
             },
         };
         let (r2, e2) = (root.clone(), existing.clone());

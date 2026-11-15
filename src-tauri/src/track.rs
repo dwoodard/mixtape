@@ -6,7 +6,7 @@ use std::path::Path;
 /// File extensions Mixtape scans for and can decode.
 pub const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "m4a", "aac", "ogg", "oga", "wav"];
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Track {
     pub path: String,
@@ -22,6 +22,13 @@ pub struct Track {
     /// When the file arrived (ms since the epoch). 0 when unknown.
     #[serde(default)]
     pub added_ms: u64,
+    /// Whether a cover picture exists for the song: in its tags, or as a picture file in its folder.
+    /// Worked out when the file is read, so a picture file added later is not noticed until the file is read again.
+    #[serde(default)]
+    pub has_cover: bool,
+    /// Whether the song's own tags hold lyrics.
+    #[serde(default)]
+    pub has_lyrics: bool,
 }
 
 /// How many discs the release has, if the file says so (e.g. disc 1 of 2).
@@ -77,6 +84,11 @@ pub fn read_track(path: &Path) -> Option<Track> {
         None => Default::default(),
     };
 
+    let has_lyrics = tag.is_some_and(|t| {
+        [ItemKey::UnsyncLyrics, ItemKey::Lyrics].iter().any(|k| t.get_string(*k).is_some_and(|l| !l.trim().is_empty()))
+    });
+    let has_cover = tagged.tags().iter().any(|t| !t.pictures().is_empty()) || crate::cover::has_folder_picture(path);
+
     let title = if title.is_empty() {
         path.file_stem()
             .and_then(|s| s.to_str())
@@ -98,6 +110,8 @@ pub fn read_track(path: &Path) -> Option<Track> {
         genre,
         duration_ms,
         added_ms: added_ms(path),
+        has_cover,
+        has_lyrics,
     })
 }
 

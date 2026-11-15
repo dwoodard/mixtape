@@ -256,6 +256,8 @@ pub fn test_track(name: &str) -> Track {
         genre: String::new(),
         duration_ms: 180_000,
         added_ms: 0,
+        has_cover: false,
+        has_lyrics: false,
     }
 }
 

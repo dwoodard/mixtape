@@ -424,7 +424,7 @@ mod tests {
         let entry = |path: &str, title: &str| CachedTrack {
             modified_ms: 1,
             size: 1,
-            track: Track { path: path.into(), title: title.into(), artist: "A".into(), album: "B".into(), album_artist: String::new(), track_number: None, disc_number: None, year: None, genre: String::new(), duration_ms: 1, added_ms: 0 },
+            track: Track { path: path.into(), title: title.into(), artist: "A".into(), album: "B".into(), album_artist: String::new(), track_number: None, disc_number: None, year: None, genre: String::new(), duration_ms: 1, added_ms: 0, has_cover: false, has_lyrics: false },
         };
         let mut cache = vec![
             entry("/lib/A/B/old name.mp3", "Old"),

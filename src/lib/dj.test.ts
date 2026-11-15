@@ -853,6 +853,15 @@ describe("a song tool given no id", () => {
     expect(plain.withoutCover).not.toHaveBeenCalled();
   });
 
+  it("filters a search to songs without saved lyrics from the song's own flag", async () => {
+    const bare = { ...library[3], hasLyrics: false };
+    const host = fakeHost({}, [], { library: () => [...library.slice(0, 3), bare] });
+    const none = await runTool("search_library", { has_lyrics: false, limit: 100 }, host, new DjSession());
+    expect((none.result as { songs: { title: string }[] }).songs.map((s) => s.title)).toEqual(["Atmosphere"]);
+    const have = await runTool("search_library", { has_lyrics: true, limit: 100 }, host, new DjSession());
+    expect((have.result as { songs: { title: string }[] }).songs).toHaveLength(3);
+  });
+
   it("finds a named song by its words instead of using the one playing", async () => {
     const named = library[2];
     const host = fakeHost({ currentTrack: library[0] });

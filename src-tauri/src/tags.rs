@@ -329,6 +329,34 @@ mod tests {
     }
 
     #[test]
+    fn a_read_track_says_whether_it_has_a_cover_and_lyrics() {
+        for ext in ["mp3", "flac", "m4a", "ogg"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = fixture(dir.path(), ext);
+            let bare = read_track(&path).unwrap();
+            assert!(!bare.has_cover && !bare.has_lyrics, "{ext}: neither to start with");
+
+            let with_lyrics = write_tags(&path, &TagEdit { lyrics: Some("la la".into()), ..Default::default() }).unwrap();
+            assert!(with_lyrics.has_lyrics && !with_lyrics.has_cover, "{ext}");
+
+            let with_both = write_tags(&path, &TagEdit { cover: Some(tiny_jpeg()), ..Default::default() }).unwrap();
+            assert!(with_both.has_lyrics && with_both.has_cover, "{ext}");
+
+            let cleared = write_tags(&path, &TagEdit { lyrics: Some(String::new()), ..Default::default() }).unwrap();
+            assert!(!cleared.has_lyrics && cleared.has_cover, "{ext}");
+        }
+    }
+
+    #[test]
+    fn a_picture_file_in_the_folder_counts_as_a_cover() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fixture(dir.path(), "mp3");
+        assert!(!read_track(&path).unwrap().has_cover);
+        std::fs::write(dir.path().join("folder.jpg"), tiny_jpeg()).unwrap();
+        assert!(read_track(&path).unwrap().has_cover);
+    }
+
+    #[test]
     fn a_cover_source_must_be_a_web_link_or_a_file_path() {
         let dir = tempfile::tempdir().unwrap();
         let path = fixture(dir.path(), "mp3");

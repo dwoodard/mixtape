@@ -13,6 +13,8 @@ export function makeTrack(overrides: Partial<Track> = {}): Track {
     genre: "",
     durationMs: 180_000,
     addedMs: 0,
+    hasCover: true,
+    hasLyrics: true,
     ...overrides,
   };
 }

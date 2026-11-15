@@ -14,7 +14,7 @@ import { sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
 import { shortcutText } from "../lib/shortcuts";
 import { enterAction, isAddClick, optionClickTargets, songChoiceItems } from "../lib/songChoice";
-import { publishSelection, revealPath, tagEditPaths, withdrawSelection } from "../lib/ui";
+import { libraryQuery, publishSelection, revealPath, tagEditPaths, withdrawSelection } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import TrackTable from "./TrackTable.vue";
 
@@ -83,6 +83,12 @@ function sortBy(key: SortKey) {
     // Newest first is what you want when sorting by date added.
     sortDirection.value = key === "addedMs" || key === "plays" ? "desc" : "asc";
   }
+}
+
+/** A gap line was clicked: add that filter word to the filter box, keeping whatever is already typed there. */
+function filterByGap(word: "nocover" | "nolyrics") {
+  const words = libraryQuery.value.split(/\s+/).filter(Boolean);
+  if (!words.includes(word)) libraryQuery.value = [...words, word].join(" ");
 }
 
 /** Right-click: act on the selection, or select the row first if it is outside it. */
@@ -265,6 +271,7 @@ function onKey(event: KeyboardEvent) {
       @play="chooseSong"
       @enqueue="(t) => store.enqueue([t])"
       @sort="sortBy"
+      @gap="filterByGap"
     />
   <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="menu = null" />
   <ContextMenu v-if="choice" :x="choice.x" :y="choice.y" :items="choiceItems" @close="closeChoice" />

@@ -11,6 +11,10 @@ export interface Track {
   durationMs: number;
   /** When the file arrived in the library (ms since the epoch), 0 if unknown. */
   addedMs: number;
+  /** A cover picture exists: in the song's tags, or as a picture file in its folder. */
+  hasCover: boolean;
+  /** The song's own tags hold lyrics. */
+  hasLyrics: boolean;
 }
 
 /** What the app found when it compared a song's file with the library's record of it. */

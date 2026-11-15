@@ -60,6 +60,11 @@ fn folder_picture(track: &Path) -> Option<Vec<u8>> {
     folder_picture_path(track).and_then(|p| std::fs::read(p).ok())
 }
 
+/// Whether a picture file sits next to the track.
+pub fn has_folder_picture(track: &Path) -> bool {
+    folder_picture_path(track).is_some()
+}
+
 /// Whether `find_source` would find a picture for this track, without reading a folder picture's bytes.
 pub fn has_cover(track: &Path) -> bool {
     embedded(track).is_some() || folder_picture_path(track).is_some()
