@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { formatAgo } from "../lib/format";
 import { store } from "../lib/store";
 import { tip, shortcutText } from "../lib/shortcuts";
-import { filterTracks } from "../lib/trackList";
+import { filterTracks, shuffleTracks } from "../lib/trackList";
 import { libraryQuery, libraryView, showInLibrary, type LibraryView } from "../lib/ui";
 import AlbumsView from "./AlbumsView.vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
@@ -13,6 +13,14 @@ import TrackPane from "./TrackPane.vue";
 
 const query = libraryQuery;
 const filtered = computed(() => filterTracks(store.library.value, query.value));
+
+// The Random tab keeps its order until the tab is clicked again.
+const shuffleSeed = ref(Date.now());
+const shuffled = computed(() => shuffleTracks(filtered.value, shuffleSeed.value));
+function pickTab(id: LibraryView) {
+  if (id === "random") shuffleSeed.value = Date.now();
+  libraryView.value = id;
+}
 
 /** Library actions are rarely needed, so they live in a menu instead of the toolbar. */
 const menu = ref<{ x: number; y: number } | null>(null);
@@ -64,6 +72,7 @@ const tabs = computed<{ id: LibraryView; label: string; tip: string }[]>(() => [
   { id: "tracks", label: "Tracks", tip: tip("Show Tracks", "viewTracks") },
   { id: "albums", label: "Albums", tip: tip("Show Albums", "viewAlbums") },
   { id: "artists", label: "Artists", tip: tip("Show Artists", "viewArtists") },
+  { id: "random", label: "Random", tip: "Show the songs in a random order. Click again to reshuffle." },
   ...(duplicateCount.value > 0
     ? [{ id: "duplicates" as const, label: `Duplicates (${duplicateCount.value})`, tip: tip("Show Duplicates", "viewDuplicates") }]
     : []),
@@ -92,7 +101,7 @@ const scanLabel = computed(() => {
         :aria-selected="libraryView === t.id"
         :class="{ on: libraryView === t.id }"
         :title="t.tip"
-        @click="libraryView = t.id"
+        @click="pickTab(t.id)"
       >
         {{ t.label }}
       </button>
@@ -151,8 +160,9 @@ const scanLabel = computed(() => {
         <button @click="store.openFolder()">Open folder…</button>
       </div>
     </div>
-    <TrackPane v-else-if="libraryView === 'tracks'" :tracks="filtered" removable />
+    <TrackPane v-else-if="libraryView === 'tracks'" key="tracks" :tracks="filtered" removable />
     <AlbumsView v-else-if="libraryView === 'albums'" :tracks="filtered" />
+    <TrackPane v-else-if="libraryView === 'random'" :key="shuffleSeed" :tracks="shuffled" removable />
     <ArtistsView v-else :tracks="filtered" />
   </section>
 </template>

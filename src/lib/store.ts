@@ -156,9 +156,6 @@ export function createStore(api: Api, storage?: FlagStorage) {
     await scan(path, () => api.scanFolder(path));
   }
 
-  /** True while a song is loaded (playing or paused): choosing a song then asks what to do with it. */
-  const songNeedsChoice = computed(() => player.value.status !== "stopped");
-
   /**
    * Plays one song when nothing is playing. An empty queue becomes just that song;
    * otherwise the song goes on the end of the queue and starts, and the queue stays.
@@ -171,10 +168,12 @@ export function createStore(api: Api, storage?: FlagStorage) {
   }
 
   /**
-   * Starts one song now. It goes right after the current song, which stays directly
+   * Starts one song now. While one is loaded it goes right after the current song, which stays directly
    * above it in the queue, and the rest of the queue is untouched.
    */
   async function playNow(track: Track) {
+    // With nothing loaded there is no current song to go after.
+    if (player.value.status === "stopped") return playSong(track);
     const current = player.value.currentIndex;
     const at = current === null ? queue.value.length : current + 1;
     await api.enqueueNext([track]);
@@ -454,7 +453,6 @@ export function createStore(api: Api, storage?: FlagStorage) {
     toggleMode,
     /** Replaces the queue with `tracks` and starts at `index`. */
     playTracks: (tracks: Track[], index: number) => api.playTracks(tracks, index),
-    songNeedsChoice,
     playSong,
     playNow,
     enqueue: (tracks: Track[]) => api.enqueue(tracks),

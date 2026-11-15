@@ -467,10 +467,12 @@ describe("playing one song from a list", () => {
     return { api, store };
   }
 
-  it("asks what to do only while something is loaded (playing or paused)", async () => {
-    expect((await storeWith({ status: "stopped" }, queued)).store.songNeedsChoice.value).toBe(false);
-    expect((await storeWith({ status: "playing", currentIndex: 0 }, queued)).store.songNeedsChoice.value).toBe(true);
-    expect((await storeWith({ status: "paused", currentIndex: 0 }, queued)).store.songNeedsChoice.value).toBe(true);
+  it("play now with nothing loaded plays the song without disturbing the queue", async () => {
+    const { api, store } = await storeWith({ status: "stopped", currentIndex: 0 }, queued);
+    await store.playNow(song);
+    expect(api.enqueue).toHaveBeenCalledWith([song]);
+    expect(api.playIndex).toHaveBeenCalledWith(2);
+    expect(api.enqueueNext).not.toHaveBeenCalled();
   });
 
   it("with nothing playing and an empty queue, the song becomes the queue and plays", async () => {

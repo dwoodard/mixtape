@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterTracks, sortTracks } from "./trackList";
+import { filterTracks, shuffleTracks, sortTracks } from "./trackList";
 import { makeTrack } from "./testing";
 
 const tracks = [
@@ -24,6 +24,21 @@ describe("filterTracks", () => {
   });
 });
 
+describe("shuffleTracks", () => {
+  const many = Array.from({ length: 30 }, (_, i) => makeTrack({ path: String(i) }));
+
+  it("keeps every track, leaves the input alone, and is repeatable for one seed", () => {
+    const a = shuffleTracks(many, 1);
+    expect(a.map((t) => t.path).sort()).toEqual(many.map((t) => t.path).sort());
+    expect(many[0].path).toBe("0");
+    expect(shuffleTracks(many, 1)).toEqual(a);
+  });
+
+  it("gives a different order for a different seed", () => {
+    expect(shuffleTracks(many, 1).map((t) => t.path)).not.toEqual(shuffleTracks(many, 2).map((t) => t.path));
+  });
+});
+
 describe("sortTracks", () => {
   it("keeps the given order for the default key", () => {
     expect(sortTracks(tracks, "default", "desc")).toBe(tracks);
@@ -32,6 +47,16 @@ describe("sortTracks", () => {
   it("sorts text case-insensitively", () => {
     expect(sortTracks(tracks, "title", "asc").map((t) => t.path)).toEqual(["2", "3", "1"]);
     expect(sortTracks(tracks, "title", "desc").map((t) => t.path)).toEqual(["1", "3", "2"]);
+  });
+
+  it("sorts by date added and puts unknown dates last", () => {
+    const dated = [
+      makeTrack({ path: "old", addedMs: 1_000 }),
+      makeTrack({ path: "none", addedMs: 0 }),
+      makeTrack({ path: "new", addedMs: 5_000 }),
+    ];
+    expect(sortTracks(dated, "addedMs", "desc").map((t) => t.path)).toEqual(["new", "old", "none"]);
+    expect(sortTracks(dated, "addedMs", "asc").map((t) => t.path)).toEqual(["old", "new", "none"]);
   });
 
   it("puts missing values last in both directions", () => {

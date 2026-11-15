@@ -1,7 +1,7 @@
 import { ref } from "vue";
 import type { Track } from "./types";
 
-export type LibraryView = "tracks" | "albums" | "artists" | "duplicates";
+export type LibraryView = "tracks" | "albums" | "artists" | "random" | "duplicates";
 
 /** Which library view is showing. */
 export const libraryView = ref<LibraryView>("tracks");

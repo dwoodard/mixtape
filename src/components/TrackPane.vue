@@ -80,7 +80,8 @@ function sortBy(key: SortKey) {
     sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
   } else {
     sortKey.value = key;
-    sortDirection.value = "asc";
+    // Newest first is what you want when sorting by date added.
+    sortDirection.value = key === "addedMs" ? "desc" : "asc";
   }
 }
 
@@ -132,8 +133,8 @@ const menuItems = computed<MenuItem[]>(() => {
 });
 
 /**
- * One song chosen with a double-click or Enter. With nothing playing it just plays;
- * otherwise a small menu at its row asks what to do. Never touches the other rows.
+ * One song chosen with a double-click or Enter: a small menu at its row asks what to do
+ * (play now, play next, add to queue). Never touches the other rows.
  */
 const choice = ref<{ x: number; y: number; track: Track } | null>(null);
 const choiceItems = computed<MenuItem[]>(() => {
@@ -144,10 +145,6 @@ const choiceItems = computed<MenuItem[]>(() => {
 function chooseSong(index: number) {
   const track = rows.value[index];
   if (!track) return;
-  if (!store.songNeedsChoice.value) {
-    void store.playSong(track);
-    return;
-  }
   const row = root.value?.querySelector(`[data-index="${index}"]`)?.getBoundingClientRect();
   const box = root.value?.getBoundingClientRect();
   choice.value = { x: (row?.left ?? box?.left ?? 0) + 48, y: row?.bottom ?? box?.top ?? 0, track };

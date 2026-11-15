@@ -42,7 +42,7 @@ export const COMMANDS: readonly CommandDef[] = [
   { id: "discovery", title: "Switch between Player and Discovery", group: "Navigation", keys: cmd("d") },
   { id: "toggleMode", title: "Switch between thin bar and large window", group: "Navigation", keys: cmd("t", { shift: true }) },
 
-  { id: "play", title: "Play selected songs (one song asks first while playing)", group: "Selection", keys: { key: "Enter" }, local: true },
+  { id: "play", title: "Play selected songs (one song asks what to do first)", group: "Selection", keys: { key: "Enter" }, local: true },
   { id: "enqueue", title: "Add selected songs to the queue", group: "Selection", keys: cmd("Enter") },
   { id: "playNext", title: "Play selected songs next", group: "Selection", keys: cmd("Enter", { shift: true }) },
   { id: "editTags", title: "Edit tags of selected songs", group: "Selection", keys: cmd("e") },
@@ -146,7 +146,7 @@ export function allowedWhileFocused(spec: KeySpec, focus: FocusKind): boolean {
 
 /** Mouse gestures on song rows. Shown in the shortcut list; they are not commands, so the palette has no entry for them. */
 export const GESTURES: readonly { title: string; gesture: string }[] = [
-  { title: "Play a song (asks first while something plays)", gesture: "Double-click" },
+  { title: "Choose what to do with a song (play now, play next, add to queue)", gesture: "Double-click" },
   { title: "Add the song, or the whole selection, to the queue", gesture: "⌥ Click" },
   { title: "Add songs to the selection", gesture: "⌘ Click" },
   { title: "Select a range of songs", gesture: "⇧ Click" },
