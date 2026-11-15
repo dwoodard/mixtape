@@ -16,10 +16,7 @@ const PANEL_FEW_ROWS: f64 = 84.0;
 /// The queue panel while it is open. Never saved: the window is only this tall while it is open.
 #[derive(Clone, Copy)]
 struct OpenPanel {
-    side: PanelSide,
-    /// The panel's height in physical pixels (what the window grew by).
-    height_px: u32,
-    /// The same, in logical pixels.
+    /// The panel's height in logical pixels (what the window grew by).
     height: f64,
     /// Where the bar was when the panel opened (physical pixels), and how wide: closing puts it back exactly there.
     bar_x: i32,
@@ -118,7 +115,7 @@ impl WindowStore {
         // The height stays locked, now at the taller size.
         let _ = window.set_max_size(Some(LogicalSize::new(screen_logical_width(window).max(THIN_MIN_WIDTH), total)));
         let _ = window.set_min_size(Some(LogicalSize::new(THIN_MIN_WIDTH, total)));
-        *self.panel.lock().unwrap() = Some(OpenPanel { side: plan.side, height_px, height, bar_x: position.x, bar_y: position.y, bar_width_px: size.width });
+        *self.panel.lock().unwrap() = Some(OpenPanel { height, bar_x: position.x, bar_y: position.y, bar_width_px: size.width });
         let _ = window.set_size(LogicalSize::new(width, total));
         let _ = window.set_position(PhysicalPosition::new(position.x, window_top_open(position.y, plan.side, height_px)));
         Some((plan.side, height))
