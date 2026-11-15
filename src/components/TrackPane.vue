@@ -272,8 +272,9 @@ function onKey(event: KeyboardEvent) {
 
 <style scoped>
 .pane { display: flex; flex-direction: column; flex: 1; min-height: 0; outline-offset: -2px; }
-.actions { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
-.what { margin-right: auto; color: var(--muted); font-size: 12px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.actions button { white-space: nowrap; }
+.what { margin-right: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .confirm { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel-3); border-bottom: 1px solid var(--line); font-size: 12px; }
 .confirm span { margin-right: auto; }
 .danger { background: #8a2f36; border-color: #8a2f36; color: #fff; }
