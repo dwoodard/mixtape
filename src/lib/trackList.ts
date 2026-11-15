@@ -1,3 +1,4 @@
+import { facetMatches, tokenize } from "./facets";
 import type { PlayStat, Track } from "./types";
 
 export type SortKey = "default" | "title" | "artist" | "album" | "durationMs" | "year" | "addedMs" | "plays";
@@ -9,23 +10,27 @@ const NO_COVER_WORDS = new Set(["nocover", "no:cover"]);
 const NO_LYRICS_WORDS = new Set(["nolyrics", "no:lyrics"]);
 
 /** Whether the filter asks for songs with no cover art, so the caller knows to check the files. */
-export const wantsNoCover = (query: string): boolean => query.toLowerCase().split(/\s+/).some((w) => NO_COVER_WORDS.has(w));
+export const wantsNoCover = (query: string): boolean =>
+  tokenize(query).some((t) => (t.facet === null && NO_COVER_WORDS.has(t.value)) || (t.facet !== null && (t.facet === "no" || t.facet === "has") && t.value === "cover"));
 
 /**
  * Case-insensitive match of every word in `query` against title, artist, album, genre, or year.
- * `nocover` (or `no:cover`) keeps only the songs in `coverless`, and `nolyrics` those without saved lyrics. Both combine with other words.
+ * `nocover` (or `no:cover`) keeps only the songs in `coverless`, and `nolyrics` (or `no:lyrics`) those without saved lyrics.
+ * Facet words (`artist:`, `album:`, `title:`, `genre:`, `year:`, see facets.ts) match one field. All words combine.
  */
 export function filterTracks(tracks: Track[], query: string, coverless: ReadonlySet<string> = new Set()): Track[] {
-  const all = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const words = all.filter((w) => !NO_COVER_WORDS.has(w) && !NO_LYRICS_WORDS.has(w));
-  const noCover = all.some((w) => NO_COVER_WORDS.has(w));
-  const noLyrics = all.some((w) => NO_LYRICS_WORDS.has(w));
-  if (words.length === 0 && !noCover && !noLyrics) return tracks;
+  const all = tokenize(query).filter((t) => t.value !== "");
+  const facets = all.filter((t) => t.facet !== null);
+  const words = all.filter((t) => t.facet === null && !NO_COVER_WORDS.has(t.value) && !NO_LYRICS_WORDS.has(t.value));
+  const noCover = all.some((t) => t.facet === null && NO_COVER_WORDS.has(t.value));
+  const noLyrics = all.some((t) => t.facet === null && NO_LYRICS_WORDS.has(t.value));
+  if (words.length === 0 && facets.length === 0 && !noCover && !noLyrics) return tracks;
   return tracks.filter((t) => {
     if (noCover && !coverless.has(t.path)) return false;
     if (noLyrics && t.hasLyrics) return false;
+    if (!facets.every((f) => facetMatches(f, t, coverless))) return false;
     const haystack = `${t.title} ${t.artist} ${t.album} ${t.genre} ${t.year ?? ""}`.toLowerCase();
-    return words.every((w) => haystack.includes(w));
+    return words.every((w) => haystack.includes(w.value));
   });
 }
 

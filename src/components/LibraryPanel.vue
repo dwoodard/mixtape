@@ -9,6 +9,7 @@ import AlbumsView from "./AlbumsView.vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import DuplicatesView from "./DuplicatesView.vue";
 import ArtistsView from "./ArtistsView.vue";
+import FilterBox from "./FilterBox.vue";
 import TrackPane from "./TrackPane.vue";
 
 const query = libraryQuery;
@@ -129,14 +130,10 @@ const scanLabel = computed(() => {
     </div>
 
     <div class="toolbar">
-      <input
-        id="library-filter"
+      <FilterBox
         v-model="query"
-        class="field filter"
+        :tracks="store.library.value"
         :title="tip('Filter the library', 'focusSearch')"
-        type="search"
-        placeholder="Filter"
-        aria-label="Filter library"
         :disabled="libraryView === 'duplicates'"
       />
       <span class="count">
@@ -197,7 +194,6 @@ const scanLabel = computed(() => {
 .toolbar button { white-space: nowrap; }
 .more { width: 28px; height: 28px; font-size: 16px; line-height: 1; letter-spacing: 1px; flex: none; }
 .first-run { display: flex; gap: 8px; justify-content: center; }
-.filter { flex: 1; min-width: 120px; }
 .count { color: var(--muted); white-space: nowrap; font-size: 12px; }
 .status { margin: 0; padding: 5px 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); }
 .changed { display: flex; align-items: center; gap: 6px; padding: 4px 10px; background: #26374a; border-bottom: 1px solid var(--line); font-size: 12px; }
