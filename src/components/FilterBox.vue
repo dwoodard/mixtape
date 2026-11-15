@@ -57,14 +57,26 @@ function show() {
 }
 
 function onInput(event: Event) {
+  // The pills as they are drawn right now. Read before `typing` changes: while typing, a facet word at the very end of
+  // the query counts as unfinished, which would drop a pill that sits after the free text ("Ireland artist:Garth").
+  const pills = parts.value.pills;
   typing.value = true;
-  query.value = joinFilter(parts.value.pills, (event.target as HTMLInputElement).value);
+  // Always a space after the pills, so with the text field emptied the last pill is not mistaken for a word being typed.
+  query.value = joinFilter(pills, (event.target as HTMLInputElement).value, true);
   show();
 }
 
 function clear() {
   typing.value = false;
   query.value = "";
+  input.value?.focus();
+  show();
+}
+
+/** Clears only the typed words and keeps the pills. */
+function clearText() {
+  typing.value = false;
+  query.value = joinFilter(parts.value.pills, "");
   input.value?.focus();
   show();
 }
@@ -155,6 +167,7 @@ function onKey(event: KeyboardEvent) {
         @keydown="onKey"
         @blur="(open = false), (typing = false)"
       />
+      <button v-if="parts.pills.length > 0 && parts.text.trim() !== ''" type="button" class="clear text-clear" aria-label="Clear the typed text and keep the filters" title="Clear the typed text, keep the filters" :disabled="disabled" @mousedown.prevent @click="clearText">×</button>
       <button v-if="query !== ''" type="button" class="clear" aria-label="Clear filter" title="Clear filter" :disabled="disabled" @mousedown.prevent @click="clear">×</button>
     </div>
     <div v-if="items.length > 0" class="dropdown">
@@ -200,6 +213,7 @@ function onKey(event: KeyboardEvent) {
 /* The clear button below clears the pills too, so the browser's own one is hidden. */
 .text::-webkit-search-cancel-button { display: none; }
 .clear { flex: none; width: 20px; height: 20px; padding: 0; border: none; border-radius: 50%; background: rgba(255, 255, 255, 0.12); color: inherit; font-size: 14px; line-height: 1; opacity: 0.75; }
+.text-clear { width: 16px; height: 16px; font-size: 12px; background: transparent; border: 1px solid currentColor; opacity: 0.55; }
 .clear:hover { opacity: 1; background: rgba(255, 255, 255, 0.22); }
 .pill { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 1px 3px 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 28%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); font-size: 12px; line-height: 18px; }
 .pill-facet { color: var(--muted); }

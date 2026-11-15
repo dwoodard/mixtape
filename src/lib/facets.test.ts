@@ -201,3 +201,24 @@ describe("filter pills", () => {
     expect(offered.items.map((i) => i.label)).not.toContain("AJR feat. Rivers Cuomo");
   });
 });
+
+describe("editing the text beside a pill", () => {
+  /** What the filter box does on each keystroke: keep the pills as drawn, then put the typed text after them. */
+  const type = (query: string, value: string) => {
+    const pills = splitFilter(query, false).pills;
+    return joinFilter(pills, value, true);
+  };
+
+  it("keeps a pill that sits after the free text while that text is edited", () => {
+    const query = type('Ireland artist:"Garth Brooks"', "Irelan");
+    expect(splitFilter(query, true)).toMatchObject({ pills: [{ facet: "artist", value: "Garth Brooks" }], text: "Irelan" });
+  });
+
+  it("keeps the pill when all of the text is deleted, and does not turn it back into typed text", () => {
+    let query = 'artist:"Garth Brooks" Ireland';
+    for (const value of ["Irelan", "Ire", "I", ""]) query = type(query, value);
+    const parts = splitFilter(query, true);
+    expect(parts.pills).toHaveLength(1);
+    expect(parts.text).toBe("");
+  });
+});
