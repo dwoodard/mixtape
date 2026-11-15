@@ -444,12 +444,23 @@ pub fn to_edit(p: &Proposal) -> TagEdit {
         genre: Some(p.genre.clone()),
         // A proposal has no lyrics: whatever the file already has stays.
         lyrics: None,
+        source_url: None,
         cover_url: None,
         cover: None,
     }
 }
 
 // ------------------------------------------------------------ adding
+
+/// Whether a file with this extension has a tag for the page a song came from.
+fn holds_source_url(ext: &str) -> bool {
+    matches!(ext.to_ascii_lowercase().as_str(), "mp3" | "m4a")
+}
+
+/// Whether a link is one the tag editor would accept, so a strange link is left out instead of failing the add.
+fn edit_accepts_link(url: &str) -> bool {
+    TagEdit { source_url: Some(url.to_string()), ..Default::default() }.validate().is_ok()
+}
 
 #[derive(Debug)]
 pub struct Added {
@@ -485,6 +496,12 @@ fn is_same_song(existing: &Path, staged: &Path, proposal: &Proposal) -> bool {
 /// temporary name and checked, then moved into place. Never overwrites an
 /// existing file.
 pub fn add_to_library(staged: &Path, proposal: &Proposal, root: &Path, library: &[CachedTrack], retag: bool, allow_copy: bool) -> Result<Added, String> {
+    add_to_library_from(staged, proposal, root, library, retag, allow_copy, None)
+}
+
+/// [`add_to_library`], also recording `source_url` (the page the song was fetched from) in the file's link tag. The
+/// link is skipped quietly for formats with no such tag (FLAC, Ogg), so it can never make an add fail.
+pub fn add_to_library_from(staged: &Path, proposal: &Proposal, root: &Path, library: &[CachedTrack], retag: bool, allow_copy: bool, source_url: Option<&str>) -> Result<Added, String> {
     if !root.is_dir() {
         return Err(format!("{} is not available. Is the drive mounted?", root.display()));
     }
@@ -505,8 +522,12 @@ pub fn add_to_library(staged: &Path, proposal: &Proposal, root: &Path, library: 
     let cleanup = |p: &Path| {
         let _ = std::fs::remove_file(p);
     };
-    if retag {
-        if let Err(e) = write_tags(&work, &to_edit(proposal)) {
+    let mut edit = if retag { to_edit(proposal) } else { TagEdit::default() };
+    if holds_source_url(ext) {
+        edit.source_url = source_url.map(str::to_string).filter(|u| edit_accepts_link(u));
+    }
+    if !edit.is_empty() {
+        if let Err(e) = write_tags(&work, &edit) {
             cleanup(&work);
             return Err(e);
         }
@@ -1002,6 +1023,27 @@ mod tests {
     }
 
     #[test]
+    fn an_added_song_records_the_page_it_came_from_even_when_picard_already_tagged_it() {
+        const LINK: &str = "https://www.youtube.com/watch?v=v4YQJ6KuWvQ";
+        for retag in [true, false] {
+            let work = tempfile::tempdir().unwrap();
+            let lib = tempfile::tempdir().unwrap();
+            let added = add_to_library_from(&staged(work.path()), &proposal(), lib.path(), &[], retag, false, Some(LINK)).unwrap();
+            assert_eq!(added.track.source_url, LINK, "retag={retag}");
+            assert_eq!(read_track(&added.path).unwrap().source_url, LINK, "retag={retag}");
+        }
+    }
+
+    #[test]
+    fn a_missing_or_odd_source_link_never_blocks_an_add() {
+        let work = tempfile::tempdir().unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        let added = add_to_library_from(&staged(work.path()), &proposal(), lib.path(), &[], true, false, Some("not a link")).unwrap();
+        assert_eq!(added.track.source_url, "");
+        assert_eq!(added.track.title, "People Are Strange");
+    }
+
+    #[test]
     fn adds_a_song_with_its_tags_in_the_right_place_and_leaves_the_staged_file_alone() {
         let work = tempfile::tempdir().unwrap();
         let lib = tempfile::tempdir().unwrap();
@@ -1069,6 +1111,7 @@ mod tests {
                 added_ms: 0,
                 has_cover: false,
                 has_lyrics: false,
+                source_url: String::new(),
             },
         }
     }
@@ -1190,7 +1233,7 @@ mod tests {
 
     #[test]
     fn a_proposal_can_be_read_back_from_a_tagged_track() {
-        let t = Track { path: "/x.mp3".into(), title: "T".into(), artist: "A".into(), album: "B".into(), album_artist: "AA".into(), track_number: Some(3), disc_number: None, year: Some(1999), genre: "G".into(), duration_ms: 1, added_ms: 0, has_cover: false, has_lyrics: false };
+        let t = Track { path: "/x.mp3".into(), title: "T".into(), artist: "A".into(), album: "B".into(), album_artist: "AA".into(), track_number: Some(3), disc_number: None, year: Some(1999), genre: "G".into(), duration_ms: 1, added_ms: 0, has_cover: false, has_lyrics: false, source_url: String::new() };
         let p = proposal_from_track(&t);
         assert_eq!((p.title.as_str(), p.artist.as_str(), p.album.as_str(), p.album_artist.as_str(), p.year.as_str(), p.track.as_str(), p.genre.as_str()), ("T", "A", "B", "AA", "1999", "3", "G"));
         let none = proposal_from_track(&Track { year: None, track_number: None, ..t });

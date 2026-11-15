@@ -15,6 +15,8 @@ export interface Track {
   hasCover: boolean;
   /** The song's own tags hold lyrics. */
   hasLyrics: boolean;
+  /** The web page the song came from (an imported song's YouTube link), or "" when the file has none. */
+  sourceUrl: string;
 }
 
 /** What the app found when it compared a song's file with the library's record of it. */

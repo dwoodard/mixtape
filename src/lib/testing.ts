@@ -15,6 +15,7 @@ export function makeTrack(overrides: Partial<Track> = {}): Track {
     addedMs: 0,
     hasCover: true,
     hasLyrics: true,
+    sourceUrl: "",
     ...overrides,
   };
 }

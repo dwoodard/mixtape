@@ -73,6 +73,7 @@ function tagRows(s: Removed): [string, string][] {
     ["Length", formatTime(t.durationMs)],
     ["Cover", t.hasCover ? "yes" : "no"],
     ["Lyrics", t.hasLyrics ? "saved in the file" : "none in the file"],
+    ["Source", t.sourceUrl],
   ];
   return rows.filter(([, v]) => v !== null && v !== "").map(([k, v]) => [k, String(v)]);
 }

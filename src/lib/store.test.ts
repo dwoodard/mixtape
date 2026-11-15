@@ -687,6 +687,20 @@ describe("removing from the library", () => {
   });
 });
 
+describe("open a link", () => {
+  it("opens the page, and shows the error when it can't", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.openLink("https://youtu.be/x");
+    expect(api.openLink).toHaveBeenCalledWith("https://youtu.be/x");
+
+    const failing = fakeApi({ openLink: vi.fn(async () => Promise.reject("not allowed")) });
+    const other = createStore(failing.api);
+    await other.openLink("https://evil.example/");
+    expect(other.libraryError.value).toBe("not allowed");
+  });
+});
+
 describe("open in Finder", () => {
   it("opens the folder", async () => {
     const { api } = fakeApi();

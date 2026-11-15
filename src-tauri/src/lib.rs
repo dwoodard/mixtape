@@ -523,13 +523,14 @@ async fn import_add(
 ) -> Result<Track, String> {
     let root = library_root(&cache, &config)?;
     let (staged, proposal, retag) = imports.0.take_for_add(id)?;
+    let source_url = imports.0.list().into_iter().find(|i| i.id == id).map(|i| i.url);
     let cache = cache.inner().clone();
     let manager = imports.0.clone();
     let root_for_job = root.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         // Follow the folders the library already has.
         let library = cache.load(&root_for_job).map(|c| c.tracks).unwrap_or_default();
-        let added = importer::add_to_library(&staged, &proposal, &root_for_job, &library, retag, allow_copy.unwrap_or(false))?;
+        let added = importer::add_to_library_from(&staged, &proposal, &root_for_job, &library, retag, allow_copy.unwrap_or(false), source_url.as_deref())?;
         if let Ok(meta) = std::fs::metadata(&added.path) {
             let modified_ms = meta
                 .modified()

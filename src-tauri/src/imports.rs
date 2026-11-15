@@ -1657,6 +1657,7 @@ mod tests {
                 added_ms: 0,
                 has_cover: false,
                 has_lyrics: false,
+                source_url: String::new(),
             },
         };
         let (r2, e2) = (root.clone(), existing.clone());

@@ -66,6 +66,7 @@ function importAsTrack(item: ImportItem): Track {
     addedMs: 0,
     hasCover: true,
     hasLyrics: false,
+    sourceUrl: item.url,
   };
 }
 

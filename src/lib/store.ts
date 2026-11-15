@@ -577,6 +577,16 @@ export function createStore(api: Api, storage?: FlagStorage) {
     }
   }
 
+  /** Opens a web page in the browser (only the few sites the app allows). */
+  async function openLink(url: string) {
+    libraryError.value = null;
+    try {
+      await api.openLink(url);
+    } catch (e) {
+      libraryError.value = String(e);
+    }
+  }
+
   /** Opens a folder in Finder. */
   async function openInFinder(path: string) {
     libraryError.value = null;
@@ -725,6 +735,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
     dismissError: () => api.dismissError(),
     revealInFinder,
     openInFinder,
+    openLink,
     lastChange,
     dismissChange: () => (lastChange.value = null),
     openInPicard,

@@ -29,6 +29,7 @@ const rows = computed<Row[]>(() => {
     { label: "Year", value: t.year ?? "", link: t.year ? { title: `Show every song from ${t.year} in the library`, go: () => searchLibrary(String(t.year)) } : undefined },
     { label: "Genre", value: t.genre, link: songsWith("genre", t.genre) },
     { label: "Length", value: formatTime(t.durationMs) },
+    ...(t.sourceUrl ? [{ label: "Source", value: t.sourceUrl, link: { title: "Open the page this song came from", go: () => void store.openLink(t.sourceUrl) } }] : []),
     { label: "File", value: t.path, link: { title: "Show the file in Finder", go: () => void store.revealInFinder([t]) } },
   ];
 });

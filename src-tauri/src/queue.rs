@@ -258,6 +258,7 @@ pub fn test_track(name: &str) -> Track {
         added_ms: 0,
         has_cover: false,
         has_lyrics: false,
+        source_url: String::new(),
     }
 }
 

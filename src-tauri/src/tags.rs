@@ -27,6 +27,8 @@ pub struct TagEdit {
     pub genre: Option<String>,
     /// The words of the song, kept in the file's own lyrics tag (USLT in an mp3). Line breaks are kept.
     pub lyrics: Option<String>,
+    /// The web page the song came from, kept in the file's link tag (`WOAS` in an mp3, `purl` in an m4a). An http(s) link.
+    pub source_url: Option<String>,
     /// Where to get the picture to embed as the front cover: an http(s) link or a file on this computer. Loaded once into `cover`.
     pub cover_url: Option<String>,
     /// The JPEG bytes of the cover to embed. Never sent by the UI.
@@ -55,6 +57,12 @@ impl TagEdit {
         if let Some(url) = self.cover_url.as_deref() {
             crate::coverart::check_source(url)?;
         }
+        if let Some(url) = self.source_url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+            let lower = url.to_ascii_lowercase();
+            if !(lower.starts_with("http://") || lower.starts_with("https://")) || url.chars().any(char::is_whitespace) || url.len() > 2_000 {
+                return Err("The source must be a web link starting with http:// or https://.".into());
+            }
+        }
         if self.lyrics.as_deref().is_some_and(|l| l.chars().count() > MAX_LYRICS_CHARS) {
             return Err(format!("Lyrics are limited to {MAX_LYRICS_CHARS} characters."));
         }
@@ -75,7 +83,18 @@ fn number(text: Option<&str>, label: &str, max: u32) -> Result<Option<Option<u32
     }
 }
 
+/// Link tags (the source page, the artist's page...) are read as "locators", which the tag library silently leaves out
+/// when it writes the tag back. Turning them into text first keeps every link the file already has through any edit.
+fn keep_links(tag: &mut Tag) {
+    let links: Vec<(ItemKey, String)> = tag.items().filter_map(|i| i.value().locator().map(|l| (i.key(), l.to_string()))).collect();
+    for (key, url) in links {
+        tag.remove_key(key);
+        tag.insert_text(key, url);
+    }
+}
+
 fn apply(tag: &mut Tag, edit: &TagEdit) -> Result<(), String> {
+    keep_links(tag);
     fn text(value: &Option<String>) -> Option<Option<String>> {
         value.as_ref().map(|v| Some(v.trim().to_string()).filter(|v| !v.is_empty()))
     }
@@ -97,6 +116,19 @@ fn apply(tag: &mut Tag, edit: &TagEdit) -> Result<(), String> {
                 tag.insert_text(ItemKey::AlbumArtist, v);
             }
             None => tag.remove_key(ItemKey::AlbumArtist),
+        }
+    }
+    if let Some(v) = text(&edit.source_url) {
+        let key = crate::track::source_key(tag.tag_type());
+        // Either way, no copy is left under the other key to disagree with the new one.
+        tag.remove_key(ItemKey::AudioSourceUrl);
+        tag.remove_key(ItemKey::PodcastUrl);
+        if let Some(url) = v {
+            // Given as text: the tag library writes it as a URL frame in an mp3 (it comes back as a "locator").
+            match key {
+                Some(key) if tag.insert_text(key, url) => {}
+                _ => return Err("This kind of file cannot hold a source link in its tags.".into()),
+            }
         }
     }
     if let Some(lyrics) = edit.lyrics.as_deref().map(clean_lyrics) {
@@ -139,6 +171,7 @@ fn matches(track: &Track, edit: &TagEdit) -> bool {
         && same(&edit.album, &track.album)
         && same(&edit.album_artist, &track.album_artist)
         && same(&edit.genre, &track.genre)
+        && same(&edit.source_url, &track.source_url)
         && num(&edit.track_number, track.track_number)
         && num(&edit.disc_number, track.disc_number)
         && num(&edit.year, track.year.map(u32::from))
@@ -244,6 +277,7 @@ mod tests {
             year: Some("1995".into()),
             genre: Some("Ska".into()),
             lyrics: None,
+            source_url: None,
             cover_url: None,
             cover: None,
         }
@@ -292,6 +326,39 @@ mod tests {
     }
 
     const WORDS: &str = "First line\nSecond line, with an é and a ’\n\nAfter a blank line";
+
+    #[test]
+    fn a_source_link_is_saved_and_read_back_where_the_format_has_a_place_for_it() {
+        const LINK: &str = "https://www.youtube.com/watch?v=v4YQJ6KuWvQ";
+        for ext in ["mp3", "m4a"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = fixture(dir.path(), ext);
+            assert_eq!(read_track(&path).unwrap().source_url, "", "{ext}: none to start with");
+
+            let track = write_tags(&path, &TagEdit { source_url: Some(LINK.into()), ..Default::default() }).unwrap_or_else(|e| panic!("{ext}: {e}"));
+            assert_eq!(track.source_url, LINK, "{ext}");
+
+            // Other edits leave it alone, and an empty value clears it.
+            let after = write_tags(&path, &TagEdit { genre: Some("Ska".into()), ..Default::default() }).unwrap();
+            assert_eq!(after.source_url, LINK, "{ext}");
+            let cleared = write_tags(&path, &TagEdit { source_url: Some(String::new()), ..Default::default() }).unwrap();
+            assert_eq!(cleared.source_url, "", "{ext}");
+        }
+    }
+
+    #[test]
+    fn formats_with_no_link_tag_refuse_a_source_and_bad_links_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        for ext in ["flac", "ogg"] {
+            let path = fixture(dir.path(), ext);
+            let err = write_tags(&path, &TagEdit { source_url: Some("https://youtu.be/x".into()), ..Default::default() }).unwrap_err();
+            assert!(err.contains("source link"), "{ext}: {err}");
+        }
+        let path = fixture(dir.path(), "mp3");
+        for bad in ["javascript:alert(1)", "youtu.be/x", "https://a b.com", "ftp://x.com/a"] {
+            assert!(write_tags(&path, &TagEdit { source_url: Some(bad.into()), ..Default::default() }).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn lyrics_are_saved_in_the_tags_and_read_back_in_every_supported_format() {

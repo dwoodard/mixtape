@@ -29,6 +29,19 @@ pub struct Track {
     /// Whether the song's own tags hold lyrics.
     #[serde(default)]
     pub has_lyrics: bool,
+    /// The web page the song came from (an mp3's "audio source" link, an m4a's `purl`). Empty when the file has none.
+    #[serde(default)]
+    pub source_url: String,
+}
+
+/// The link tag a format keeps the song's source in: `WOAS` in ID3v2, `purl` in MP4. Vorbis comments (FLAC, Ogg) have none.
+pub fn source_key(tag_type: lofty::tag::TagType) -> Option<ItemKey> {
+    use lofty::tag::TagType;
+    match tag_type {
+        TagType::Id3v2 => Some(ItemKey::AudioSourceUrl),
+        TagType::Mp4Ilst => Some(ItemKey::PodcastUrl),
+        _ => None,
+    }
 }
 
 /// How many discs the release has, if the file says so (e.g. disc 1 of 2).
@@ -87,6 +100,11 @@ pub fn read_track(path: &Path) -> Option<Track> {
     let has_lyrics = tag.is_some_and(|t| {
         [ItemKey::UnsyncLyrics, ItemKey::Lyrics].iter().any(|k| t.get_string(*k).is_some_and(|l| !l.trim().is_empty()))
     });
+    // A link is a "locator" in an mp3 (a URL frame) and plain text in an m4a.
+    let source_url = tag
+        .and_then(|t| source_key(t.tag_type()).and_then(|k| t.get_locators(k).chain(t.get_strings(k)).next()))
+        .map(|u| u.trim().to_string())
+        .unwrap_or_default();
     let has_cover = tagged.tags().iter().any(|t| !t.pictures().is_empty()) || crate::cover::has_folder_picture(path);
 
     let title = if title.is_empty() {
@@ -112,6 +130,7 @@ pub fn read_track(path: &Path) -> Option<Track> {
         added_ms: added_ms(path),
         has_cover,
         has_lyrics,
+        source_url,
     })
 }
 
