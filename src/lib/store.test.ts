@@ -56,6 +56,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     importRemove: vi.fn(async () => {}),
     onImportEvent: vi.fn(async () => unlisten),
     trashDuplicates: vi.fn(async () => ({ trashed: [], held: [], holdingFolder: null, missing: [], skipped: [] })),
+    moveSongs: vi.fn(async () => ({ moved: [], failed: [] })),
     removedCount: vi.fn(async () => 0),
     restoreRemoved: vi.fn(async () => {}),
     enqueueNext: vi.fn(async () => {}),
@@ -1330,3 +1331,39 @@ describe("targeted refresh after an add", () => {
   });
 });
 
+
+describe("moving songs to another folder", () => {
+  const old = makeTrack({ path: "/m/Forrest_/s/a.mp3", title: "A" });
+  const other = makeTrack({ path: "/m/Forrest Frank/b.mp3", title: "B" });
+  const moved = makeTrack({ path: "/m/Forrest Frank/s/a.mp3", title: "A" });
+
+  async function loaded(result: object) {
+    const fake = fakeApi({
+      cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: [old, other], scannedAtMs: 1 })),
+      moveSongs: vi.fn(async () => result as never),
+    });
+    const store = createStore(fake.api);
+    await store.init();
+    return { ...fake, store };
+  }
+
+  it("swaps a moved song for the one read at its new place, in the library and the queue", async () => {
+    const { api, store, listeners } = await loaded({ moved: [{ from: old.path, track: moved }], failed: [] });
+    listeners.queue[0]([old]);
+
+    const out = await store.moveSongs([{ path: old.path, folder: "/m/Forrest Frank/s" }]);
+
+    expect(api.moveSongs).toHaveBeenCalledWith([{ path: old.path, folder: "/m/Forrest Frank/s" }]);
+    expect(out.moved).toBe(1);
+    expect(store.library.value.map((t) => t.path).sort()).toEqual([moved.path, other.path].sort());
+    expect(api.replaceQueueTracks).toHaveBeenCalledWith([{ oldPath: old.path, track: moved }]);
+  });
+
+  it("keeps a song that could not move and reports why", async () => {
+    const { store } = await loaded({ moved: [], failed: [{ path: old.path, error: "a file with that name is already in that folder" }] });
+    const out = await store.moveSongs([{ path: old.path, folder: "/m/Forrest Frank/s" }]);
+    expect(out.moved).toBe(0);
+    expect(out.failed[0].error).toContain("already");
+    expect(store.library.value.map((t) => t.path)).toContain(old.path);
+  });
+});

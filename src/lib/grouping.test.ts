@@ -108,6 +108,13 @@ describe("groupName", () => {
   });
 });
 
+describe("groupName by folder", () => {
+  it("names the folder holding the file, with its parent", () => {
+    expect(groupName(makeTrack({ path: "/Music/Forrest Frank/song.mp3" }), "folder")).toBe("Music/Forrest Frank");
+    expect(groupName(makeTrack({ path: "/song.mp3" }), "folder")).toBe("Unknown folder");
+  });
+});
+
 describe("groupTracks", () => {
   const library = [
     makeTrack({ path: "1", artist: "Abe", album: "X", genre: "Jazz", year: 1994 }),

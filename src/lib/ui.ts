@@ -125,6 +125,7 @@ const djPanel = persistedFlag("mixtape.djPanelOpen", false);
 /** Whether the DJ chat panel is slid out on the right of the large window. */
 export const djPanelOpen = djPanel.flag;
 export const toggleDjPanel = djPanel.toggle;
+export const openDjPanel = () => djPanel.set(true);
 
 export type AppMode = "player" | "discovery" | "settings";
 const appModeChoice = persistedChoice<AppMode>("mixtape.appMode", "player", ["player", "discovery", "settings"]);

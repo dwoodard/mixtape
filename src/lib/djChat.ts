@@ -10,7 +10,7 @@ import type { Track } from "./types";
 import { imports as appImports, store as appStore, type Store } from "./store";
 import { setAccent, setTheme } from "./themes";
 import type { TagWriteResult } from "./types";
-import { appMode, libraryQuery, libraryView, persistedFlag, selectedSongs, setAppMode, showInLibrary, type AppMode, type LibraryView } from "./ui";
+import { appMode, libraryQuery, libraryView, openDjPanel, persistedFlag, selectedSongs, setAppMode, showInLibrary, type AppMode, type LibraryView } from "./ui";
 
 /** What the chat window shows: the person's words, the DJ's words, and each thing the DJ did. */
 export interface ChatLine {
@@ -272,3 +272,13 @@ export function createDjChat(host: DjHost, makeClient: (endpoint: () => string) 
 }
 
 export const djChat = createDjChat(hostFor(appStore, tauriApi, appImports), (endpoint) => createLmClient(endpoint));
+
+/** Opens the DJ panel and puts a request to the DJ in the chat, as if it had been typed there. */
+export function askDj(prompt: string) {
+  openDjPanel();
+  return djChat.send(prompt);
+}
+
+/** The request that has the DJ look up the right tags for one song. It names the song, so it is not read as "the playing one". */
+export const lookUpTagsPrompt = (song: Pick<Track, "title" | "artist">) =>
+  `Look up the right tags for the selected song, “${song.title}”${song.artist ? ` by ${song.artist}` : ""}`;

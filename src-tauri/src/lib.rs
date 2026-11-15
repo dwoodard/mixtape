@@ -13,6 +13,7 @@ pub mod media;
 pub mod player;
 pub mod plays;
 pub mod queue;
+pub mod relocate;
 pub mod reveal;
 pub mod session;
 pub mod spectrum;
@@ -305,6 +306,55 @@ async fn trash_duplicates(
         busy.0.store(false, Ordering::SeqCst);
         e.to_string()
     })
+}
+
+#[derive(Serialize)]
+struct MovedSong {
+    from: String,
+    /// The song as read from its new place.
+    track: Track,
+}
+
+#[derive(Serialize)]
+struct MoveSongsResult {
+    moved: Vec<MovedSong>,
+    failed: Vec<relocate::MoveFailure>,
+}
+
+/// Moves song files into other folders of the library, then re-reads them at their new place.
+/// Nothing is replaced: a name already taken in the target folder is reported, not overwritten.
+#[tauri::command]
+async fn move_songs(cache: State<'_, CacheDir>, moves: Vec<relocate::SongMove>) -> Result<MoveSongsResult, String> {
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = cache.last_root().ok_or("No library is loaded.")?;
+        let report = relocate::move_songs(&moves, &root);
+        let mut moved = Vec::new();
+        let mut failed = report.failed;
+        let mut fresh = Vec::new();
+        for m in report.moved {
+            let path = std::path::Path::new(&m.to);
+            match (track::read_track(path), std::fs::metadata(path)) {
+                (Some(track), Ok(meta)) => {
+                    let modified_ms = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_millis() as u64);
+                    fresh.push(library::CachedTrack { modified_ms, size: meta.len(), track: track.clone() });
+                    moved.push(MovedSong { from: m.from, track });
+                }
+                _ => failed.push(relocate::MoveFailure { path: m.from, error: "moved, but the file could not be read afterwards".into() }),
+            }
+        }
+        let old: Vec<String> = moved.iter().map(|m| m.from.clone()).collect();
+        if let Err(e) = cache.forget_tracks(&root, &old).and_then(|_| cache.add_tracks(&root, fresh)) {
+            eprintln!("could not update the library cache after moving songs: {e}");
+        }
+        Ok(MoveSongsResult { moved, failed })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize)]
@@ -1008,6 +1058,7 @@ pub fn run() {
             write_tags,
             missing_covers,
             trash_duplicates,
+            move_songs,
             removed_count,
             restore_removed,
             cancel_scan,

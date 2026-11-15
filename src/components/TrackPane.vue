@@ -15,6 +15,7 @@ import { sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
 import { shortcutText } from "../lib/shortcuts";
 import { enterAction, isAddClick, optionClickTargets, songChoiceItems } from "../lib/songChoice";
+import { askDj, lookUpTagsPrompt } from "../lib/djChat";
 import { libraryQuery, publishSelection, revealPath, tagEditPaths, withdrawSelection } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import TrackTable from "./TrackTable.vue";
@@ -125,6 +126,11 @@ const menuItems = computed<MenuItem[]>(() => {
       shortcut: shortcutText("editTags"),
     },
     picardMenuItem(songs),
+    {
+      label: "Look up tags in the DJ chat",
+      action: () => void askDj(lookUpTagsPrompt(songs[0])),
+      disabled: songs.length !== 1,
+    },
     { label: "Reveal in Finder", action: () => store.revealInFinder(songs), shortcut: shortcutText("reveal") },
   ];
   if (props.removable) {

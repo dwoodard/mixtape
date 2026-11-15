@@ -96,7 +96,7 @@ export function albumHue(key: string): number {
   return hash % 360;
 }
 
-export type GroupMode = "artist" | "genre" | "year" | "decade";
+export type GroupMode = "artist" | "genre" | "year" | "decade" | "folder";
 export type GroupSort = "name" | "albums" | "tracks";
 export type SortDirection = "asc" | "desc";
 
@@ -107,6 +107,13 @@ export interface Group {
 }
 
 const UNKNOWN = "Unknown";
+
+/** The folder a song's file sits in, as "parent/folder" so same-named folders under different parents stay apart. */
+export function folderOf(track: Track): string {
+  const parts = track.path.split(/[\\/]/).filter(Boolean);
+  parts.pop();
+  return parts.slice(-2).join("/") || `${UNKNOWN} folder`;
+}
 
 /** Which group a track belongs to under `mode`. Tracks missing the tag land in an "Unknown …" group. */
 export function groupName(track: Track, mode: GroupMode): string {
@@ -119,6 +126,8 @@ export function groupName(track: Track, mode: GroupMode): string {
       return track.year !== null ? String(track.year) : `${UNKNOWN} year`;
     case "decade":
       return track.year !== null ? `${Math.floor(track.year / 10) * 10}s` : `${UNKNOWN} decade`;
+    case "folder":
+      return folderOf(track);
   }
 }
 

@@ -162,3 +162,9 @@ export interface FolderRefresh {
   dir: string;
   tracks: Track[];
 }
+
+/** What moving song files did: each moved song as re-read from its new place, and the ones that could not move. */
+export interface MoveSongsResult {
+  moved: { from: string; track: Track }[];
+  failed: { path: string; error: string }[];
+}

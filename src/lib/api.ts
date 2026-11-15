@@ -5,7 +5,7 @@ import type { QueueReplacement } from "./changes";
 import type { TagEditPayload } from "./tagEdit";
 import type { SpectrumFrame } from "./visualizer";
 import type { FolderRefresh, ImportEvent, ImportItem, TagsPatch, ToolStatus } from "./types";
-import type { CachedLibrary, CleanupReport, DuplicatePair, FileCheck, PlayerSnapshot, PlayStat, PlayerState, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
+import type { CachedLibrary, CleanupReport, DuplicatePair, FileCheck, MoveSongsResult, PlayerSnapshot, PlayStat, PlayerState, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
 
 type Unlisten = () => void;
 
@@ -38,6 +38,8 @@ export interface Api {
   /** Opens a link in the browser. Only musicbrainz.org and lrclib.net are allowed. */
   openLink(url: string): Promise<void>;
   trashDuplicates(pairs: DuplicatePair[]): Promise<CleanupReport>;
+  /** Moves song files into other library folders. Each song succeeds or fails on its own. */
+  moveSongs(moves: { path: string; folder: string }[]): Promise<MoveSongsResult>;
   writeTags(paths: string[], edit: TagEditPayload): Promise<TagWriteResult[]>;
   /** Lets the person pick a picture file; its path, or null when they cancel. */
   pickImage(): Promise<string | null>;
@@ -127,6 +129,7 @@ export const tauriApi: Api = {
   revealInFinder: (paths) => invoke("reveal_in_finder", { paths }),
   openLink: (url) => invoke("open_link", { url }),
   trashDuplicates: (pairs) => invoke("trash_duplicates", { pairs }),
+  moveSongs: (moves) => invoke("move_songs", { moves }),
   writeTags: (paths, edit) => invoke("write_tags", { paths, edit }),
   pickImage: async () => {
     const picked = await open({ multiple: false, filters: [{ name: "Pictures", extensions: ["jpg", "jpeg", "png", "webp"] }] });

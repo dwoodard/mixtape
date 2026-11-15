@@ -10,7 +10,7 @@ import { scopeFor, scopeForDirs } from "./refreshScope";
 import { createImports } from "./imports";
 import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
 import { persistedSet, type FlagStorage } from "./ui";
-import type { CleanupReport, DuplicatePair, FileCheck, PlayerState, PlayStat, TagWriteResult, Repeat, ScanProgress, Track, WindowMode } from "./types";
+import type { CleanupReport, MoveSongsResult, DuplicatePair, FileCheck, PlayerState, PlayStat, TagWriteResult, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 /** What the backend returns when a scan was cancelled. */
 const SCAN_CANCELLED = "cancelled";
@@ -367,6 +367,34 @@ export function createStore(api: Api, storage?: FlagStorage) {
   }
 
   /**
+   * Moves song files into other folders of the library. The songs that moved are swapped for the copies read at their
+   * new place, in the list and in the queue (a song that is playing keeps playing). The rest stay and are reported.
+   */
+  async function moveSongs(moves: { path: string; folder: string }[]) {
+    if (moves.length === 0) return { moved: 0, failed: [] as { path: string; error: string }[] };
+    libraryError.value = null;
+    let result: MoveSongsResult;
+    try {
+      result = await api.moveSongs(moves);
+    } catch (e) {
+      libraryError.value = String(e);
+      return { moved: 0, failed: moves.map((m) => ({ path: m.path, error: String(e) })) };
+    }
+    if (result.moved.length > 0) {
+      const gone = new Set(result.moved.map((m) => m.from));
+      library.value = result.moved.reduce((list, m) => insertSorted(list, m.track), library.value.filter((t) => !gone.has(t.path)));
+      const replacements = queue.value.flatMap((q) => {
+        const hit = result.moved.find((m) => m.from === q.path);
+        return hit ? [{ oldPath: q.path, track: hit.track }] : [];
+      });
+      if (replacements.length > 0) await api.replaceQueueTracks(replacements).catch((e) => console.error("could not update the queue:", e));
+      const first = result.moved[0].track;
+      noteChange(result.moved.length === 1 ? `Moved: ${first.title}` : `Moved ${result.moved.length} songs`, first);
+    }
+    return { moved: result.moved.length, failed: result.failed };
+  }
+
+  /**
    * Writes tag edits to the files of `tracks`. Each file succeeds or fails on
    * its own; the ones that succeeded are updated in the library with what was
    * re-read from disk. The per-file outcome is kept in `tagResults`.
@@ -619,6 +647,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
     checkCovers,
     withoutCover,
     trashDuplicates,
+    moveSongs,
     cleanupReport,
     cleaningUp,
     removeUnplayable,
