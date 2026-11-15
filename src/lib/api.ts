@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { QueueReplacement } from "./changes";
 import type { TagEditPayload } from "./tagEdit";
+import type { SpectrumFrame } from "./visualizer";
 import type { FolderRefresh, ImportEvent, ImportItem, TagsPatch, ToolStatus } from "./types";
 import type { CachedLibrary, CleanupReport, DuplicatePair, FileCheck, PlayerSnapshot, PlayStat, PlayerState, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
 
@@ -97,6 +98,8 @@ export interface Api {
   onQueue(cb: (queue: Track[]) => void): Promise<Unlisten>;
   onPosition(cb: (positionMs: number) => void): Promise<Unlisten>;
   onWindowMode(cb: (mode: WindowMode) => void): Promise<Unlisten>;
+  /** Live spectrum of the playing song, about 30 times a second while it plays. */
+  onSpectrum(cb: (frame: SpectrumFrame) => void): Promise<Unlisten>;
   onScanProgress(cb: (progress: ScanProgress) => void): Promise<Unlisten>;
   /** Songs the running scan has read so far, in batches and in no particular order. */
   onScanTracks(cb: (tracks: Track[]) => void): Promise<Unlisten>;
@@ -186,6 +189,7 @@ export const tauriApi: Api = {
   onQueue: (cb) => listen<Track[]>("player-queue", (e) => cb(e.payload)),
   onPosition: (cb) => listen<number>("player-position", (e) => cb(e.payload)),
   onWindowMode: (cb) => listen<WindowMode>("window-mode", (e) => cb(e.payload)),
+  onSpectrum: (cb) => listen<SpectrumFrame>("spectrum", (e) => cb(e.payload)),
   onScanProgress: (cb) => listen<ScanProgress>("scan-progress", (e) => cb(e.payload)),
   onScanTracks: (cb) => listen<Track[]>("scan-tracks", (e) => cb(e.payload)),
   onPlayed: (cb) => listen<{ path: string } & PlayStat>("song-played", (e) => cb(e.payload)),

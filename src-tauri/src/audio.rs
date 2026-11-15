@@ -1,7 +1,9 @@
 use crate::player::{Backend, BackendEvent};
+use crate::spectrum::{Shared, Tap};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer};
 use std::fs::File;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -23,16 +25,24 @@ enum Command {
 /// thread and this handle talks to it over a channel.
 pub struct RodioBackend {
     tx: Sender<Command>,
+    spectrum: Arc<Shared>,
 }
 
 impl RodioBackend {
     pub fn spawn(events: Sender<BackendEvent>) -> Self {
         let (tx, rx) = mpsc::channel();
+        let spectrum = Arc::new(Shared::new());
+        let tap = spectrum.clone();
         thread::Builder::new()
             .name("mixtape-audio".into())
-            .spawn(move || AudioThread::new(events).run(rx))
+            .spawn(move || AudioThread::new(events, tap).run(rx))
             .expect("spawn audio thread");
-        RodioBackend { tx }
+        RodioBackend { tx, spectrum }
+    }
+
+    /// The latest samples of whatever is playing, for the visuals.
+    pub fn spectrum(&self) -> Arc<Shared> {
+        self.spectrum.clone()
     }
 }
 
@@ -76,11 +86,12 @@ struct AudioThread {
     device: Option<MixerDeviceSink>,
     active: Option<Active>,
     volume: f32,
+    spectrum: Arc<Shared>,
 }
 
 impl AudioThread {
-    fn new(events: Sender<BackendEvent>) -> Self {
-        AudioThread { events, device: None, active: None, volume: 1.0 }
+    fn new(events: Sender<BackendEvent>, spectrum: Arc<Shared>) -> Self {
+        AudioThread { events, device: None, active: None, volume: 1.0, spectrum }
     }
 
     fn run(mut self, rx: Receiver<Command>) {
@@ -139,7 +150,7 @@ impl AudioThread {
         let device = self.device.as_ref().expect("device opened above");
         let player = RodioPlayer::connect_new(device.mixer());
         player.set_volume(self.volume);
-        player.append(source);
+        player.append(Tap::new(source, self.spectrum.clone()));
         self.active = Some(Active { player, token });
         Ok(())
     }

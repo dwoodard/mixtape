@@ -83,6 +83,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     onQueue: vi.fn(async (cb) => (listeners.queue.push(cb), unlisten)),
     onPosition: vi.fn(async (cb) => (listeners.position.push(cb), unlisten)),
     onWindowMode: vi.fn(async (cb) => (listeners.mode.push(cb), unlisten)),
+    onSpectrum: vi.fn(async () => unlisten),
     onScanProgress: vi.fn(async (cb) => (listeners.scan.push(cb), unlisten)),
     onScanTracks: vi.fn(async (cb) => (listeners.scanTracks.push(cb), unlisten)),
     onPlayed: vi.fn(async (cb) => (listeners.played.push(cb), unlisten)),

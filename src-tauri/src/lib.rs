@@ -15,6 +15,7 @@ pub mod plays;
 pub mod queue;
 pub mod reveal;
 pub mod session;
+pub mod spectrum;
 pub mod tags;
 pub mod track;
 pub mod weblink;
@@ -850,6 +851,7 @@ fn setup_player(app: &tauri::App) {
 
     let (backend_tx, backend_rx) = mpsc::channel();
     let backend = RodioBackend::spawn(backend_tx);
+    spawn_spectrum(handle.clone(), backend.spectrum());
     let mut new_player = Player::new(Box::new(backend), Box::new(emit));
     if let Some(saved) = restore {
         new_player.restore(saved);
@@ -867,6 +869,23 @@ fn setup_player(app: &tauri::App) {
         .expect("spawn event thread");
 
     app.manage(PlayerHandle(player));
+}
+
+/// Sends the live spectrum of the playing song to the window about 30 times a second.
+/// Nothing is sent while nothing plays.
+fn spawn_spectrum(app: AppHandle, shared: Arc<spectrum::Shared>) {
+    std::thread::Builder::new()
+        .name("mixtape-spectrum".into())
+        .spawn(move || {
+            let mut seen = 0;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(33));
+                if let Some(frame) = shared.frame(&mut seen) {
+                    let _ = app.emit("spectrum", frame);
+                }
+            }
+        })
+        .expect("spawn spectrum thread");
 }
 
 fn setup_config(app: &tauri::App) -> tauri::Result<()> {
@@ -896,6 +915,8 @@ pub fn run() {
                 let response = match worker.cache.serve(&path) {
                     Some(jpeg) => tauri::http::Response::builder()
                         .header("Content-Type", "image/jpeg")
+                        // Lets the window read the picture's pixels to pick the visuals' colors.
+                        .header("Access-Control-Allow-Origin", "*")
                         .header("Cache-Control", "public, max-age=86400")
                         .body(jpeg),
                     None => tauri::http::Response::builder().status(404).body(Vec::new()),

@@ -4,6 +4,7 @@ import { formatClock, formatTime } from "../lib/format";
 import { store } from "../lib/store";
 import { tip } from "../lib/shortcuts";
 import { appMode, djPanelOpen, setAppMode, toggleDjPanel } from "../lib/ui";
+import AudioVisual from "./AudioVisual.vue";
 import CoverArt from "./CoverArt.vue";
 import SeekBar from "./SeekBar.vue";
 import VolumeControl from "./VolumeControl.vue";
@@ -47,6 +48,7 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
           <VolumeControl class="volume" :volume="p.volume" @change="store.setVolume" />
         </div>
       </div>
+      <AudioVisual />
     </div>
 
     <SeekBar class="seek" :position-ms="p.positionMs" :duration-ms="p.durationMs" @seek="store.seek" />
@@ -90,7 +92,7 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
 .clock { flex: 0 0 190px; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; padding: 6px 14px; }
 .digits { font-size: 46px; line-height: 1; font-weight: 200; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
 .total { font-size: 11px; color: var(--lcd-dim); font-variant-numeric: tabular-nums; }
-.info { flex: 1; min-width: 0; padding: 8px 14px; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
+.info { flex: 1 1 0; min-width: 0; padding: 8px 14px; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
 .title { font-size: 15px; font-weight: 600; }
 .sub { font-size: 12px; color: var(--lcd-dim); }
 .volume-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }

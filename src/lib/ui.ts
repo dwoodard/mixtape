@@ -1,5 +1,6 @@
 import { ref } from "vue";
 import type { Track } from "./types";
+import { VISUAL_MODES, type VisualMode } from "./visualizer";
 
 export type LibraryView = "tracks" | "albums" | "artists" | "random" | "duplicates";
 
@@ -103,6 +104,11 @@ export function persistedSet(key: string, storage?: FlagStorage) {
     clear: () => replace(new Set()),
   };
 }
+
+const visualChoice = persistedChoice<VisualMode>("mixtape.visual", "dots", VISUAL_MODES);
+/** Which visual the player deck draws beside the song info. */
+export const visualMode = visualChoice.choice;
+export const setVisualMode = visualChoice.set;
 
 const djPanel = persistedFlag("mixtape.djPanelOpen", false);
 /** Whether the DJ chat panel is slid out on the right of the large window. */
