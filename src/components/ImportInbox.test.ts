@@ -103,3 +103,15 @@ describe("the title links to the video on YouTube", () => {
     expect(html.match(/title="Open the video on YouTube"/g)).toHaveLength(1);
   });
 });
+
+describe("the inbox filter", () => {
+  it("shows a filter box with the songs listed, and no filter box for an empty inbox", async () => {
+    imports.items.value = [song(1, "ready"), song(2, "ready")];
+    const html = await draw([]);
+    expect(html).toContain('id="inbox-filter"');
+    expect(html).toContain("Song 1");
+    expect(html).toContain("Song 2");
+    imports.items.value = [];
+    expect(await draw([])).not.toContain("inbox-filter");
+  });
+});

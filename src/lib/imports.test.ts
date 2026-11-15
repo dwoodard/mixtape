@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Api } from "./api";
-import { autoAddEligible, createImports, findOwned, heldOwnership, isHeld, isLoading, missingKeyFields, needsAttention, parseVideoTitle, rangeBetween, selectWithClick } from "./imports";
+import { autoAddEligible, createImports, filterImports, findOwned, heldOwnership, isHeld, isLoading, missingKeyFields, needsAttention, parseVideoTitle, rangeBetween, selectWithClick } from "./imports";
 import { makeTrack } from "./testing";
 import type { FlagStorage } from "./ui";
 import type { ImportEvent, ImportItem, Track } from "./types";
@@ -536,5 +536,32 @@ describe("heldOwnership", () => {
   });
   it("is null when the library lacks it", () => {
     expect(heldOwnership({ videoTitle: "Primus - DMV" }, lib)).toBeNull();
+  });
+});
+
+describe("filterImports", () => {
+  const proposal = (title: string, artist: string, year = "2021") => ({ ...item().proposal, title, artist, year });
+  const list = [
+    item({ id: 1, proposal: proposal("GOD IS GOOD", "Forrest Frank", "2023") }),
+    item({ id: 2, videoTitle: "Hulvey, Forrest Frank - Altar (Official Music Video)", proposal: proposal("", "") }),
+    item({ id: 3, proposal: proposal("Tommy The Cat", "Primus", "1991") }),
+  ];
+  const ids = (q: string) => filterImports(list, q).map((i) => i.id);
+
+  it("keeps everything for an empty filter", () => {
+    expect(ids("")).toEqual([1, 2, 3]);
+    expect(ids("   ")).toEqual([1, 2, 3]);
+  });
+
+  it("matches words in the title, falling back to the video title when no tags are known yet", () => {
+    expect(ids("forrest")).toEqual([1, 2]);
+    expect(ids("altar")).toEqual([2]);
+  });
+
+  it("understands the library's facet words", () => {
+    expect(ids('artist:"Forrest Frank"')).toEqual([1]);
+    expect(ids("year:1990..1999")).toEqual([3]);
+    expect(ids("artist:primus title:tommy")).toEqual([3]);
+    expect(ids("artist:nobody")).toEqual([]);
   });
 });

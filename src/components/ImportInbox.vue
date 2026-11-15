@@ -1,26 +1,31 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { heldOwnership, isHeld, isYoutubeLink, isLoading, needsAttention } from "../lib/imports";
+import { filterImports, heldOwnership, importTracks, INBOX_FACETS, isHeld, isYoutubeLink, isLoading, needsAttention } from "../lib/imports";
 import { imports, store } from "../lib/store";
-import { showInLibrary } from "../lib/ui";
+import { inboxQuery, showInLibrary } from "../lib/ui";
 import type { ImportItem } from "../lib/types";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
+import FilterBox from "./FilterBox.vue";
 import ImportStage from "./ImportStage.vue";
 
 /** Everything brought in, in the order it arrived. */
 const props = defineProps<{ focus: number | null; picked: ReadonlySet<number> }>();
 const emit = defineEmits<{ focus: [id: number]; toggle: [id: number, shift: boolean] }>();
 
-const ready = computed(() => imports.items.value.filter((i) => i.stage === "ready"));
+/** What the filter box lets through. Everything below (the table and the bulk buttons) works on these. */
+const visible = computed(() => filterImports(imports.items.value, inboxQuery.value));
+const filtering = computed(() => inboxQuery.value.trim() !== "");
+const suggestable = computed(() => importTracks(imports.items.value));
+const ready = computed(() => visible.value.filter((i) => i.stage === "ready"));
 const readyPicked = computed(() => ready.value.filter((i) => props.picked.has(i.id)));
 /** Songs still coming in, and which of them are ticked: these are the ones that can be stopped. */
 /** Songs held back from a playlist, and which of them are ticked: the ones to fetch. */
-const held = computed(() => imports.items.value.filter(isHeld));
+const held = computed(() => visible.value.filter(isHeld));
 /** Which held songs the library already seems to have, by song id. */
 const heldOwned = computed(() => new Map(held.value.map((i) => [i.id, heldOwnership(i, store.library.value)] as const)));
 const heldHave = computed(() => [...heldOwned.value.values()].filter((o) => o?.match === "have").length);
 const heldPicked = computed(() => held.value.filter((i) => props.picked.has(i.id)));
-const loading = computed(() => imports.items.value.filter(isLoading));
+const loading = computed(() => visible.value.filter(isLoading));
 const loadingPicked = computed(() => loading.value.filter((i) => props.picked.has(i.id)));
 const loadingRest = computed(() => loading.value.filter((i) => !props.picked.has(i.id)));
 const ids = (list: ImportItem[]) => list.map((i) => i.id);
@@ -75,7 +80,10 @@ const autoList = computed(() =>
 
 <template>
   <section class="panel inbox" aria-label="Inbox">
-    <h2 class="panel-title">Inbox <small>{{ imports.items.value.length }}</small></h2>
+    <h2 class="panel-title">Inbox <small>{{ filtering ? `${visible.length} of ${imports.items.value.length}` : imports.items.value.length }}</small></h2>
+    <div v-if="imports.items.value.length" class="filter">
+      <FilterBox v-model="inboxQuery" :tracks="suggestable" :facets="INBOX_FACETS" id-prefix="inbox-filter" label="Filter inbox" title="Filter the inbox by words, or by artist:, album:, title:, genre: and year:" />
+    </div>
     <div class="bulk">
       <button :disabled="readyPicked.length === 0" @click="imports.addMany(readyPicked)">
         Add {{ readyPicked.length || "" }} selected
@@ -92,7 +100,7 @@ const autoList = computed(() =>
       <button class="on" :disabled="heldPicked.length === 0" title="Fetch the ticked songs" @click="imports.fetchHeld(heldPicked.map((i) => i.id))">
         Fetch {{ heldPicked.length || "" }} selected
       </button>
-      <button title="Fetch every held song" @click="imports.fetchHeld()">Fetch all {{ held.length }}</button>
+      <button title="Fetch every held song" @click="imports.fetchHeld(filtering ? held.map((i) => i.id) : undefined)">Fetch all {{ held.length }}</button>
       <button :disabled="heldPicked.length === 0" title="Take the ticked held songs out without fetching them" @click="imports.clearHeld(heldPicked.map((i) => i.id))">Skip selected</button>
     </div>
     <!-- Songs still coming in can be stopped: the ticked ones, the rest, or everything. -->
@@ -104,14 +112,14 @@ const autoList = computed(() =>
       <button :disabled="loadingPicked.length === 0 || loadingRest.length === 0" title="Keep the ticked songs and stop all the other loading ones" @click="imports.stopLoading(ids(loadingRest))">
         Stop the rest
       </button>
-      <button class="danger" title="Stop everything that is still loading" @click="imports.stopLoading()">Stop all</button>
+      <button class="danger" title="Stop everything that is still loading" @click="imports.stopLoading(filtering ? ids(loading) : undefined)">Stop all</button>
     </div>
 
     <div class="scroll">
-      <table v-if="imports.items.value.length">
+      <table v-if="visible.length">
         <thead><tr><th /><th>Title</th><th>Artist</th><th>Status</th><th title="How sure we are of the artist and title">Match</th></tr></thead>
         <tbody>
-          <tr v-for="it in imports.items.value" :key="it.id" :class="{ focus: focus === it.id, picked: picked.has(it.id) }" @mousedown="$event.shiftKey && $event.preventDefault()" @click="onRowClick(it, $event)" @contextmenu.prevent="openMenu(it, $event)">
+          <tr v-for="it in visible" :key="it.id" :class="{ focus: focus === it.id, picked: picked.has(it.id) }" @mousedown="$event.shiftKey && $event.preventDefault()" @click="onRowClick(it, $event)" @contextmenu.prevent="openMenu(it, $event)">
             <td><input type="checkbox" :checked="picked.has(it.id)" aria-label="Select (shift-click for a range)" title="Shift-click to select a range" @click.stop="emit('toggle', it.id, $event.shiftKey)" /></td>
             <td class="ellipsis">
               <a v-if="isYoutubeLink(it.url)" class="src-link" :href="it.url" title="Open the video on YouTube" @click.prevent.stop="imports.openSource(it.url)">{{ it.proposal.title || it.videoTitle || it.url }}</a>
@@ -129,6 +137,7 @@ const autoList = computed(() =>
           </tr>
         </tbody>
       </table>
+      <p v-else-if="filtering" class="empty">No songs in the inbox match the filter.</p>
       <p v-else class="empty">Paste a YouTube link in Sources to bring a song in.</p>
     </div>
 
@@ -169,6 +178,7 @@ const autoList = computed(() =>
 <style scoped>
 .inbox { flex: 1; min-width: 0; }
 .panel-title small { color: var(--muted); font-weight: 400; }
+.filter { display: flex; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .bulk { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .notice { margin: 0; padding: 6px 10px; font-size: 12px; background: #4a3a1f; color: #ffd9a0; border-bottom: 1px solid var(--line); }
 .notice .tiny { margin-left: 6px; }

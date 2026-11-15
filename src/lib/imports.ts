@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import type { Api } from "./api";
 import { persistedChoice, persistedFlag, type FlagStorage } from "./ui";
+import { filterTracks } from "./trackList";
 import type { ImportEvent, ImportField, ImportItem, TagsPatch, ToolStatus, Track } from "./types";
 
 /** The tags that must be filled in before a song can be added without a second look. */
@@ -44,6 +45,39 @@ export function heldOwnership(item: Pick<ImportItem, "videoTitle">, library: Tra
   if (exact) return { match: "have", track: exact };
   return sameTitle.length > 0 ? { match: "maybe", track: sameTitle[0] } : null;
 }
+
+/** Facets the inbox filter offers: the ones an imported song has tags for. */
+export const INBOX_FACETS = ["artist", "album", "title", "genre", "year"] as const;
+
+/** An inbox song as a library song, so the library's filter words work on it. Its path is its id. */
+function importAsTrack(item: ImportItem): Track {
+  const year = Number.parseInt(item.proposal.year, 10);
+  return {
+    path: String(item.id),
+    title: item.proposal.title || item.videoTitle || item.url,
+    artist: item.proposal.artist,
+    album: item.proposal.album,
+    albumArtist: item.proposal.albumArtist,
+    trackNumber: null,
+    discNumber: null,
+    year: Number.isFinite(year) ? year : null,
+    genre: item.proposal.genre,
+    durationMs: (item.durationSecs ?? 0) * 1000,
+    addedMs: 0,
+    hasCover: true,
+    hasLyrics: false,
+  };
+}
+
+/** The inbox songs that pass the filter box text (same words as the library filter), in their original order. */
+export function filterImports(items: ImportItem[], query: string): ImportItem[] {
+  if (query.trim() === "") return items;
+  const keep = new Set(filterTracks(items.map(importAsTrack), query).map((t) => t.path));
+  return items.filter((i) => keep.has(String(i.id)));
+}
+
+/** The inbox songs as library songs, for the filter box's suggestions. */
+export const importTracks = (items: ImportItem[]): Track[] => items.map(importAsTrack);
 
 /** Is this a YouTube link the app may open? Files added from disk have no link. */
 export const isYoutubeLink = (url: string): boolean => /^https:\/\/(www\.youtube\.com|music\.youtube\.com|youtu\.be)\//.test(url);

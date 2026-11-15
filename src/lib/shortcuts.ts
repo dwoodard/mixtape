@@ -148,6 +148,11 @@ export function allowedWhileFocused(spec: KeySpec, focus: FocusKind): boolean {
   return true;
 }
 
+/** Whether this key press should take the focus out of the text field it is in, so shortcuts work again: Esc, always. */
+export function leavesFieldOnEscape(key: string, focus: FocusKind): boolean {
+  return key === "Escape" && focus.editable;
+}
+
 /** Mouse gestures on song rows. Shown in the shortcut list; they are not commands, so the palette has no entry for them. */
 export const GESTURES: readonly { title: string; gesture: string }[] = [
   { title: "Choose what to do with a song (play now, play next, add to queue)", gesture: "Double-click" },

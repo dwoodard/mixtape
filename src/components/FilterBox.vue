@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { applySuggestion, joinFilter, removePill, splitFilter, suggest, type FilterPill, type Suggestion } from "../lib/facets";
+import { applySuggestion, joinFilter, removePill, splitFilter, suggest, type FacetName, type FilterPill, type Suggestion } from "../lib/facets";
 import type { Track } from "../lib/types";
 import { setSuggestGroup, setSuggestSort, suggestGroup, suggestSort } from "../lib/ui";
 
@@ -8,7 +8,20 @@ import { setSuggestGroup, setSuggestSort, suggestGroup, suggestSort } from "../l
  * The library filter box. While a word is being typed it offers `facet:` names and then their values, like GitHub's search.
  * A finished `facet:value` word turns into a pill with a close button. The query text stays the single source of truth.
  */
-const props = defineProps<{ tracks: readonly Track[]; title?: string; disabled?: boolean }>();
+const props = withDefaults(
+  defineProps<{
+    tracks: readonly Track[];
+    title?: string;
+    disabled?: boolean;
+    /** The facets offered when typing a new word. Without it, all of them. Typing any facet by hand still works. */
+    facets?: readonly FacetName[];
+    /** Start of the element ids, so two filter boxes on one screen do not clash. */
+    idPrefix?: string;
+    /** What the field is called for screen readers. */
+    label?: string;
+  }>(),
+  { idPrefix: "library-filter", label: "Filter library" },
+);
 const query = defineModel<string>({ required: true });
 
 const input = ref<HTMLInputElement | null>(null);
@@ -21,7 +34,7 @@ const typing = ref(false);
 const parts = computed(() => splitFilter(query.value, typing.value));
 /** The pills and the text field's content as one query, which is what suggestions work on. */
 const full = computed(() => joinFilter(parts.value.pills, parts.value.text, true));
-const suggestions = computed(() => suggest(full.value, full.value.length - parts.value.text.length + caret.value, props.tracks, suggestSort.value, suggestGroup.value));
+const suggestions = computed(() => suggest(full.value, full.value.length - parts.value.text.length + caret.value, props.tracks, suggestSort.value, suggestGroup.value, props.facets));
 const items = computed(() => (open.value ? suggestions.value.items : []));
 /** The list's header: what is being offered. */
 const heading = computed(() => {
@@ -78,7 +91,7 @@ async function choose(item: Suggestion) {
 watch(active, async (i) => {
   if (i < 0) return;
   await nextTick();
-  document.getElementById(`library-filter-facet-${i}`)?.scrollIntoView({ block: "nearest" });
+  document.getElementById(`${props.idPrefix}-facet-${i}`)?.scrollIntoView({ block: "nearest" });
 });
 
 function onKey(event: KeyboardEvent) {
@@ -115,19 +128,19 @@ function onKey(event: KeyboardEvent) {
         <button type="button" class="pill-x" :aria-label="`Remove ${pill.facet} ${pill.value}`" :title="`Remove ${pill.facet}: ${pill.value}`" :disabled="disabled" @mousedown.prevent @click="remove(pill)">×</button>
       </span>
       <input
-        id="library-filter"
+        :id="idPrefix"
         ref="input"
         :value="parts.text"
         class="text"
         :title="title"
         type="search"
         :placeholder="parts.pills.length > 0 ? '' : 'Filter'"
-        aria-label="Filter library"
+        :aria-label="label"
         role="combobox"
         aria-autocomplete="list"
-        aria-controls="library-filter-facets"
+        :aria-controls="`${idPrefix}-facets`"
         :aria-expanded="items.length > 0"
-        :aria-activedescendant="active >= 0 ? `library-filter-facet-${active}` : undefined"
+        :aria-activedescendant="active >= 0 ? `${idPrefix}-facet-${active}` : undefined"
         autocomplete="off"
         spellcheck="false"
         :disabled="disabled"
@@ -153,10 +166,10 @@ function onKey(event: KeyboardEvent) {
       <button type="button" :class="{ on: suggestGroup === 'year' }" :aria-pressed="suggestGroup === 'year'" @mousedown.prevent @click="setSuggestGroup('year')">Year</button>
       <button type="button" :class="{ on: suggestGroup === 'decade' }" :aria-pressed="suggestGroup === 'decade'" @mousedown.prevent @click="setSuggestGroup('decade')">Decade</button>
     </div>
-    <ul id="library-filter-facets" class="facets" role="listbox" aria-label="Filter suggestions">
+    <ul :id="`${idPrefix}-facets`" class="facets" role="listbox" aria-label="Filter suggestions">
       <li
         v-for="(item, i) in items"
-        :id="`library-filter-facet-${i}`"
+        :id="`${idPrefix}-facet-${i}`"
         :key="item.insert"
         role="option"
         :aria-selected="i === active"

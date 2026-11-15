@@ -6,6 +6,7 @@ import {
   findCommand,
   focusKind,
   GESTURES,
+  leavesFieldOnEscape,
   formatKeys,
   matches,
   shortcutText,
@@ -162,5 +163,17 @@ describe("filterCommands", () => {
 
   it("returns nothing for gibberish", () => {
     expect(filterCommands(some, "zzzz")).toEqual([]);
+  });
+});
+
+describe("leavesFieldOnEscape", () => {
+  it("is true for Esc in any text field, and false for other keys or elements", () => {
+    const search = focusKind({ tagName: "INPUT", type: "search" });
+    const textarea = focusKind({ tagName: "TEXTAREA" });
+    const button = focusKind({ tagName: "BUTTON" });
+    expect(leavesFieldOnEscape("Escape", search)).toBe(true);
+    expect(leavesFieldOnEscape("Escape", textarea)).toBe(true);
+    expect(leavesFieldOnEscape("Escape", button)).toBe(false);
+    expect(leavesFieldOnEscape("a", search)).toBe(false);
   });
 });

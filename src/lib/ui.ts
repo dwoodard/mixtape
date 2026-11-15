@@ -137,6 +137,8 @@ export const tagEditPaths = ref<string[]>([]);
 
 /** The library filter box, shared so other parts of the app can set it ("Show in library"). */
 export const libraryQuery = ref("");
+/** What is typed in the Discovery inbox's filter box. */
+export const inboxQuery = ref("");
 
 /** A song to select and scroll to the next time the song list shows. */
 export const revealPath = ref<string | null>(null);

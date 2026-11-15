@@ -218,7 +218,7 @@ function valuesFor(facet: FacetName, tracks: readonly Track[], typed: string, so
  * What to offer for the word under the caret, like GitHub's search box: the facet names while a word is being started,
  * then that facet's values once `name:` is typed. Empty when there is nothing to offer.
  */
-export function suggest(query: string, caret: number, tracks: readonly Track[], sort: SuggestSort = "count", group: SuggestGroup = "year"): Suggestions {
+export function suggest(query: string, caret: number, tracks: readonly Track[], sort: SuggestSort = "count", group: SuggestGroup = "year", allowed?: readonly FacetName[]): Suggestions {
   const token = tokenize(query).find((t) => caret >= t.start && caret <= t.end);
   const start = token?.start ?? caret;
   const end = token?.end ?? caret;
@@ -240,7 +240,7 @@ export function suggest(query: string, caret: number, tracks: readonly Track[], 
   // A word with no colon yet, or nothing typed: offer facet names that start with it. Free text that matches none gets nothing.
   if (raw.includes(":") || raw.startsWith('"')) return none;
   const typed = raw.toLowerCase();
-  const items = FACETS.filter((f) => f.name.startsWith(typed) && f.name !== typed).map((f) => ({
+  const items = FACETS.filter((f) => (!allowed || allowed.includes(f.name)) && f.name.startsWith(typed) && f.name !== typed).map((f) => ({
     label: `${f.name}:`,
     hint: f.hint,
     insert: `${f.name}:`,

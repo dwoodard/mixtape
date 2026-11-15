@@ -5,7 +5,7 @@ import LargeView from "./components/LargeView.vue";
 import ShortcutHelp from "./components/ShortcutHelp.vue";
 import ThinBar from "./components/ThinBar.vue";
 import { createCommands, dispatchKey } from "./lib/commands";
-import { focusKind } from "./lib/shortcuts";
+import { focusKind, leavesFieldOnEscape } from "./lib/shortcuts";
 import { imports, store } from "./lib/store";
 import { helpOpen, paletteOpen } from "./lib/ui";
 
@@ -22,7 +22,14 @@ const onKey = (event: KeyboardEvent) => {
     void store.closeThinPanel();
     return;
   }
-  dispatchKey(event, createCommands(store), focusKind(document.activeElement as HTMLElement | null));
+  const focus = focusKind(document.activeElement as HTMLElement | null);
+  // Esc always leaves a text field, so the shortcuts work again. The field keeps its text (a search box would otherwise clear it).
+  if (!event.isComposing && leavesFieldOnEscape(event.key, focus)) {
+    event.preventDefault();
+    (document.activeElement as HTMLElement).blur();
+    return;
+  }
+  dispatchKey(event, createCommands(store), focus);
 };
 // Clicking away from the app window closes the panel too.
 const onBlur = () => void store.closeThinPanel();
