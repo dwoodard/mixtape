@@ -121,8 +121,6 @@ export interface Suggestions {
   end: number;
 }
 
-const MAX_SUGGESTIONS = 8;
-
 const quoteIfNeeded = (value: string) => (/\s/.test(value) ? `"${value}"` : value);
 
 /** The distinct values of one facet in `tracks`, most common first, that contain `typed`. */
@@ -136,8 +134,8 @@ function valuesFor(facet: FacetName, tracks: readonly Track[], typed: string): s
     if (raw && raw.toLowerCase().includes(typed)) counts.set(raw, (counts.get(raw) ?? 0) + 1);
   }
   const byCount = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], undefined, { sensitivity: "base" }));
-  if (facet === "year") return byCount.map(([v]) => v).sort((a, b) => Number(b) - Number(a)).slice(0, MAX_SUGGESTIONS);
-  return byCount.slice(0, MAX_SUGGESTIONS).map(([v]) => v);
+  if (facet === "year") return byCount.map(([v]) => v).sort((a, b) => Number(b) - Number(a));
+  return byCount.map(([v]) => v);
 }
 
 /**

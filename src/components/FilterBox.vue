@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { applySuggestion, suggest, type Suggestion } from "../lib/facets";
 import type { Track } from "../lib/types";
 
@@ -34,6 +34,13 @@ async function choose(item: Suggestion) {
   // A facet name leaves its values to pick next.
   show();
 }
+
+/** Keep the arrow-key selection in view inside the scrolling list. */
+watch(active, async (i) => {
+  if (i < 0) return;
+  await nextTick();
+  document.getElementById(`library-filter-facet-${i}`)?.scrollIntoView({ block: "nearest" });
+});
 
 function onKey(event: KeyboardEvent) {
   const count = items.value.length;
@@ -100,7 +107,7 @@ function onKey(event: KeyboardEvent) {
 <style scoped>
 .filterbox { position: relative; flex: 1; min-width: 120px; display: flex; }
 .filterbox .field { flex: 1; min-width: 0; }
-.facets { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 240px; max-width: 100%; margin: 0; padding: 4px; list-style: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4); }
+.facets { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 240px; max-width: 100%; max-height: min(320px, 50vh); overflow-y: auto; margin: 0; padding: 4px; list-style: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4); }
 .facets li { display: flex; align-items: baseline; gap: 10px; padding: 4px 8px; border-radius: 5px; cursor: default; }
 .facets li.on { background: var(--accent); color: var(--accent-text); }
 .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

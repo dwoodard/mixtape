@@ -122,10 +122,11 @@ export class Scene {
   }
 
   draw(ctx: CanvasRenderingContext2D, width: number, height: number) {
-    const { palette } = this;
-    // Painting the background a little transparent leaves a short trail behind moving shapes.
-    ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = rgba(palette.background, this.mode === "dots" ? 0.55 : this.mode === "ribbon" ? 0.32 : 1);
+    // The canvas stays transparent so the panel shows through. Fading what is already drawn
+    // (instead of painting a background) leaves a short trail behind moving shapes.
+    if (this.mode === "off") return void ctx.clearRect(0, 0, width, height);
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.fillStyle = `rgba(0, 0, 0, ${this.mode === "dots" ? 0.65 : 0.3})`;
     ctx.fillRect(0, 0, width, height);
     if (this.mode === "ribbon") this.drawRibbon(ctx, width, height);
     else if (this.mode === "dots") this.drawDots(ctx, width, height);
@@ -133,9 +134,10 @@ export class Scene {
 
   private drawDots(ctx: CanvasRenderingContext2D, width: number, height: number) {
     const { palette } = this;
-    const horizon = height * 0.22;
-    const front = height * 0.96;
-    const lift = height * 0.55 * (1 + this.flash * 0.2);
+    // The front rows sit below the bottom edge, so the dots run all the way down even where hills lift them.
+    const horizon = height * 0.12;
+    const front = height * 1.12;
+    const lift = height * 0.4 * (1 + this.flash * 0.2);
     const frac = this.sinceRow / ROW_INTERVAL;
     ctx.globalCompositeOperation = "lighter";
 
@@ -147,15 +149,15 @@ export class Scene {
       const depth = z * z * 0.7 + z * 0.3;
       const scale = 0.3 + 0.7 * z;
       const baseY = horizon + (front - horizon) * depth;
-      const size = 0.45 + 1.25 * z;
+      const size = 0.4 + 1.0 * z;
       const far = Math.min(1, z * 3);
       for (let c = 0; c < COLS; c++) {
         const h = Math.max(row[c], 0);
-        const x = width / 2 + (c / (COLS - 1) - 0.5) * width * 1.15 * scale;
+        const x = width / 2 + (c / (COLS - 1) - 0.5) * width * 1.6 * scale;
         const y = baseY - h * lift * scale;
         if (x < -4 || x > width + 4) continue;
-        const color = mix(palette.accent, palette.highlight, Math.min(1, h * 1.6));
-        ctx.fillStyle = rgba(color, (0.22 + 0.78 * z) * far * (0.55 + Math.min(h, 1) * 0.6));
+        const color = mix(palette.accent, palette.highlight, Math.min(1, h * 1.2) * 0.7);
+        ctx.fillStyle = rgba(color, (0.25 + 0.6 * z) * far * (0.65 + Math.min(h, 1) * 0.35));
         ctx.fillRect(x - size / 2, y - size / 2, size, size);
       }
     }
@@ -184,7 +186,7 @@ export class Scene {
 
     const gradient = ctx.createLinearGradient(0, 0, width, 0);
     const swatches = palette.swatches;
-    swatches.forEach((c, i) => gradient.addColorStop(swatches.length === 1 ? 0 : i / (swatches.length - 1), rgba(mix(c, palette.accent, 0.35), 0.5)));
+    swatches.forEach((c, i) => gradient.addColorStop(swatches.length === 1 ? 0 : i / (swatches.length - 1), rgba(mix(c, palette.accent, 0.35), 0.3)));
 
     ctx.globalCompositeOperation = "lighter";
     ctx.beginPath();
@@ -195,7 +197,7 @@ export class Scene {
     ctx.fill();
 
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = rgba(palette.highlight, 0.55 + this.level * 0.4);
+    ctx.strokeStyle = rgba(palette.highlight, 0.3 + this.level * 0.3);
     ctx.beginPath();
     trace(1);
     ctx.stroke();
