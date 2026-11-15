@@ -49,6 +49,18 @@ describe("buildEdit", () => {
     expect(buildEdit([a], draftFor([a]), "  ")).toEqual({ edit: {}, changes: [], error: null });
   });
 
+  it("sends lyrics only when they differ from what is saved, ignoring line endings and outer blank space", () => {
+    const same = buildEdit([a], draftFor([a]), "", { before: "one\ntwo", after: "\r\n one\r\ntwo \n" });
+    expect(same.edit).toEqual({});
+    const added = buildEdit([a], draftFor([a]), "", { before: "", after: "la\nla\nla" });
+    expect(added.edit).toEqual({ lyrics: "la\nla\nla" });
+    expect(added.changes).toEqual([{ field: "lyrics", label: "Lyrics", from: "(empty)", to: "3 lines" }]);
+    const cleared = buildEdit([a], draftFor([a]), "", { before: "la\nla", after: "  " });
+    expect(cleared.edit).toEqual({ lyrics: "" });
+    expect(cleared.changes[0]).toMatchObject({ from: "2 lines", to: "" });
+    expect(buildEdit([a], draftFor([a]), "").edit).toEqual({});
+  });
+
   it("sends only the fields that changed, with before and after", () => {
     const draft = { ...draftFor([a]), title: "Renamed", genre: "Ska" };
     const { edit, changes, error } = buildEdit([a], draft);

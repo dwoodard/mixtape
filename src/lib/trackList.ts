@@ -29,6 +29,22 @@ export function filterTracks(tracks: Track[], query: string, coverless: Readonly
   });
 }
 
+/**
+ * `query` with `phrase` added, or taken out again when it is already there, so clicking an artist, album or year in the
+ * list narrows the filter and clicking it a second time widens it. Matching ignores case and extra spaces.
+ */
+export function toggleFilterPhrase(query: string, phrase: string): string {
+  const words = phrase.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return query;
+  const have = query.split(/\s+/).filter(Boolean);
+  const lower = have.map((w) => w.toLowerCase());
+  const wanted = words.map((w) => w.toLowerCase());
+  for (let i = 0; i + wanted.length <= lower.length; i++) {
+    if (wanted.every((w, j) => lower[i + j] === w)) return [...have.slice(0, i), ...have.slice(i + wanted.length)].join(" ");
+  }
+  return [...have, ...words].join(" ");
+}
+
 /** A copy of `tracks` in a random order that is the same every time for the same `seed`. */
 export function shuffleTracks(tracks: Track[], seed: number): Track[] {
   let state = seed >>> 0;

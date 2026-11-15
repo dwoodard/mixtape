@@ -45,6 +45,12 @@ describe("TrackTable", () => {
     expect(rows[2]).not.toContain("No cover art");
   });
 
+  it("makes the artist, album and year clickable filters, only when the song has them", async () => {
+    const html = await render({ tracks: [makeTrack({ path: "/a", artist: "Green Day", album: "Dookie", year: 1994 }), makeTrack({ path: "/b", artist: "", album: "", year: null })] });
+    for (const tip of ["Filter by Green Day", "Filter by Dookie", "Filter by 1994"]) expect(html).toContain(tip);
+    expect(html.match(/class="by"/g)).toHaveLength(3);
+  });
+
   it("still shows the songs when no play counts are given", async () => {
     const html = await render();
     expect(html).toContain("Halo");

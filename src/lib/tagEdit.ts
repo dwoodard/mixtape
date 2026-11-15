@@ -40,7 +40,7 @@ export type TagEditPayload = Partial<Record<TagField, string>> & {
 };
 
 export interface TagChange {
-  field: TagField | "coverUrl";
+  field: TagField | "coverUrl" | "lyrics";
   label: string;
   /** The current value, or MULTIPLE when the selected songs differ. */
   from: string;
@@ -81,6 +81,8 @@ export function buildEdit(
   draft: TagDraft,
   /** A link to a picture to embed as the cover art; empty leaves the art alone. */
   coverUrl = "",
+  /** The lyrics saved in a single song's tags, and what the form now holds. Only for one song. */
+  lyrics?: { before: string; after: string },
 ): { edit: TagEditPayload; changes: TagChange[]; error: string | null } {
   const edit: TagEditPayload = {};
   const changes: TagChange[] = [];
@@ -109,8 +111,17 @@ export function buildEdit(
       changes.push({ field: "coverUrl", label: "Cover art", from: "(current art)", to: cover });
     }
   }
+  if (lyrics && tidyLyrics(lyrics.after) !== tidyLyrics(lyrics.before)) {
+    const after = tidyLyrics(lyrics.after);
+    const lines = (text: string) => `${text.split("\n").length} lines`;
+    edit.lyrics = after;
+    changes.push({ field: "lyrics", label: "Lyrics", from: lyrics.before.trim() ? lines(tidyLyrics(lyrics.before)) : "(empty)", to: after ? lines(after) : "" });
+  }
   return { edit, changes, error };
 }
+
+/** Lyrics with one kind of line ending and no blank space at the ends, as the file keeps them. */
+export const tidyLyrics = (text: string): string => text.replace(/\r\n?/g, "\n").trim();
 
 /** `edit` without the fields every one of `tracks` already has: writing those again changes nothing. */
 export function changedFields(edit: TagEditPayload, tracks: Track[]): TagEditPayload {

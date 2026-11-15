@@ -20,6 +20,8 @@ const emit = defineEmits<{
   sort: [key: SortKey];
   /** The line on a row's left edge was clicked: filter the list to songs missing that. */
   gap: [filter: "nocover" | "nolyrics"];
+  /** An artist, album or year was clicked: add it to the filter, or take it out if it is already there. */
+  filter: [text: string];
 }>();
 
 const columns: { key: SortKey; label: string }[] = [
@@ -81,9 +83,9 @@ const columns: { key: SortKey; label: string }[] = [
         </span>
         <span class="num">{{ i + 1 }}.</span>
         <span class="cell ellipsis">{{ t.title }}</span>
-        <span class="cell ellipsis muted">{{ t.artist }}</span>
-        <span class="cell ellipsis muted">{{ t.album }}</span>
-        <span class="cell ellipsis muted">{{ t.year ?? "" }}</span>
+        <span class="cell ellipsis muted"><span v-if="t.artist" class="by" :title="`Filter by ${t.artist}`" @click.stop="emit('filter', t.artist)" @dblclick.stop>{{ t.artist }}</span></span>
+        <span class="cell ellipsis muted"><span v-if="t.album" class="by" :title="`Filter by ${t.album}`" @click.stop="emit('filter', t.album)" @dblclick.stop>{{ t.album }}</span></span>
+        <span class="cell ellipsis muted"><span v-if="t.year" class="by" :title="`Filter by ${t.year}`" @click.stop="emit('filter', String(t.year))" @dblclick.stop>{{ t.year }}</span></span>
         <span class="cell ellipsis muted">{{ formatDate(t.addedMs) }}</span>
         <span class="cell time">{{ formatTime(t.durationMs) }}</span>
         <span
@@ -117,6 +119,9 @@ const columns: { key: SortKey; label: string }[] = [
 .item.current:not(.selected) .cell:first-of-type { color: #6fb1f0; }
 .num { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
+/* Artist, album and year act as filters: click one to narrow the list to it. */
+.by { cursor: pointer; }
+.by:hover { color: var(--text, inherit); text-decoration: underline; text-underline-offset: 2px; }
 .cell { min-width: 0; }
 .time { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .add { width: 22px; height: 22px; padding: 0; line-height: 1; visibility: hidden; border-radius: 50%; }
