@@ -61,11 +61,30 @@ const verdictText = (v: string) => ({ ok: "length is right", lengthWrong: "lengt
 /** Whether the model left the song out: it may omit `id`, or send null or an empty string, and all mean "the song playing now". */
 const noId = (args: Args) => args.id === undefined || args.id === null || args.id === "";
 
-/** The song a tool was asked about: the one with the given id, or the song playing now when none was given. */
+/** Without an id or words these tools act on the song playing, so a song the person named must be given or the wrong one is used. */
+const SONG_PARAMS = {
+  id: int({ description: "Song id from search_library." }),
+  query: str("Words from the title, artist or album of the song the person named. Use this when the person named a song and you have no id."),
+};
+
+const queryOf = (args: Args) => (typeof args.query === "string" ? args.query.trim() : "");
+
+/** The song a tool was asked about: by id, else the first library song matching the words, else the song playing now. */
 function songArg(args: Args, ctx: ToolContext): Track | null | undefined {
-  return noId(args) ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
+  if (!noId(args)) return ctx.session.resolve([args.id]).tracks[0];
+  const words = plain(queryOf(args)).split(/\s+/).map(squash).filter(Boolean);
+  if (words.length === 0) return ctx.host.player().currentTrack;
+  return ctx.host.library().find((t) => {
+    const hay = [t.title, t.artist, t.albumArtist, t.album].map(squash).join(" ");
+    return words.every((w) => hay.includes(w));
+  });
 }
-const noSongMessage = (args: Args) => (noId(args) ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+const noSongMessage = (args: Args) =>
+  !noId(args)
+    ? NO_IDS
+    : queryOf(args)
+      ? `No song in the library matches "${queryOf(args)}".`
+      : "Nothing is playing. Give a song id from search_library or words from its title.";
 
 /** The song's lyrics: from its own tags when saved there (no network), else from the web. Errors come back as { error }. */
 async function findLyrics(track: Track, ctx: ToolContext): Promise<{ lyrics: Lyrics | null; saved: boolean } | { error: string }> {
@@ -461,7 +480,7 @@ export const TOOLS_TABLE: DjTool[] = [
   define(
     "lookup_tags",
     "Look up how a song should be tagged on MusicBrainz (the database Picard uses) by its title and artist. Returns up to 5 matches, best first, each with a confidence 0-100 and reasons. It changes nothing: to apply a match, call edit_tags with its values (the person is asked first). Only apply a match when confidence is high (about 70+) and the reasons include 'same length' or 'same album'; otherwise show the options and ask. Give a song id, or leave it out for the song that is playing. Sends only title and artist.",
-    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    SONG_PARAMS,
     [],
     async (args, ctx) => {
       const track = songArg(args, ctx);
@@ -569,7 +588,7 @@ export const TOOLS_TABLE: DjTool[] = [
   define(
     "check_file",
     "Check a song's file against the library: the length the library holds, the length the file really plays for (read from the audio, not the tags), its size, bitrate and format. Use it when a song's length looks wrong. Give a song id, or leave it out for the song that is playing. Changes nothing.",
-    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    SONG_PARAMS,
     [],
     async (args, ctx) => {
       const track = songArg(args, ctx);
@@ -601,7 +620,7 @@ export const TOOLS_TABLE: DjTool[] = [
   define(
     "fix_length",
     "Correct a song's length in the library when check_file shows it is wrong. It re-checks the file first and only changes the library's record (never the file): the correction lasts while the file is unchanged. Give a song id, or leave it out for the song that is playing.",
-    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    SONG_PARAMS,
     [],
     async (args, ctx) => {
       const track = songArg(args, ctx);
@@ -631,7 +650,7 @@ export const TOOLS_TABLE: DjTool[] = [
   define(
     "get_play_count",
     "How many times a song has been played, and when it was last played. Give a song id, or leave it out for the song that is playing. Counting began when the feature was added, so older listening is not included.",
-    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    SONG_PARAMS,
     [],
     async (args, ctx) => {
       const track = songArg(args, ctx);
@@ -654,7 +673,7 @@ export const TOOLS_TABLE: DjTool[] = [
   define(
     "get_lyrics",
     "Show the lyrics of a song. If they are already saved in the song's own tags they come from there; otherwise they are looked up on the web (LRCLIB), sending only its title, artist, album and length. The card has a button to save them into the song's tags. Give a song id, or leave it out for the song that is playing.",
-    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    SONG_PARAMS,
     [],
     async (args, ctx) => {
       const track = songArg(args, ctx);
@@ -677,7 +696,7 @@ export const TOOLS_TABLE: DjTool[] = [
   define(
     "save_lyrics",
     "Save a song's lyrics into the song's own tags (the lyrics frame in an mp3, the lyrics field in FLAC, M4A and OGG), so any player can show them. Looks them up first if they are not saved yet. This changes the file, so the person is asked first. Give a song id, or leave it out for the song that is playing.",
-    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    SONG_PARAMS,
     [],
     async (args, ctx) => {
       const track = songArg(args, ctx);

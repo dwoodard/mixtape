@@ -814,8 +814,17 @@ describe("a song tool given no id", () => {
     }
   });
 
+  it("finds a named song by its words instead of using the one playing", async () => {
+    const named = library[2];
+    const host = fakeHost({ currentTrack: library[0] });
+    await runTool("get_lyrics", { query: `${named.artist} ${named.title}` }, host, new DjSession());
+    expect(host.fetchLyrics).toHaveBeenCalledWith(named);
+    const none = await runTool("get_lyrics", { query: "zzzz nothing" }, host, new DjSession());
+    expect(none.result).toEqual({ error: 'No song in the library matches "zzzz nothing".' });
+  });
+
   it("still asks for a song when nothing is playing, and rejects an id it never handed out", async () => {
-    expect((await runTool("get_lyrics", { id: null }, fakeHost(), new DjSession())).result).toEqual({ error: "Nothing is playing. Give a song id from search_library." });
+    expect((await runTool("get_lyrics", { id: null }, fakeHost(), new DjSession())).result).toEqual({ error: "Nothing is playing. Give a song id from search_library or words from its title." });
     expect((await runTool("get_lyrics", { id: 99 }, fakeHost(), new DjSession())).result).toHaveProperty("error");
   });
 });

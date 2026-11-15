@@ -6,6 +6,9 @@ import { changedFields, TAG_FIELDS } from "../lib/tagEdit";
 import { musicbrainzUrl, tagEditFromMatch, type ReleaseInfo, type TagMatch } from "../lib/musicbrainz";
 import type { FileCheck, ImportItem, Track } from "../lib/types";
 import { MIN_CONFIDENCE } from "../lib/genreFill";
+import { shortcutText } from "../lib/shortcuts";
+import { tagEditPaths } from "../lib/ui";
+import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import CoverArt from "./CoverArt.vue";
 
 /** What the DJ is talking about, drawn with the controls a person would use on it. Acts through the same host the DJ uses. */
@@ -34,6 +37,23 @@ async function run(key: string, work: () => Promise<string>) {
     busy.value = { ...busy.value, [key]: false };
   }
 }
+
+/** Right-click on a song: the same actions as the song list's menu, for that one song. */
+const menu = ref<{ x: number; y: number; song: Track } | null>(null);
+const menuItems = computed<MenuItem[]>(() => {
+  const song = menu.value?.song;
+  if (!song) return [];
+  const report = (work: Promise<string | null | void>, done: string) => void run("all", async () => (await work) ?? done);
+  return [
+    { label: "Play", action: () => void props.host.playNow(song), shortcut: shortcutText("play") },
+    { label: "Play next", action: () => void props.host.addToQueue([song], "next"), shortcut: shortcutText("playNext") },
+    { label: "Add to queue", action: () => void props.host.addToQueue([song], "end"), shortcut: shortcutText("enqueue") },
+    { label: "Show in the library", action: () => props.host.showInLibrary(song) },
+    { label: "Edit tags…", action: () => (tagEditPaths.value = [song.path]), separated: true, shortcut: shortcutText("editTags") },
+    { label: "Open in MusicBrainz Picard", action: () => report(props.host.openInPicard([song]), "Opened in Picard."), shortcut: shortcutText("picard") },
+    { label: "Reveal in Finder", action: () => report(props.host.reveal([song]), "Shown in Finder."), shortcut: shortcutText("reveal") },
+  ];
+});
 
 // --- tags ---
 const fieldLabel = (key: string) => TAG_FIELDS.find((f) => f.key === key)?.label ?? key;
@@ -220,7 +240,7 @@ const stageText = (i: ImportItem) => (i.stage === "held" ? "Held, not fetched" :
       </header>
       <p v-if="view.note" class="note">{{ view.note }}</p>
       <ul>
-        <li v-for="s in visibleSongs" :key="s.path" class="song" :class="{ current: s.path === view.currentPath }" :aria-current="s.path === view.currentPath ? 'true' : undefined">
+        <li v-for="s in visibleSongs" :key="s.path" class="song" :class="{ current: s.path === view.currentPath }" :aria-current="s.path === view.currentPath ? 'true' : undefined" @contextmenu.prevent="menu = { x: $event.clientX, y: $event.clientY, song: s }">
           <CoverArt class="art" :path="s.path" :hue-key="hue(s)" :title="s.album || s.title" />
           <span class="meta">
             <span class="title ellipsis">{{ s.title }}</span>
@@ -236,6 +256,7 @@ const stageText = (i: ImportItem) => (i.stage === "held" ? "Held, not fetched" :
           </span>
         </li>
       </ul>
+      <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="menu = null" />
       <button v-if="songs.length > SHOWN" class="more" @click="expanded = !expanded">{{ expanded ? "Show fewer" : `Show all ${songs.length}` }}</button>
       <p v-if="outcome.all" class="note">{{ outcome.all }}</p>
     </template>
