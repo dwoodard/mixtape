@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { QueueReplacement } from "./changes";
 import type { TagEditPayload } from "./tagEdit";
 import type { FolderRefresh, ImportEvent, ImportItem, TagsPatch, ToolStatus } from "./types";
-import type { CachedLibrary, CleanupReport, DuplicatePair, PlayerSnapshot, PlayerState, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
+import type { CachedLibrary, CleanupReport, DuplicatePair, PlayerSnapshot, PlayStat, PlayerState, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
 
 type Unlisten = () => void;
 
@@ -17,6 +17,8 @@ export const AUDIO_FILE_EXTENSIONS = [
 /** Everything the UI needs from the Rust side. Faked in tests. */
 export interface Api {
   snapshot(): Promise<PlayerSnapshot>;
+  /** How often each song has been played, by file path. */
+  playStats(): Promise<Record<string, PlayStat>>;
   windowMode(): Promise<WindowMode>;
   pickFolder(): Promise<string | null>;
   scanFolder(path: string): Promise<Track[]>;
@@ -79,10 +81,13 @@ export interface Api {
   onScanProgress(cb: (progress: ScanProgress) => void): Promise<Unlisten>;
   /** Songs the running scan has read so far, in batches and in no particular order. */
   onScanTracks(cb: (tracks: Track[]) => void): Promise<Unlisten>;
+  /** A song has been listened to long enough to count as played. */
+  onPlayed(cb: (played: { path: string } & PlayStat) => void): Promise<Unlisten>;
 }
 
 export const tauriApi: Api = {
   snapshot: () => invoke("player_snapshot"),
+  playStats: () => invoke("play_stats"),
   windowMode: () => invoke("window_mode"),
   pickFolder: async () => {
     const picked = await open({ directory: true, multiple: false });
@@ -152,4 +157,5 @@ export const tauriApi: Api = {
   onWindowMode: (cb) => listen<WindowMode>("window-mode", (e) => cb(e.payload)),
   onScanProgress: (cb) => listen<ScanProgress>("scan-progress", (e) => cb(e.payload)),
   onScanTracks: (cb) => listen<Track[]>("scan-tracks", (e) => cb(e.payload)),
+  onPlayed: (cb) => listen<{ path: string } & PlayStat>("song-played", (e) => cb(e.payload)),
 };

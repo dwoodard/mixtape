@@ -1,6 +1,6 @@
-import type { Track } from "./types";
+import type { PlayStat, Track } from "./types";
 
-export type SortKey = "default" | "title" | "artist" | "album" | "durationMs" | "year" | "addedMs";
+export type SortKey = "default" | "title" | "artist" | "album" | "durationMs" | "year" | "addedMs" | "plays";
 export type SortDirection = "asc" | "desc";
 
 /** Case-insensitive match of every word in `query` against title, artist, album, or genre. */
@@ -36,9 +36,18 @@ export function shuffleTracks(tracks: Track[], seed: number): Track[] {
  * Sorts a copy of `tracks`. "default" keeps the order given (the scanner
  * already sorts by artist, album, disc, track).
  */
-export function sortTracks(tracks: Track[], key: SortKey, direction: SortDirection): Track[] {
+export function sortTracks(
+  tracks: Track[],
+  key: SortKey,
+  direction: SortDirection,
+  plays: Record<string, PlayStat> = {},
+): Track[] {
   if (key === "default") return tracks;
   const sign = direction === "asc" ? 1 : -1;
+  // Songs never played count as 0 plays, and sort with the others, not last.
+  if (key === "plays") {
+    return [...tracks].sort((a, b) => ((plays[a.path]?.count ?? 0) - (plays[b.path]?.count ?? 0)) * sign);
+  }
   return [...tracks].sort((a, b) => {
     const av = a[key];
     const bv = b[key];

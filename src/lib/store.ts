@@ -8,7 +8,7 @@ import { dirName } from "./format";
 import { createImports } from "./imports";
 import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
 import { persistedSet, type FlagStorage } from "./ui";
-import type { CleanupReport, DuplicatePair, PlayerState, TagWriteResult, Repeat, ScanProgress, Track, WindowMode } from "./types";
+import type { CleanupReport, DuplicatePair, PlayerState, PlayStat, TagWriteResult, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 /** What the backend returns when a scan was cancelled. */
 const SCAN_CANCELLED = "cancelled";
@@ -31,6 +31,8 @@ export function createStore(api: Api, storage?: FlagStorage) {
   const player = ref<PlayerState>(emptyState());
   const queue = ref<Track[]>([]);
   const library = ref<Track[]>([]);
+  /** How often each song has been played, by file path. Songs never played are not in it. */
+  const plays = ref<Record<string, PlayStat>>({});
   const folder = ref<string | null>(null);
   /** Folder saved in config.json, or null when none is set. */
   const configuredFolder = ref<string | null>(null);
@@ -94,6 +96,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
       }),
       api.onScanProgress((p) => (scanProgress.value = p)),
       api.onScanTracks(receiveScanned),
+      api.onPlayed(({ path, count, lastPlayedMs }) => (plays.value = { ...plays.value, [path]: { count, lastPlayedMs } })),
     ]);
     // Subscribe first, then read the snapshot, so no update is missed in between.
     const snapshot = await api.snapshot();
@@ -102,6 +105,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
     // Nice-to-have data: a failure here is logged and must not break startup.
     await Promise.all([
       api.musicFolder().then((f) => (configuredFolder.value = f)),
+      api.playStats().then((stats) => (plays.value = { ...stats, ...plays.value })),
       api.removedCount().then((n) => (removedCount.value = n)),
       api.cachedLibrary().then((cached) => {
         // Show the saved library right away; a refresh is up to the user.
@@ -460,6 +464,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
     player,
     queue,
     library,
+    plays,
     folder,
     configuredFolder,
     scannedAt,

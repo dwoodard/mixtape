@@ -33,7 +33,7 @@ const root = ref<HTMLElement | null>(null);
 const confirmingRemove = ref(false);
 const menu = ref<{ x: number; y: number } | null>(null);
 
-const rows = computed(() => sortTracks(props.tracks, sortKey.value, sortDirection.value));
+const rows = computed(() => sortTracks(props.tracks, sortKey.value, sortDirection.value, store.plays.value));
 const order = computed(() => rows.value.map((t) => t.path));
 const chosen = computed(() => selectedTracks(rows.value, selection.value));
 /** What the action buttons apply to: the selection, or everything when nothing is selected. */
@@ -81,7 +81,7 @@ function sortBy(key: SortKey) {
   } else {
     sortKey.value = key;
     // Newest first is what you want when sorting by date added.
-    sortDirection.value = key === "addedMs" ? "desc" : "asc";
+    sortDirection.value = key === "addedMs" || key === "plays" ? "desc" : "asc";
   }
 }
 

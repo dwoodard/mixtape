@@ -13,6 +13,12 @@ export interface Track {
   addedMs: number;
 }
 
+/** How often a song was played and when it was last played (ms since the epoch). */
+export interface PlayStat {
+  count: number;
+  lastPlayedMs: number;
+}
+
 export type PlaybackStatus = "stopped" | "playing" | "paused";
 
 export type Repeat = "off" | "all" | "one";
