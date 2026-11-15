@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { formatAgo } from "../lib/format";
-import { store } from "../lib/store";
+import { imports, store } from "../lib/store";
 import { tip, shortcutText } from "../lib/shortcuts";
 import { filterTracks, shuffleTracks } from "../lib/trackList";
-import { libraryQuery, libraryView, showInLibrary, type LibraryView } from "../lib/ui";
+import { libraryQuery, libraryView, setAppMode, showInLibrary, type LibraryView } from "../lib/ui";
 import AlbumsView from "./AlbumsView.vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import DuplicatesView from "./DuplicatesView.vue";
@@ -35,12 +35,17 @@ function openMenu(event: MouseEvent) {
   const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
   menu.value = { x: box.left, y: box.bottom + 4 };
 }
+/** Pick audio files, then show them in Discovery where they are checked and added. */
+async function addFiles() {
+  if ((await imports.addFiles()) > 0) setAppMode("discovery");
+}
 const menuItems = computed<MenuItem[]>(() => {
   const busy = store.scanning.value;
   const items: MenuItem[] = [];
   if (store.configuredFolder.value) {
     items.push({ label: "Import library", action: () => store.importLibrary(), disabled: busy });
   }
+  items.push({ label: "Add files…", action: addFiles });
   items.push({ label: "Open folder…", action: () => store.openFolder(), disabled: busy, shortcut: shortcutText("openFolder") });
   if (store.folder.value) {
     items.push({

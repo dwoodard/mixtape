@@ -8,6 +8,12 @@ import type { CachedLibrary, CleanupReport, DuplicatePair, PlayerSnapshot, Playe
 
 type Unlisten = () => void;
 
+/** What the file picker offers. Formats the player cannot read directly are converted to mp3 on the way in. */
+export const AUDIO_FILE_EXTENSIONS = [
+  "mp3", "flac", "m4a", "aac", "ogg", "oga", "opus", "wav", "aif", "aiff", "wma", "ape", "wv", "mka", "amr",
+  "webm", "mkv", "mp4", "m4v", "mov", "avi", "3gp",
+];
+
 /** Everything the UI needs from the Rust side. Faked in tests. */
 export interface Api {
   snapshot(): Promise<PlayerSnapshot>;
@@ -27,6 +33,10 @@ export interface Api {
   refreshFolders(dirs: string[]): Promise<FolderRefresh[]>;
   importList(): Promise<ImportItem[]>;
   importAddLink(text: string, format: string): Promise<void>;
+  /** Asks for audio (or video) files on disk. Empty when the dialog is cancelled. */
+  pickAudioFiles(): Promise<string[]>;
+  /** Adds picked files to the import list. Returns how many were new. */
+  importAddFiles(paths: string[]): Promise<number>;
   importSetTags(id: number, patch: TagsPatch): Promise<ImportItem>;
   importAdd(id: number): Promise<Track>;
   importOpenInPicard(id: number): Promise<void>;
@@ -90,6 +100,18 @@ export const tauriApi: Api = {
   refreshFolders: (dirs) => invoke("refresh_folders", { dirs }),
   importList: () => invoke("import_list"),
   importAddLink: (text, format) => invoke("import_add_link", { text, format }),
+  pickAudioFiles: async () => {
+    const picked = await open({
+      multiple: true,
+      directory: false,
+      filters: [
+        { name: "Audio and video files", extensions: AUDIO_FILE_EXTENSIONS },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    return Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
+  },
+  importAddFiles: (paths) => invoke("import_add_files", { paths }),
   importSetTags: (id, patch) => invoke("import_set_tags", { id, patch }),
   importAdd: (id) => invoke("import_add", { id }),
   importOpenInPicard: (id) => invoke("import_open_in_picard", { id }),

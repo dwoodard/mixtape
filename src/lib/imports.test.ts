@@ -41,6 +41,8 @@ function setup(library: Track[] = [], apiOverrides: Partial<Api> = {}, storage =
     importTools: vi.fn(async () => ({ ytDlp: "/y", ffmpeg: "/f", picard: "/p" })),
     importList: vi.fn(async () => []),
     importAddLink: vi.fn(async () => {}),
+    pickAudioFiles: vi.fn(async () => [] as string[]),
+    importAddFiles: vi.fn(async () => 0),
     importSetTags: vi.fn(async (_id: number, patch: object) => item({ proposal: { ...item().proposal, ...patch } })),
     importAdd: vi.fn(async () => makeTrack({ path: "/lib/Artist/Album/Song.mp3" })),
     importOpenInPicard: vi.fn(async () => {}),
@@ -286,5 +288,31 @@ describe("settings", () => {
   it("start safe: mp3, 70%, auto-add off, notice not yet seen", () => {
     const { imports } = setup();
     expect([imports.format.value, imports.threshold.value, imports.autoAdd.value, imports.noticeSeen.value]).toEqual(["mp3", "0.7", false, false]);
+  });
+});
+
+describe("adding files", () => {
+  it("picks files and adds them, returning how many were new", async () => {
+    const { api, imports } = setup([], {
+      pickAudioFiles: vi.fn(async () => ["/m/a.webm", "/m/b.mp3"]),
+      importAddFiles: vi.fn(async () => 2),
+    });
+    expect(await imports.addFiles()).toBe(2);
+    expect(api.importAddFiles).toHaveBeenCalledWith(["/m/a.webm", "/m/b.mp3"]);
+  });
+
+  it("does nothing when the dialog is cancelled", async () => {
+    const { api, imports } = setup();
+    expect(await imports.addFiles()).toBe(0);
+    expect(api.importAddFiles).not.toHaveBeenCalled();
+  });
+
+  it("shows why nothing was added", async () => {
+    const { imports } = setup([], {
+      pickAudioFiles: vi.fn(async () => ["/m/a.mp3"]),
+      importAddFiles: vi.fn(async () => Promise.reject("Nothing new to add")),
+    });
+    expect(await imports.addFiles()).toBe(0);
+    expect(imports.error.value).toBe("Nothing new to add");
   });
 });
