@@ -32,6 +32,20 @@ pub fn reveal(paths: &[String]) -> Result<(), String> {
     }
 }
 
+/// Opens a folder in Finder. Only an absolute path to an existing folder is accepted.
+pub fn open_dir(path: &str) -> Result<(), String> {
+    let dir = Path::new(path);
+    if !dir.is_absolute() || !dir.is_dir() {
+        return Err("That folder can't be found. Is the drive mounted?".into());
+    }
+    let status = Command::new("open").arg("--").arg(dir).status().map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Finder could not open that folder.".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -50,5 +64,12 @@ mod tests {
         assert!(reveal_args(&["-a Calculator.mp3".into()]).is_err());
         // One bad path rejects the whole request.
         assert!(reveal_args(&["/Music/a.mp3".into(), "/etc/hosts".into()]).is_err());
+    }
+
+    #[test]
+    fn opening_a_folder_needs_an_absolute_existing_directory() {
+        assert!(open_dir("relative/dir").is_err());
+        assert!(open_dir("/definitely/not/a/real/folder").is_err());
+        assert!(open_dir(&std::env::temp_dir().join("x.mp3").to_string_lossy()).is_err());
     }
 }

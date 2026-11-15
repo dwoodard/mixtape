@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extraCopies, findDuplicates, newDuplicateGroups, withKeeper, withoutIgnored } from "./duplicates";
+import { extraCopies, findDuplicates, findOriginal, newDuplicateGroups, withKeeper, withoutIgnored } from "./duplicates";
 import { makeTrack } from "./testing";
 
 const song = (path: string, overrides = {}) =>
@@ -129,5 +129,20 @@ describe("choosing which copy to keep", () => {
     const [group] = findDuplicates([song("/m/a.mp3"), song("/m/a 1.mp3")]);
     expect(withKeeper(group, group.keep.path)).toBe(group);
     expect(withKeeper(group, "/nope.mp3")).toBe(group);
+  });
+});
+
+describe("findOriginal", () => {
+  const library = [song("/m/Mud.mp3", { title: "My Name Is Mud" }), song("/n/Mud.mp3")];
+
+  it("finds the song in the same folder that a numbered copy was made from", () => {
+    expect(findOriginal("/m/Mud (2).mp3", library)?.title).toBe("My Name Is Mud");
+    expect(findOriginal("/m/mud copy.mp3", library)?.path).toBe("/m/Mud.mp3");
+  });
+
+  it("ignores other folders, names without a copy marker, and missing originals", () => {
+    expect(findOriginal("/x/Mud (2).mp3", library)).toBeNull();
+    expect(findOriginal("/m/Other.mp3", library)).toBeNull();
+    expect(findOriginal("/m/Gone (2).mp3", library)).toBeNull();
   });
 });

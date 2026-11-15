@@ -146,6 +146,41 @@ impl CacheDir {
         }
     }
 
+    /// Forgets these removals only. The next scan brings those files back.
+    pub fn restore_paths(&self, root: &Path, paths: &[String]) -> std::io::Result<()> {
+        let mut removed = self.removed(root);
+        removed.retain(|p| !paths.contains(p));
+        if removed.is_empty() {
+            return self.clear_removed(root);
+        }
+        self.save_removed(root, &removed)
+    }
+
+    /// Moves a removed song's file to the Trash through `trash` and forgets the
+    /// removal. A file that is already gone is just forgotten. Only paths on the
+    /// removed list are touched, and the removal is kept if the Trash fails.
+    pub fn delete_removed(&self, root: &Path, path: &str, trash: impl Fn(&Path) -> Result<(), String>) -> Result<(), String> {
+        if !self.removed(root).contains(path) {
+            return Err("That song isn't on the removed list.".into());
+        }
+        if Path::new(path).exists() {
+            trash(Path::new(path))?;
+        }
+        self.restore_paths(root, &[path.to_string()]).map_err(|e| e.to_string())
+    }
+
+    /// Forgets removals whose files no longer exist, so the list doesn't keep
+    /// entries for songs that are gone. Returns how many were dropped.
+    pub fn prune_removed(&self, root: &Path, exists: impl Fn(&str) -> bool) -> std::io::Result<usize> {
+        let removed = self.removed(root);
+        let kept: Removed = removed.iter().filter(|p| exists(p)).cloned().collect();
+        let dropped = removed.len() - kept.len();
+        if dropped > 0 {
+            self.save_removed(root, &kept)?;
+        }
+        Ok(dropped)
+    }
+
     pub fn last_root(&self) -> Option<PathBuf> {
         let text = std::fs::read_to_string(self.last_root_path()).ok()?;
         let text = text.trim();
@@ -233,6 +268,78 @@ mod tests {
         store.remove_tracks(root, &["/music/x.mp3".into()]).unwrap();
         store.clear_removed(root).unwrap();
         assert!(store.removed(root).is_empty());
+    }
+
+    #[test]
+    fn restoring_some_paths_keeps_the_other_removals() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheDir(dir.path().to_path_buf());
+        let root = Path::new("/a");
+        store.remove_tracks(root, &["/m/a.mp3".into(), "/m/b.mp3".into()]).unwrap();
+
+        store.restore_paths(root, &["/m/a.mp3".into()]).unwrap();
+        let left = store.removed(root);
+        assert_eq!(left.len(), 1);
+        assert!(left.contains("/m/b.mp3"));
+
+        store.restore_paths(root, &["/m/b.mp3".into()]).unwrap();
+        assert!(store.removed(root).is_empty());
+    }
+
+    #[test]
+    fn deleting_a_removed_song_trashes_the_file_and_forgets_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheDir(dir.path().to_path_buf());
+        let root = Path::new("/a");
+        let file = dir.path().join("x.mp3");
+        std::fs::write(&file, b"x").unwrap();
+        let path = file.to_string_lossy().into_owned();
+        store.remove_tracks(root, &[path.clone(), "/gone/y.mp3".into()]).unwrap();
+
+        let trashed = std::cell::RefCell::new(Vec::new());
+        store.delete_removed(root, &path, |p| Ok(trashed.borrow_mut().push(p.to_path_buf()))).unwrap();
+        assert_eq!(trashed.borrow().len(), 1);
+        assert!(!store.removed(root).contains(&path));
+
+        // A file that's already gone is forgotten without touching the Trash.
+        store.delete_removed(root, "/gone/y.mp3", |_| Err("must not be called".into())).unwrap();
+        assert!(store.removed(root).is_empty());
+    }
+
+    #[test]
+    fn deleting_keeps_the_removal_when_the_trash_fails_and_refuses_other_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheDir(dir.path().to_path_buf());
+        let root = Path::new("/a");
+        let file = dir.path().join("x.mp3");
+        std::fs::write(&file, b"x").unwrap();
+        let path = file.to_string_lossy().into_owned();
+        store.remove_tracks(root, &[path.clone()]).unwrap();
+
+        assert_eq!(store.delete_removed(root, &path, |_| Err("no trash".into())), Err("no trash".into()));
+        assert!(store.removed(root).contains(&path));
+        assert!(file.exists());
+
+        let other = dir.path().join("other.mp3");
+        std::fs::write(&other, b"x").unwrap();
+        let called = std::cell::Cell::new(false);
+        let r = store.delete_removed(root, &other.to_string_lossy(), |_| Ok(called.set(true)));
+        assert!(r.is_err() && !called.get());
+    }
+
+    #[test]
+    fn pruning_forgets_only_removals_whose_files_are_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheDir(dir.path().to_path_buf());
+        let root = Path::new("/a");
+        assert_eq!(store.prune_removed(root, |_| false).unwrap(), 0);
+        store.remove_tracks(root, &["/music/keep.mp3".into(), "/music/gone.mp3".into()]).unwrap();
+
+        assert_eq!(store.prune_removed(root, |p| p.ends_with("keep.mp3")).unwrap(), 1);
+
+        let left = store.removed(root);
+        assert_eq!(left.len(), 1);
+        assert!(left.contains("/music/keep.mp3"));
     }
 
     #[test]

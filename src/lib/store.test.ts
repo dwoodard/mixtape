@@ -59,6 +59,11 @@ function fakeApi(overrides: Partial<Api> = {}) {
     moveSongs: vi.fn(async () => ({ moved: [], failed: [] })),
     removedCount: vi.fn(async () => 0),
     restoreRemoved: vi.fn(async () => {}),
+    pruneRemoved: vi.fn(async () => 0),
+    removedSongs: vi.fn(async () => []),
+    restoreRemovedPaths: vi.fn(async () => {}),
+    deleteRemovedSong: vi.fn(async () => {}),
+    openInFinder: vi.fn(async () => {}),
     enqueueNext: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     dismissError: vi.fn(async () => {}),
@@ -615,6 +620,79 @@ describe("removing from the library", () => {
     expect(api.restoreRemoved).toHaveBeenCalled();
     expect(api.scanFolder).toHaveBeenCalledWith("/m");
     expect(store.removedCount.value).toBe(0);
+  });
+
+  it("pruning drops entries for deleted files and refreshes the count", async () => {
+    const { api, store } = await loaded({
+      removedCount: vi.fn().mockResolvedValueOnce(3).mockResolvedValue(1),
+      pruneRemoved: vi.fn(async () => 2),
+    });
+
+    expect(await store.pruneRemoved()).toBe(2);
+
+    expect(api.pruneRemoved).toHaveBeenCalled();
+    expect(store.removedCount.value).toBe(1);
+  });
+
+  it("restoring some songs forgets only those and rescans", async () => {
+    const { api, store } = await loaded({ removedCount: vi.fn().mockResolvedValueOnce(3).mockResolvedValue(2) });
+
+    await store.restoreRemovedSongs(["/m/a.mp3"]);
+
+    expect(api.restoreRemovedPaths).toHaveBeenCalledWith(["/m/a.mp3"]);
+    expect(api.scanFolder).toHaveBeenCalledWith("/m");
+    expect(store.removedCount.value).toBe(2);
+  });
+
+  it("deleting removed songs refreshes the count without rescanning", async () => {
+    const { api, store } = await loaded({ removedCount: vi.fn().mockResolvedValueOnce(3).mockResolvedValue(1) });
+    const scans = (api.scanFolder as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    expect(await store.deleteRemovedSongs(["/m/a.mp3", "/m/b.mp3"])).toEqual({ deleted: 2, failed: 0 });
+
+    expect(api.deleteRemovedSong).toHaveBeenCalledWith("/m/a.mp3");
+    expect(api.deleteRemovedSong).toHaveBeenCalledWith("/m/b.mp3");
+    expect(store.removedCount.value).toBe(1);
+    expect((api.scanFolder as ReturnType<typeof vi.fn>).mock.calls.length).toBe(scans);
+  });
+
+  it("a failed delete shows the error, keeps going and counts the failure", async () => {
+    const del = vi.fn(async (path: string) => {
+      if (path === "/m/a.mp3") throw "no trash";
+    });
+    const { store } = await loaded({ removedCount: vi.fn(async () => 3), deleteRemovedSong: del });
+
+    expect(await store.deleteRemovedSongs(["/m/a.mp3", "/m/b.mp3"])).toEqual({ deleted: 1, failed: 1 });
+    expect(del).toHaveBeenCalledTimes(2);
+    expect(store.libraryError.value).toBe("no trash");
+  });
+
+  it("restoring no songs does nothing", async () => {
+    const { api, store } = await loaded();
+    await store.restoreRemovedSongs([]);
+    expect(api.restoreRemovedPaths).not.toHaveBeenCalled();
+  });
+
+  it("pruning reports a failure instead of throwing", async () => {
+    const { store } = await loaded({ pruneRemoved: vi.fn(async () => { throw "drive missing"; }) });
+
+    expect(await store.pruneRemoved()).toBeNull();
+    expect(store.libraryError.value).toBe("drive missing");
+  });
+});
+
+describe("open in Finder", () => {
+  it("opens the folder", async () => {
+    const { api } = fakeApi();
+    await createStore(api).openInFinder("/m/a");
+    expect(api.openInFinder).toHaveBeenCalledWith("/m/a");
+  });
+
+  it("shows the error when it can't", async () => {
+    const { api } = fakeApi({ openInFinder: vi.fn(async () => Promise.reject("drive missing")) });
+    const store = createStore(api);
+    await store.openInFinder("/m/a");
+    expect(store.libraryError.value).toBe("drive missing");
   });
 });
 

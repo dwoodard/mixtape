@@ -5,7 +5,7 @@ import type { QueueReplacement } from "./changes";
 import type { TagEditPayload } from "./tagEdit";
 import type { SpectrumFrame } from "./visualizer";
 import type { FolderRefresh, ImportEvent, ImportItem, TagsPatch, ToolStatus } from "./types";
-import type { CachedLibrary, CleanupReport, DuplicatePair, FileCheck, MoveSongsResult, PlayerSnapshot, PlayStat, PlayerState, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
+import type { CachedLibrary, CleanupReport, DuplicatePair, FileCheck, MoveSongsResult, PlayerSnapshot, PlayStat, PlayerState, RemovedSong, Repeat, ScanProgress, TagWriteResult, Track, WindowMode } from "./types";
 
 type Unlisten = () => void;
 
@@ -35,6 +35,8 @@ export interface Api {
   /** Corrects the length the library holds for a song (the file itself is untouched). Returns the updated song. */
   fixLength(path: string, lengthMs: number): Promise<Track>;
   revealInFinder(paths: string[]): Promise<void>;
+  /** Opens a folder in Finder. */
+  openInFinder(path: string): Promise<void>;
   /** Opens a link in the browser. Only musicbrainz.org and lrclib.net are allowed. */
   openLink(url: string): Promise<void>;
   trashDuplicates(pairs: DuplicatePair[]): Promise<CleanupReport>;
@@ -70,6 +72,14 @@ export interface Api {
   onImportEvent(cb: (event: ImportEvent) => void): Promise<Unlisten>;
   removedCount(): Promise<number>;
   restoreRemoved(): Promise<void>;
+  /** The removed songs, sorted by path, with whether each file is gone from disk. */
+  removedSongs(): Promise<RemovedSong[]>;
+  /** Moves a removed song's file to the Trash and forgets the removal. */
+  deleteRemovedSong(path: string): Promise<void>;
+  /** Forgets just these removals. */
+  restoreRemovedPaths(paths: string[]): Promise<void>;
+  /** Forgets removals whose files are gone from disk. Returns how many. */
+  pruneRemoved(): Promise<number>;
   playTracks(tracks: Track[], start: number): Promise<void>;
   enqueue(tracks: Track[]): Promise<void>;
   enqueueNext(tracks: Track[]): Promise<void>;
@@ -127,6 +137,7 @@ export const tauriApi: Api = {
   inspectFile: (path, storedMs) => invoke("inspect_file", { path, storedMs }),
   fixLength: (path, lengthMs) => invoke("fix_length", { path, lengthMs }),
   revealInFinder: (paths) => invoke("reveal_in_finder", { paths }),
+  openInFinder: (path) => invoke("open_in_finder", { path }),
   openLink: (url) => invoke("open_link", { url }),
   trashDuplicates: (pairs) => invoke("trash_duplicates", { pairs }),
   moveSongs: (moves) => invoke("move_songs", { moves }),
@@ -165,6 +176,10 @@ export const tauriApi: Api = {
   onImportEvent: (cb) => listen<ImportEvent>("import-event", (e) => cb(e.payload)),
   removedCount: () => invoke("removed_count"),
   restoreRemoved: () => invoke("restore_removed"),
+  removedSongs: () => invoke("removed_songs"),
+  deleteRemovedSong: (path) => invoke("delete_removed_song", { path }),
+  restoreRemovedPaths: (paths) => invoke("restore_removed_paths", { paths }),
+  pruneRemoved: () => invoke("prune_removed"),
   playTracks: (tracks, start) => invoke("play_tracks", { tracks, start }),
   enqueue: (tracks) => invoke("enqueue", { tracks }),
   enqueueNext: (tracks) => invoke("enqueue_next", { tracks }),

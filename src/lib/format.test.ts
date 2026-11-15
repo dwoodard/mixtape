@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describePlaybackError, dirName, fileName, formatAgo, formatClock, formatTime, isMissingFileError, trackLabel } from "./format";
+import { describePlaybackError, dirName, fileName, formatAgo, formatBytes, formatClock, formatTime, isMissingFileError, trackLabel } from "./format";
 import { makeTrack } from "./testing";
 
 describe("formatTime", () => {
@@ -82,5 +82,14 @@ describe("dirName", () => {
     expect(dirName("/Volumes/music/Korn/Follow the Leader/03 Got the Life.mp3")).toBe("/Volumes/music/Korn/Follow the Leader");
     expect(dirName("/song.mp3")).toBe("");
     expect(dirName("song.mp3")).toBe("");
+  });
+});
+
+describe("formatBytes", () => {
+  it("scales to a readable unit", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(4_400_000)).toBe("4.2 MB");
+    expect(formatBytes(250 * 1024 * 1024)).toBe("250 MB");
   });
 });

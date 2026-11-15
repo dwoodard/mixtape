@@ -577,6 +577,16 @@ export function createStore(api: Api, storage?: FlagStorage) {
     }
   }
 
+  /** Opens a folder in Finder. */
+  async function openInFinder(path: string) {
+    libraryError.value = null;
+    try {
+      await api.openInFinder(path);
+    } catch (e) {
+      libraryError.value = String(e);
+    }
+  }
+
   /** Forgets every removal and rescans so those songs come back. */
   async function restoreRemoved() {
     libraryError.value = null;
@@ -588,6 +598,64 @@ export function createStore(api: Api, storage?: FlagStorage) {
     }
     removedCount.value = 0;
     await refresh();
+  }
+
+  /** The removed songs with whether each file is gone, or an empty list on failure. */
+  async function loadRemovedSongs() {
+    try {
+      return await api.removedSongs();
+    } catch (e) {
+      libraryError.value = String(e);
+      return [];
+    }
+  }
+
+  /** Brings just these removed songs back and rescans so they show up. */
+  async function restoreRemovedSongs(paths: string[]) {
+    if (paths.length === 0) return;
+    libraryError.value = null;
+    try {
+      await api.restoreRemovedPaths(paths);
+    } catch (e) {
+      libraryError.value = String(e);
+      return;
+    }
+    removedCount.value = await api.removedCount();
+    await refresh();
+  }
+
+  /**
+   * Moves removed songs' files to the Trash and forgets them (a file already gone is just forgotten).
+   * Carries on past a failure, shows the last error, and says how many worked.
+   */
+  async function deleteRemovedSongs(paths: string[]): Promise<{ deleted: number; failed: number }> {
+    libraryError.value = null;
+    let deleted = 0;
+    let failed = 0;
+    for (const path of paths) {
+      try {
+        await api.deleteRemovedSong(path);
+        deleted++;
+      } catch (e) {
+        libraryError.value = String(e);
+        failed++;
+      }
+    }
+    removedCount.value = await api.removedCount();
+    return { deleted, failed };
+  }
+
+  /** Forgets removals whose files are gone from disk. Returns how many, or null on failure. */
+  async function pruneRemoved(): Promise<number | null> {
+    libraryError.value = null;
+    try {
+      const dropped = await api.pruneRemoved();
+      removedCount.value = await api.removedCount();
+      return dropped;
+    } catch (e) {
+      libraryError.value = String(e);
+      return null;
+    }
   }
 
   async function cancelScan() {
@@ -653,6 +721,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
     removeUnplayable,
     dismissError: () => api.dismissError(),
     revealInFinder,
+    openInFinder,
     lastChange,
     dismissChange: () => (lastChange.value = null),
     openInPicard,
@@ -660,6 +729,10 @@ export function createStore(api: Api, storage?: FlagStorage) {
     refreshAround,
     picardFolders,
     restoreRemoved,
+    pruneRemoved,
+    loadRemovedSongs,
+    deleteRemovedSongs,
+    restoreRemovedSongs,
     cancelScan,
     toggleMode,
     /** Replaces the queue with `tracks` and starts at `index`. */

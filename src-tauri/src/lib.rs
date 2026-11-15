@@ -33,7 +33,7 @@ use plays::{PlayStat, PlayStore};
 use queue::Repeat;
 use session::{SessionStore, SessionWriter};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
@@ -639,6 +639,14 @@ async fn reveal_in_finder(paths: Vec<String>) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Opens a folder in Finder.
+#[tauri::command]
+async fn open_in_finder(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || reveal::open_dir(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Opens a link in the browser. Only musicbrainz.org and lrclib.net are allowed.
 #[tauri::command]
 async fn open_link(url: String) -> Result<(), String> {
@@ -660,6 +668,76 @@ fn restore_removed(cache: State<CacheDir>) -> Result<(), String> {
         Some(root) => cache.clear_removed(&root).map_err(|e| e.to_string()),
         None => Ok(()),
     }
+}
+
+/// A song the user removed from the library, and what is known about its file.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemovedSong {
+    path: String,
+    missing: bool,
+    /// File size in bytes and when it was last changed (ms since the epoch). Zero when the file is gone.
+    size: u64,
+    modified_ms: u64,
+    /// The song's tags, when the file is there and can be read.
+    track: Option<Track>,
+}
+
+fn describe_removed(path: String) -> RemovedSong {
+    match std::fs::metadata(&path) {
+        Ok(meta) => {
+            let modified_ms = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as u64);
+            let track = track::read_track(Path::new(&path));
+            RemovedSong { path, missing: false, size: meta.len(), modified_ms, track }
+        }
+        Err(_) => RemovedSong { path, missing: true, size: 0, modified_ms: 0, track: None },
+    }
+}
+
+/// The removed songs, sorted by path. Reads each file, so it runs off the main thread.
+#[tauri::command]
+async fn removed_songs(cache: State<'_, CacheDir>) -> Result<Vec<RemovedSong>, String> {
+    let Some(root) = cache.last_root() else { return Ok(Vec::new()) };
+    let mut paths: Vec<String> = cache.removed(&root).into_iter().collect();
+    paths.sort();
+    tauri::async_runtime::spawn_blocking(move || paths.into_iter().map(describe_removed).collect())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Forgets these removals only. The next refresh brings those files back.
+#[tauri::command]
+fn restore_removed_paths(cache: State<CacheDir>, paths: Vec<String>) -> Result<(), String> {
+    match cache.last_root() {
+        Some(root) => cache.restore_paths(&root, &paths).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// Moves a removed song's file to the Trash and forgets the removal. A file
+/// that is already gone is just forgotten.
+#[tauri::command]
+async fn delete_removed_song(cache: State<'_, CacheDir>, path: String) -> Result<(), String> {
+    let Some(root) = cache.last_root() else { return Ok(()) };
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || cache.delete_removed(&root, &path, cleanup::move_to_trash))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Forgets removals whose files are gone from disk. Returns how many. Refuses
+/// when the music folder can't be reached, since every file would look gone.
+#[tauri::command]
+fn prune_removed(cache: State<CacheDir>) -> Result<usize, String> {
+    let Some(root) = cache.last_root() else { return Ok(0) };
+    if !root.is_dir() {
+        return Err("The music folder can't be reached. Check that its drive is connected.".into());
+    }
+    cache.prune_removed(&root, |p| Path::new(p).exists()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1039,6 +1117,7 @@ pub fn run() {
             read_lyrics,
             fix_length,
             reveal_in_finder,
+            open_in_finder,
             open_link,
             import_tools,
             import_list,
@@ -1061,6 +1140,10 @@ pub fn run() {
             move_songs,
             removed_count,
             restore_removed,
+            prune_removed,
+            removed_songs,
+            delete_removed_song,
+            restore_removed_paths,
             cancel_scan,
             music_folder,
             player_snapshot,

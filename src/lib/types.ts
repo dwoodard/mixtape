@@ -168,3 +168,13 @@ export interface MoveSongsResult {
   moved: { from: string; track: Track }[];
   failed: { path: string; error: string }[];
 }
+
+/** A song the user removed from the library. Size and modified time are 0 when the file is gone. */
+export interface RemovedSong {
+  path: string;
+  missing: boolean;
+  size: number;
+  modifiedMs: number;
+  /** The song's tags, when the file is there and readable. */
+  track: Track | null;
+}

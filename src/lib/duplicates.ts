@@ -1,4 +1,4 @@
-import { fileName } from "./format";
+import { dirName, fileName } from "./format";
 import type { Track } from "./types";
 
 export interface DuplicateGroup {
@@ -14,7 +14,7 @@ const COPY_MARKER = /(?:\s\(\d+\)|\s\d+|[-_ ]copy(?:\s\d+)?)$/i;
 const stem = (path: string) => fileName(path).replace(/\.[^.]+$/, "");
 
 /** Same title, artist, album and length (to the second) means the same recording. */
-function keyOf(t: Track): string {
+export function keyOf(t: Track): string {
   const norm = (s: string) => s.trim().toLowerCase();
   return [norm(t.title), norm(t.artist), norm(t.album), Math.round(t.durationMs / 1000)].join("\u0000");
 }
@@ -89,4 +89,17 @@ export function withKeeper(group: DuplicateGroup, path: string): DuplicateGroup 
     keep: chosen,
     extras: [group.keep, ...group.extras.filter((e) => e.path !== path)],
   };
+}
+
+/**
+ * The library song a removed copy was a copy of: same folder, and the same name once
+ * a copy marker (" 1", " (2)", " copy") is taken off. Null when the name has no marker or nothing matches.
+ */
+export function findOriginal(path: string, library: Track[]): Track | null {
+  const name = stem(path);
+  const base = name.replace(COPY_MARKER, "");
+  if (base === name) return null;
+  const dir = dirName(path);
+  const lower = base.toLowerCase();
+  return library.find((t) => dirName(t.path) === dir && stem(t.path).toLowerCase() === lower) ?? null;
 }
