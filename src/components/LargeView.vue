@@ -4,6 +4,7 @@ import { describePlaybackError } from "../lib/format";
 import { store } from "../lib/store";
 import { appMode, tagEditPaths } from "../lib/ui";
 import DiscoveryView from "./DiscoveryView.vue";
+import SettingsView from "./SettingsView.vue";
 import LibraryPanel from "./LibraryPanel.vue";
 import PlayerDeck from "./PlayerDeck.vue";
 import QueueList from "./QueueList.vue";
@@ -36,6 +37,7 @@ const problem = computed(() => {
     </div>
     <p v-else-if="store.player.value.error" class="error" role="alert">{{ store.player.value.error }}</p>
     <DiscoveryView v-if="appMode === 'discovery'" />
+    <SettingsView v-else-if="appMode === 'settings'" />
     <main v-else>
       <LibraryPanel />
       <aside>

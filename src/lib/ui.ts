@@ -104,9 +104,9 @@ export function persistedSet(key: string, storage?: FlagStorage) {
   };
 }
 
-export type AppMode = "player" | "discovery";
-const appModeChoice = persistedChoice<AppMode>("mixtape.appMode", "player", ["player", "discovery"]);
-/** Which workspace the large window shows: playing music, or discovering and fixing it. */
+export type AppMode = "player" | "discovery" | "settings";
+const appModeChoice = persistedChoice<AppMode>("mixtape.appMode", "player", ["player", "discovery", "settings"]);
+/** Which workspace the large window shows: playing music, discovering and fixing it, or settings. */
 export const appMode = appModeChoice.choice;
 export const setAppMode = appModeChoice.set;
 
