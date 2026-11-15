@@ -121,7 +121,7 @@ const upNext = computed(() => {
 .drop { flex: none; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--panel-3); border: 1px solid var(--line); }
 .drop-body { flex: 1; min-height: 0; display: flex; }
 .drop-body > :deep(*) { flex: 1; min-width: 0; }
-.views { flex: none; display: flex; gap: 2px; padding: 2px 4px; background: var(--panel); }
+.views { flex: none; display: flex; align-items: center; gap: 2px; height: 22px; box-sizing: border-box; padding: 0 4px; background: var(--panel); }
 .views button { height: 18px; padding: 0 10px; font-size: 10px; line-height: 16px; }
 .dj-btn { width: auto; padding: 0 5px; font-size: 9px; font-weight: 700; }
 .drop.up { border-bottom: none; }

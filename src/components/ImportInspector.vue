@@ -107,6 +107,7 @@ const alternatives = (item: ImportItem, key: ImportField) => (item.alternatives[
       <p v-if="item.stage === 'added' && item.addedPath" class="added">
         Added to<br /><code>{{ item.addedPath }}</code><br />
         <button class="tiny" @click="showInLibrary({ path: item.addedPath, title: item.proposal.title })">Show in library</button>
+        <button class="tiny" title="Show the file in Finder" @click="imports.reveal(item.id)">Reveal in Finder</button>
       </p>
       <p v-else-if="item.destination" class="muted">
         Will be added to<br /><code>{{ libraryName ? `${libraryName}/` : "" }}{{ item.destination }}</code>
@@ -115,11 +116,13 @@ const alternatives = (item: ImportItem, key: ImportField) => (item.alternatives[
       <p v-if="imports.itemErrors.value[item.id]" class="err" role="alert">{{ imports.itemErrors.value[item.id] }}</p>
 
       <div class="row">
-        <button v-if="item.stage !== 'added'" :disabled="item.stage !== 'ready'" class="go" @click="imports.add(item.id)">
+        <button v-if="item.stage === 'held'" class="go" title="Download this song" @click="imports.fetchHeld([item.id])">Fetch</button>
+        <button v-else-if="item.stage !== 'added'" :disabled="item.stage !== 'ready'" class="go" @click="imports.add(item.id, !!owned)">
           {{ owned ? "Add anyway" : "Add to library" }}
         </button>
         <button v-else @click="imports.undo(item.id)">Undo add</button>
-        <button @click="imports.remove(item.id)">{{ item.stage === "failed" ? "Clear" : "Remove" }}</button>
+        <button v-if="item.stage === 'ready'" title="Show the fetched file in Finder" @click="imports.reveal(item.id)">Reveal in Finder</button>
+        <button @click="imports.remove(item.id)">{{ item.stage === "failed" ? "Clear" : item.stage === "held" ? "Skip" : "Remove" }}</button>
       </div>
     </div>
   </aside>

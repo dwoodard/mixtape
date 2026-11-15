@@ -28,6 +28,8 @@ export interface Api {
   cachedLibrary(): Promise<CachedLibrary | null>;
   removeFromLibrary(paths: string[]): Promise<void>;
   /** Compares a song's file with the length the library holds for it. */
+  /** The lyrics saved in a song's tags, or null when it has none. */
+  readLyrics(path: string): Promise<string | null>;
   inspectFile(path: string, storedMs: number): Promise<FileCheck>;
   /** Corrects the length the library holds for a song (the file itself is untouched). Returns the updated song. */
   fixLength(path: string, lengthMs: number): Promise<Track>;
@@ -46,8 +48,15 @@ export interface Api {
   /** Adds picked files to the import list. Returns how many were new. */
   importAddFiles(paths: string[]): Promise<number>;
   importSetTags(id: number, patch: TagsPatch): Promise<ImportItem>;
-  importAdd(id: number): Promise<Track>;
+  /** Adds a ready song to the library. `allowCopy` keeps a second copy when the same song is already at that place. */
+  importAdd(id: number, allowCopy?: boolean): Promise<Track>;
   importOpenInPicard(id: number): Promise<void>;
+  /** Shows an imported song's file in Finder: the library copy once added, the fetched copy while it waits for review. */
+  importReveal(id: number): Promise<void>;
+  /** Stops songs that are still loading and takes them out of the list: these ids, or all of them when null. Returns how many. */
+  importStop(ids: number[] | null): Promise<number>;
+  /** Starts fetching songs held back from a playlist: these ids, or all of them when null. Returns how many. */
+  importFetch(ids: number[] | null): Promise<number>;
   importCancelPicard(id: number): Promise<void>;
   importUndo(id: number): Promise<string>;
   importRemove(id: number): Promise<void>;
@@ -105,6 +114,7 @@ export const tauriApi: Api = {
   cancelScan: () => invoke("cancel_scan"),
   cachedLibrary: () => invoke("cached_library"),
   removeFromLibrary: (paths) => invoke("remove_from_library", { paths }),
+  readLyrics: (path) => invoke("read_lyrics", { path }),
   inspectFile: (path, storedMs) => invoke("inspect_file", { path, storedMs }),
   fixLength: (path, lengthMs) => invoke("fix_length", { path, lengthMs }),
   revealInFinder: (paths) => invoke("reveal_in_finder", { paths }),
@@ -129,8 +139,11 @@ export const tauriApi: Api = {
   },
   importAddFiles: (paths) => invoke("import_add_files", { paths }),
   importSetTags: (id, patch) => invoke("import_set_tags", { id, patch }),
-  importAdd: (id) => invoke("import_add", { id }),
+  importAdd: (id, allowCopy) => invoke("import_add", { id, allowCopy }),
   importOpenInPicard: (id) => invoke("import_open_in_picard", { id }),
+  importReveal: (id) => invoke("import_reveal", { id }),
+  importStop: (ids) => invoke("import_stop", { ids }),
+  importFetch: (ids) => invoke("import_fetch", { ids }),
   importCancelPicard: (id) => invoke("import_cancel_picard", { id }),
   importUndo: (id) => invoke("import_undo", { id }),
   importRemove: (id) => invoke("import_remove", { id }),

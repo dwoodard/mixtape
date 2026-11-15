@@ -5,6 +5,7 @@ import { changedTracks, queueReplacements } from "./changes";
 import { DJ_PANEL_HEIGHT, DJ_PANEL_MIN_WIDTH, panelWantedHeight } from "./thinBar";
 import { applyFolderRefresh, inScanOrder, insertSorted } from "./librarySort";
 import { dirName } from "./format";
+import { scopeFor, scopeForDirs } from "./refreshScope";
 import { createImports } from "./imports";
 import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
 import { persistedSet, type FlagStorage } from "./ui";
@@ -412,6 +413,8 @@ export function createStore(api: Api, storage?: FlagStorage) {
     library.value = insertSorted(library.value, track);
     noteChange(`Added: ${track.artist ? `${track.artist} – ` : ""}${track.title}`, track);
     void reconcileQueue([track]);
+    // What is next to it in its folder may not match the saved library (a copy, a file Picard renamed): look at that folder.
+    refreshAround([track.path], { widen: false });
   }
 
   /** A song whose file was removed (an undone import): drops it from the list. */
@@ -440,29 +443,62 @@ export function createStore(api: Api, storage?: FlagStorage) {
   }
 
   /**
-   * Re-checks the folders of songs sent to Picard and updates the library with
-   * what changed there (cheap: only changed files are re-read). Forgets
-   * folders that were sent long ago.
+   * Re-checks just these folders of the library (never the whole of it) and updates the list with what changed there:
+   * songs that are new, renamed or gone. Cheap: only changed files are re-read. The words for the change come from `say`.
+   */
+  async function refreshDirs(dirs: string[], say: (changed: Track[]) => string) {
+    if (dirs.length === 0) return;
+    try {
+      const results = await api.refreshFolders(dirs);
+      const before = library.value;
+      library.value = applyFolderRefresh(before, results);
+      const changed = changedTracks(before, library.value);
+      if (changed.length > 0) {
+        noteChange(say(changed), changed[0]);
+        void reconcileQueue(changed);
+      }
+      // A copy found next to the original is worth saying so, as it is after a full scan.
+      announceDuplicates();
+    } catch (e) {
+      libraryError.value = String(e);
+    }
+  }
+
+  /** Songs touched since the last targeted refresh, waiting a moment so adding many songs checks each folder once. */
+  let pendingRefresh: { paths: Set<string>; widen: boolean } | null = null;
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const REFRESH_DELAY_MS = 1200;
+
+  /**
+   * Re-checks the folders around these songs: just the album folder, or with `widen` the artist folder (for when
+   * something may have renamed or moved them). Batched, so a bulk add refreshes each folder once.
+   */
+  function refreshAround(paths: string[], { widen }: { widen: boolean }) {
+    pendingRefresh ??= { paths: new Set(), widen: false };
+    for (const p of paths) pendingRefresh.paths.add(p);
+    pendingRefresh.widen ||= widen;
+    refreshTimer ??= setTimeout(() => {
+      const job = pendingRefresh;
+      pendingRefresh = null;
+      refreshTimer = null;
+      if (!job) return;
+      const dirs = scopeFor(folder.value, [...job.paths], job.widen);
+      void refreshDirs(dirs, (changed) => (changed.length === 1 ? `Updated from disk: ${changed[0].title}` : `Updated ${changed.length} songs from disk`));
+    }, REFRESH_DELAY_MS);
+  }
+
+  /**
+   * Re-checks the folders of songs sent to Picard and updates the library with what changed there. Picard saves tags in
+   * place and may rename the files, and a rename can move a song to another album folder, so the artist folders are
+   * checked, not just the albums. Forgets folders that were sent long ago.
    */
   async function refreshPicardFolders(now = Date.now()) {
     const fresh = Object.entries(picardFolders.value).filter(([, at]) => now - at <= PICARD_WINDOW_MS);
     picardFolders.value = Object.fromEntries(fresh);
     if (fresh.length === 0) return;
-    try {
-      const results = await api.refreshFolders(fresh.map(([dir]) => dir));
-      const before = library.value;
-      library.value = applyFolderRefresh(before, results);
-      const changed = changedTracks(before, library.value);
-      if (changed.length > 0) {
-        noteChange(
-          changed.length === 1 ? `Updated from Picard: ${changed[0].title}` : `Updated ${changed.length} songs from Picard`,
-          changed[0],
-        );
-        void reconcileQueue(changed);
-      }
-    } catch (e) {
-      libraryError.value = String(e);
-    }
+    await refreshDirs(scopeForDirs(folder.value, fresh.map(([dir]) => dir), true), (changed) =>
+      changed.length === 1 ? `Updated from Picard: ${changed[0].title}` : `Updated ${changed.length} songs from Picard`,
+    );
   }
 
   /** Shows the songs' files in Finder. */
@@ -551,6 +587,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
     dismissChange: () => (lastChange.value = null),
     openInPicard,
     refreshPicardFolders,
+    refreshAround,
     picardFolders,
     restoreRemoved,
     cancelScan,

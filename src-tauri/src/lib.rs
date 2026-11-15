@@ -219,6 +219,12 @@ async fn cached_library(
     .map_err(|e| e.to_string())
 }
 
+/// The lyrics saved in a song's tags, if it has any.
+#[tauri::command]
+async fn read_lyrics(path: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || tags::read_lyrics(std::path::Path::new(&path))).await.ok().flatten()
+}
+
 /// Compares a song's file with the length the library holds for it.
 #[tauri::command]
 async fn inspect_file(path: String, stored_ms: u64) -> Result<filecheck::FileCheck, String> {
@@ -394,6 +400,27 @@ fn import_open_in_picard(imports: State<ImportsHandle>, id: u64) -> Result<(), S
     imports.0.open_in_picard(id)
 }
 
+/// Starts fetching songs held back from a playlist: the given ones, or all when none are given. Returns how many.
+#[tauri::command]
+fn import_fetch(imports: State<ImportsHandle>, ids: Option<Vec<u64>>) -> usize {
+    imports.0.fetch_held(ids.as_deref())
+}
+
+/// Stops songs that are still loading: the given ones, or all of them when none are given. Returns how many.
+#[tauri::command]
+fn import_stop(imports: State<ImportsHandle>, ids: Option<Vec<u64>>) -> usize {
+    imports.0.stop_loading(ids.as_deref())
+}
+
+/// Shows an imported song's file in Finder: the library copy once added, the fetched copy while it waits for review.
+#[tauri::command]
+async fn import_reveal(imports: State<'_, ImportsHandle>, id: u64) -> Result<(), String> {
+    let file = imports.0.file_of(id)?.to_string_lossy().into_owned();
+    tauri::async_runtime::spawn_blocking(move || reveal::reveal(&[file]))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Stops waiting for Picard and takes the song out of it.
 #[tauri::command]
 fn import_cancel_picard(imports: State<ImportsHandle>, id: u64) -> Result<(), String> {
@@ -419,6 +446,7 @@ async fn import_add(
     cache: State<'_, CacheDir>,
     config: State<'_, Config>,
     id: u64,
+    allow_copy: Option<bool>,
 ) -> Result<Track, String> {
     let root = library_root(&cache, &config)?;
     let (staged, proposal, retag) = imports.0.take_for_add(id)?;
@@ -428,7 +456,7 @@ async fn import_add(
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         // Follow the folders the library already has.
         let library = cache.load(&root_for_job).map(|c| c.tracks).unwrap_or_default();
-        let added = importer::add_to_library(&staged, &proposal, &root_for_job, &library, retag)?;
+        let added = importer::add_to_library(&staged, &proposal, &root_for_job, &library, retag, allow_copy.unwrap_or(false))?;
         if let Ok(meta) = std::fs::metadata(&added.path) {
             let modified_ms = meta
                 .modified()
@@ -517,23 +545,14 @@ async fn refresh_folders(
         let mut saved = cache.load(&root).ok_or("The library hasn't been saved yet. Use Refresh first.")?;
         let known = saved.known();
         let removed = cache.removed(&root);
-        let never = AtomicBool::new(false);
-        let mut results = Vec::new();
-        for dir in dirs {
-            let dir = PathBuf::from(dir);
-            // Only folders inside the library, and only ones that exist.
-            if !dir.starts_with(&root) || !dir.is_dir() {
-                continue;
-            }
-            let scanned = library::scan_folder_with(&dir, &never, &known, &removed, |_| {}).unwrap_or_default();
-            results.push(FolderRefresh {
-                dir: dir.to_string_lossy().into_owned(),
-                tracks: scanned.iter().map(|c| c.track.clone()).collect(),
-            });
-            library::merge_folder(&mut saved.tracks, &dir, scanned);
-        }
+        let dirs: Vec<PathBuf> = dirs.into_iter().map(PathBuf::from).collect();
+        // Only the folders asked for, never the whole library; one that has gone drops what the library had in it.
+        let found = library::refresh_dirs(&root, &mut saved.tracks, &dirs, &known, &removed)?;
         cache.save(&saved).map_err(|e| e.to_string())?;
-        Ok(results)
+        Ok(found
+            .into_iter()
+            .map(|(dir, tracks)| FolderRefresh { dir: dir.to_string_lossy().into_owned(), tracks: tracks.into_iter().map(|c| c.track).collect() })
+            .collect())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -924,6 +943,7 @@ pub fn run() {
             cached_library,
             remove_from_library,
             inspect_file,
+            read_lyrics,
             fix_length,
             reveal_in_finder,
             open_link,
@@ -933,6 +953,9 @@ pub fn run() {
             import_add_files,
             import_set_tags,
             import_open_in_picard,
+            import_reveal,
+            import_stop,
+            import_fetch,
             picard_open_files,
             refresh_folders,
             import_cancel_picard,

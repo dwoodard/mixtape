@@ -171,6 +171,36 @@ fn modified_ms(meta: &std::fs::Metadata) -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// Re-checks some folders of the library and brings `cached` up to date with them, without scanning anything else.
+/// Returns each folder with the songs found in it now.
+///
+/// - A folder that is no longer there (renamed or moved, for example by Picard) has its songs dropped from `cached`: they
+///   are not where they were. Where they went is found by refreshing a folder above it.
+/// - A folder outside `root`, or `root` itself, is ignored: this is for small, targeted checks, never a full rescan.
+/// - When `root` itself is missing nothing is touched, so an unmounted drive cannot wipe the library.
+pub fn refresh_dirs(
+    root: &Path,
+    cached: &mut Vec<CachedTrack>,
+    dirs: &[std::path::PathBuf],
+    known: &Known,
+    removed: &Removed,
+) -> Result<Vec<(std::path::PathBuf, Vec<CachedTrack>)>, String> {
+    if !root.is_dir() {
+        return Err(format!("{} is not available. Is the drive mounted?", root.display()));
+    }
+    let never = AtomicBool::new(false);
+    let mut out = Vec::new();
+    for dir in dirs {
+        if !dir.starts_with(root) || dir == root {
+            continue;
+        }
+        let scanned = if dir.is_dir() { scan_folder_with(dir, &never, known, removed, |_| {}).unwrap_or_default() } else { Vec::new() };
+        merge_folder(cached, dir, scanned.clone());
+        out.push((dir.clone(), scanned));
+    }
+    Ok(out)
+}
+
 /// Replaces everything in `cache` under `dir` with `scanned` (a fresh scan of
 /// that folder): songs that were renamed, retagged or deleted there are
 /// updated or dropped, new ones are added, and the rest of the library is untouched.
@@ -415,5 +445,78 @@ mod tests {
     #[test]
     fn missing_folder_yields_no_tracks() {
         assert!(scan_folder(Path::new("/definitely/not/here")).is_empty());
+    }
+
+    fn song(path: &Path) -> CachedTrack {
+        crate::track::test_support::write_wav(path, 0.2);
+        CachedTrack { modified_ms: 0, size: 0, track: read_track(path).unwrap() }
+    }
+
+    /// root/Primus/Old Album/a.wav, root/Primus/Other/b.wav, root/Zed/z.wav, all in the saved list.
+    fn library_on_disk() -> (tempfile::TempDir, Vec<CachedTrack>) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cached = Vec::new();
+        for rel in ["Primus/Old Album/a.wav", "Primus/Other/b.wav", "Zed/z.wav"] {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            cached.push(song(&path));
+        }
+        (dir, cached)
+    }
+
+    #[test]
+    fn a_folder_that_is_gone_loses_its_songs_and_the_artist_folder_finds_where_they_went() {
+        let (dir, mut cached) = library_on_disk();
+        let root = dir.path();
+        // Picard renames the album folder.
+        std::fs::rename(root.join("Primus/Old Album"), root.join("Primus/New Album")).unwrap();
+
+        // The old folder alone: its songs are dropped (they are not there), nothing new is found.
+        let old = [root.join("Primus/Old Album")];
+        let found = refresh_dirs(root, &mut cached, &old, &Known::new(), &Removed::new()).unwrap();
+        assert!(found[0].1.is_empty());
+        assert!(!cached.iter().any(|c| c.track.path.contains("Old Album")));
+
+        // The artist folder: finds the renamed folder and its song, and leaves the other artist alone.
+        let artist = [root.join("Primus")];
+        let found = refresh_dirs(root, &mut cached, &artist, &Known::new(), &Removed::new()).unwrap();
+        assert_eq!(found[0].1.len(), 2);
+        let paths: Vec<&str> = cached.iter().map(|c| c.track.path.as_str()).collect();
+        assert!(paths.iter().any(|p| p.ends_with("Primus/New Album/a.wav")));
+        assert!(paths.iter().any(|p| p.ends_with("Zed/z.wav")));
+        assert_eq!(cached.len(), 3);
+    }
+
+    #[test]
+    fn a_song_added_next_to_the_saved_ones_is_found_by_refreshing_only_its_folder() {
+        let (dir, mut cached) = library_on_disk();
+        let root = dir.path();
+        crate::track::test_support::write_wav(&root.join("Primus/Other/new.wav"), 0.2);
+        // And something unsaved elsewhere, which this refresh must not look at.
+        crate::track::test_support::write_wav(&root.join("Zed/unsaved.wav"), 0.2);
+
+        refresh_dirs(root, &mut cached, &[root.join("Primus/Other")], &Known::new(), &Removed::new()).unwrap();
+
+        assert!(cached.iter().any(|c| c.track.path.ends_with("Primus/Other/new.wav")));
+        assert!(!cached.iter().any(|c| c.track.path.ends_with("unsaved.wav")), "only the asked-for folder was scanned");
+        assert_eq!(cached.len(), 4);
+    }
+
+    #[test]
+    fn the_library_root_and_outside_folders_are_ignored_so_this_is_never_a_full_rescan() {
+        let (dir, mut cached) = library_on_disk();
+        let outside = tempfile::tempdir().unwrap();
+        let found = refresh_dirs(dir.path(), &mut cached, &[dir.path().to_path_buf(), outside.path().to_path_buf()], &Known::new(), &Removed::new()).unwrap();
+        assert!(found.is_empty());
+        assert_eq!(cached.len(), 3);
+    }
+
+    #[test]
+    fn an_unavailable_library_is_an_error_and_nothing_is_dropped() {
+        let (_dir, mut cached) = library_on_disk();
+        let missing = Path::new("/Volumes/not-mounted/Music");
+        let err = refresh_dirs(missing, &mut cached, &[missing.join("Primus")], &Known::new(), &Removed::new()).unwrap_err();
+        assert!(err.contains("Is the drive mounted?"));
+        assert_eq!(cached.len(), 3);
     }
 }

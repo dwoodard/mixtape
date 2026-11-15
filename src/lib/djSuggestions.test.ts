@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DjHost } from "./dj";
+import { createGenreFill } from "./genreFill";
 import type { DuplicateGroup } from "./duplicates";
 import { MAX_SUGGESTIONS, suggestionsFor } from "./djSuggestions";
 import { makePlayerState, makeTrack } from "./testing";
@@ -14,6 +15,7 @@ function host(over: { player?: Partial<PlayerState>; queue?: Track[]; imports?: 
     imports: () => (over.imports ?? []) as ImportItem[],
     duplicateGroups: () => Array.from({ length: over.dupes ?? 0 }) as DuplicateGroup[],
     library: () => over.library ?? [song],
+    genreFill: () => createGenreFill({ library: () => over.library ?? [song], lookup: async () => [], write: async () => null }),
   } as unknown as DjHost;
 }
 const labels = (h: DjHost) => suggestionsFor(h).map((s) => s.label);
@@ -54,4 +56,14 @@ describe("chat suggestions", () => {
     expect(labels(host({ library: [] }))).not.toContain("Surprise me");
     expect(labels(host())).toContain("Surprise me");
   });
+
+  it("offers to fill in genres only when a fair number are missing", () => {
+    const few = Array.from({ length: 5 }, (_, i) => makeTrack({ path: `/m/${i}.mp3`, genre: "" }));
+    const many = Array.from({ length: 30 }, (_, i) => makeTrack({ path: `/m/${i}.mp3`, genre: "" }));
+    const tagged = Array.from({ length: 30 }, (_, i) => makeTrack({ path: `/m/${i}.mp3`, genre: "Rock" }));
+    expect(labels(host({ library: few }))).not.toContain("Fill in missing genres");
+    expect(labels(host({ library: tagged }))).not.toContain("Fill in missing genres");
+    expect(labels(host({ library: many }))).toContain("Fill in missing genres");
+  });
 });
+

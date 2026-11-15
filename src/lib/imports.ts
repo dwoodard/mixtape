@@ -6,12 +6,43 @@ import type { ImportEvent, ImportField, ImportItem, TagsPatch, ToolStatus, Track
 /** The tags that must be filled in before a song can be added without a second look. */
 export const KEY_FIELDS: ImportField[] = ["title", "artist", "album", "year"];
 
-const norm = (s: string) => s.trim().toLowerCase();
+/** Letters and digits only, lower case: "Don’t Stop!" and "dont stop" are the same song, as are "Beyoncé" and "Beyonce". */
+const norm = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
 
 /** The library song that is the same recording (same title and artist), if any. */
 export function findOwned(library: Track[], title: string, artist: string): Track | null {
-  if (!title.trim()) return null;
+  // A title with no letters or digits in it would match every other such title.
+  if (!norm(title)) return null;
   return library.find((t) => norm(t.title) === norm(title) && norm(t.artist) === norm(artist)) ?? null;
+}
+
+const NOISE_WORDS = new Set(["official", "video", "audio", "lyric", "lyrics", "visualizer", "visualiser", "hd", "4k", "remaster", "remastered", "music", "live", "clip"]);
+
+/** "Primus - Tommy The Cat (Official Music Video)" -> { artist: "Primus", title: "Tommy The Cat" }. Mirrors the Rust title cleanup. */
+export function parseVideoTitle(raw: string): { artist: string; title: string } {
+  const noBrackets = raw.replace(/\[[^\]]*\]|\([^)]*\)/g, (m) =>
+    m.slice(1, -1).toLowerCase().split(/[^\p{L}\p{N}]+/u).some((w) => NOISE_WORDS.has(w)) ? "" : m,
+  );
+  const cleaned = noBrackets.split(/[|｜]/)[0].split(/\s+/).filter(Boolean).join(" ");
+  const unquote = (s: string) => s.trim().replace(/^["“]|["”]$/g, "");
+  for (const sep of [" - ", " – ", " — "]) {
+    const at = cleaned.indexOf(sep);
+    if (at !== -1) return { artist: cleaned.slice(0, at).trim(), title: unquote(cleaned.slice(at + sep.length)) };
+  }
+  return { artist: "", title: cleaned };
+}
+
+/**
+ * Whether a held song is already in the library, judged from its video title, and which library song it is. "have": the
+ * same artist and title. "maybe": the title alone matches (the video title named no artist, or spells the artist differently).
+ */
+export function heldOwnership(item: Pick<ImportItem, "videoTitle">, library: Track[]): { match: "have" | "maybe"; track: Track } | null {
+  const { artist, title } = parseVideoTitle(item.videoTitle);
+  if (!norm(title)) return null;
+  const sameTitle = library.filter((t) => norm(t.title) === norm(title));
+  const exact = artist ? sameTitle.find((t) => norm(t.artist) === norm(artist)) : undefined;
+  if (exact) return { match: "have", track: exact };
+  return sameTitle.length > 0 ? { match: "maybe", track: sameTitle[0] } : null;
 }
 
 export const missingKeyFields = (item: ImportItem): ImportField[] =>
@@ -34,6 +65,47 @@ export function autoAddEligible(item: ImportItem, library: Track[], threshold: n
     missingKeyFields(item).length === 0 &&
     findOwned(library, item.proposal.title, item.proposal.artist) === null
   );
+}
+
+/** Songs still being brought in: waiting their turn, looked up, downloaded or converted. Only these can be stopped. */
+export const isLoading = (item: Pick<ImportItem, "stage">): boolean =>
+  item.stage === "queued" || item.stage === "probing" || item.stage === "fetching" || item.stage === "converting";
+
+/** Songs listed from a playlist but not fetched yet: nothing downloads until the person asks for it. */
+export const isHeld = (item: Pick<ImportItem, "stage">): boolean => item.stage === "held";
+
+/**
+ * The ids from `anchor` to `target` in `order`, both included, for a shift-click. Without an anchor, or when the anchor is
+ * no longer in the list, it is just the target.
+ */
+export function rangeBetween(order: number[], anchor: number | null, target: number): number[] {
+  const to = order.indexOf(target);
+  const from = anchor === null ? -1 : order.indexOf(anchor);
+  if (to === -1) return [];
+  if (from === -1) return [target];
+  return order.slice(Math.min(from, to), Math.max(from, to) + 1);
+}
+
+/**
+ * What a click on a song does to the selection. A plain click flips that song. A shift-click flips the whole run from the
+ * last song clicked to this one: all selected if this one was not, all cleared if it was. The song clicked becomes the
+ * new starting point.
+ */
+export function selectWithClick(
+  picked: ReadonlySet<number>,
+  order: number[],
+  anchor: number | null,
+  target: number,
+  shift: boolean,
+): { picked: Set<number>; anchor: number } {
+  const next = new Set(picked);
+  const turnOn = !picked.has(target);
+  const ids = shift ? rangeBetween(order, anchor, target) : [target];
+  for (const id of ids.length ? ids : [target]) {
+    if (turnOn) next.add(id);
+    else next.delete(id);
+  }
+  return { picked: next, anchor: target };
 }
 
 export const THRESHOLDS = ["0.6", "0.7", "0.8", "0.9", "1"] as const;
@@ -124,14 +196,45 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     }
   }
 
-  async function add(id: number): Promise<boolean> {
+  /**
+   * Adds a ready song to the library. The same song already in that folder is refused (it would become "Song (2)"),
+   * unless `allowCopy` is set, which only a person choosing "Add anyway" does.
+   */
+  async function add(id: number, allowCopy = false): Promise<boolean> {
     setItemError(id, null);
     try {
-      hooks.onAdded(await api.importAdd(id));
+      hooks.onAdded(await (allowCopy ? api.importAdd(id, true) : api.importAdd(id)));
       return true;
     } catch (e) {
       setItemError(id, String(e));
       return false;
+    }
+  }
+
+  /** Starts fetching songs held back from a playlist. No ids means all of them. Returns how many were started. */
+  async function fetchHeld(ids?: number[]): Promise<number> {
+    error.value = null;
+    try {
+      return await api.importFetch(ids ?? null);
+    } catch (e) {
+      error.value = String(e);
+      return 0;
+    }
+  }
+
+  /** Takes held songs out of the list without fetching them. */
+  async function clearHeld(ids: number[]) {
+    for (const id of ids) await api.importRemove(id);
+  }
+
+  /** Stops songs that are still loading and takes them out of the list. No ids means all of them. Returns how many. */
+  async function stopLoading(ids?: number[]): Promise<number> {
+    error.value = null;
+    try {
+      return await api.importStop(ids ?? null);
+    } catch (e) {
+      error.value = String(e);
+      return 0;
     }
   }
 
@@ -140,6 +243,16 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     setItemError(id, null);
     try {
       await api.importOpenInPicard(id);
+    } catch (e) {
+      setItemError(id, String(e));
+    }
+  }
+
+  /** Shows the song's file in Finder. */
+  async function reveal(id: number) {
+    setItemError(id, null);
+    try {
+      await api.importReveal(id);
     } catch (e) {
       setItemError(id, String(e));
     }
@@ -169,9 +282,31 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     await api.importRemove(id);
   }
 
-  /** Adds each of `list` that is ready, one at a time. */
+  /** What the last bulk add did, in words, for the inbox to show: what it skipped and why. Null when there is nothing to say. */
+  const notice = ref<string | null>(null);
+
+  /**
+   * Adds each of `list` that is ready, one at a time. A song the library already has is skipped, not added a second time
+   * (it would only become "Song (2).mp3"): the library is checked just before each one, so a song that appears twice in
+   * a playlist is added once too. To keep a second copy on purpose, add that song by itself with "Add anyway".
+   */
   async function addMany(list: ImportItem[]) {
-    for (const item of list.filter((i) => i.stage === "ready")) await add(item.id);
+    notice.value = null;
+    const skipped: string[] = [];
+    let added = 0;
+    for (const item of list.filter((i) => i.stage === "ready")) {
+      const have = findOwned(hooks.library(), item.proposal.title, item.proposal.artist);
+      if (have) {
+        skipped.push(item.proposal.title || item.videoTitle);
+        continue;
+      }
+      if (await add(item.id)) added++;
+    }
+    if (skipped.length > 0) {
+      const names = skipped.slice(0, 3).join(", ") + (skipped.length > 3 ? `, and ${skipped.length - 3} more` : "");
+      notice.value = `Added ${added}. Skipped ${skipped.length} already in your library: ${names}. To keep a second copy, add it by itself with “Add anyway”.`;
+    }
+    return { added, skipped: skipped.length };
   }
 
   async function maybeAutoAdd(item: ImportItem) {
@@ -199,6 +334,11 @@ export function createImports(api: Api, hooks: ImportHooks, storage?: FlagStorag
     setTags,
     add,
     openInPicard,
+    reveal,
+    notice,
+    stopLoading,
+    fetchHeld,
+    clearHeld,
     cancelPicard,
     undo,
     remove,

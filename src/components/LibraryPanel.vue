@@ -4,7 +4,7 @@ import { formatAgo } from "../lib/format";
 import { imports, store } from "../lib/store";
 import { tip, shortcutText } from "../lib/shortcuts";
 import { filterTracks, shuffleTracks } from "../lib/trackList";
-import { libraryQuery, libraryView, setAppMode, showInLibrary, type LibraryView } from "../lib/ui";
+import { libraryQuery, libraryView, selectedSongs, setAppMode, showInLibrary, type LibraryView } from "../lib/ui";
 import AlbumsView from "./AlbumsView.vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import DuplicatesView from "./DuplicatesView.vue";
@@ -49,11 +49,25 @@ const menuItems = computed<MenuItem[]>(() => {
   items.push({ label: "Open folder…", action: () => store.openFolder(), disabled: busy, shortcut: shortcutText("openFolder") });
   if (store.folder.value) {
     items.push({
-      label: "Refresh (new and changed files)",
+      label: "Refresh everything (new and changed files)",
       action: () => store.refresh(),
       disabled: busy,
       shortcut: shortcutText("refresh"),
     });
+    // A full refresh reads the whole drive. When only some songs are in question, look at just their folders.
+    const paths = selectedSongs.value.map((t) => t.path);
+    if (paths.length > 0) {
+      items.push({
+        label: paths.length === 1 ? "Refresh this song's folder" : "Refresh the selected songs' folders",
+        action: () => store.refreshAround(paths, { widen: false }),
+        disabled: busy,
+      });
+      items.push({
+        label: paths.length === 1 ? "Refresh this artist's folder" : "Refresh the selected artists' folders",
+        action: () => store.refreshAround(paths, { widen: true }),
+        disabled: busy,
+      });
+    }
   }
   if (store.removedCount.value > 0) {
     items.push({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { panelWantedHeight, queueSummary, THIN_MIN_WIDTH, THIN_TIERS, thinParts, thinTier, widthFromDrag } from "./thinBar";
+import { PANEL_VIEWS_HEIGHT, panelWantedHeight, queueSummary, THIN_MIN_WIDTH, THIN_TIERS, thinParts, thinTier, widthFromDrag } from "./thinBar";
 import { makeTrack } from "./testing";
 
 const queue = ["a", "b", "c"].map((n, i) => makeTrack({ path: `/m/${n}.mp3`, title: n, durationMs: (i + 1) * 60_000 }));
@@ -108,6 +108,11 @@ describe("panelWantedHeight", () => {
   it("grows by a row per song on top of the panel's own header", () => {
     expect(panelWantedHeight(10) - panelWantedHeight(9)).toBe(28);
     expect(panelWantedHeight(3)).toBeGreaterThan(panelWantedHeight(2));
+  });
+  it("leaves room for the Queue / DJ switch, so the last song is not cut off", () => {
+    // Header and tools (72) and the switch, plus the rows.
+    expect(panelWantedHeight(1)).toBe(72 + PANEL_VIEWS_HEIGHT + 28);
+    expect(panelWantedHeight(5)).toBe(72 + PANEL_VIEWS_HEIGHT + 5 * 28);
   });
   it("leaves room for the empty-queue message when the queue is empty", () => {
     expect(panelWantedHeight(0)).toBe(panelWantedHeight(1));

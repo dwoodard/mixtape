@@ -1,6 +1,7 @@
 import type { ChatMessage, LmClient, ToolCall, ToolSpec } from "./lm";
 import type { DuplicateGroup } from "./duplicates";
 import type { Lyrics } from "./lyrics";
+import type { GenreFill } from "./genreFill";
 import type { ReleaseInfo, TagMatch } from "./musicbrainz";
 import type { TagEditPayload } from "./tagEdit";
 import { TOOLS_TABLE } from "./djTools";
@@ -48,6 +49,8 @@ export interface DjHost {
   removeFromLibrary(tracks: Track[]): Promise<Problem>;
   /** Compares a song's file with the length the library holds for it. */
   inspectFile(track: Track): Promise<FileCheck>;
+  /** The lyrics saved in the song's own tags, or null when it has none. */
+  readLyrics(track: Track): Promise<string | null>;
   /** Corrects the length the library holds for a song. */
   fixLength(track: Track, lengthMs: number): Promise<Problem>;
   trashDuplicates(extras: Track[]): Promise<{ report: CleanupReport | null; problem: Problem }>;
@@ -62,6 +65,8 @@ export interface DjHost {
   fetchLyrics(track: Track): Promise<Lyrics | null>;
   /** Ways to tag a song, from MusicBrainz (Picard's database), best first. */
   lookupTags(track: Track): Promise<TagMatch[]>;
+  /** The job that fills in missing genres. One for the whole chat, so closing a card does not lose its progress. */
+  genreFill(): GenreFill;
   /** The details of one MusicBrainz release, to show beside a tag match. */
   fetchRelease(releaseId: string): Promise<ReleaseInfo>;
   // Discovery.
@@ -73,6 +78,8 @@ export interface DjHost {
   openImportInPicard(id: number): Promise<Problem>;
   cancelImportPicard(id: number): Promise<Problem>;
   removeImport(id: number): Promise<Problem>;
+  /** Starts fetching songs held back from a playlist: these ids, or all of them when null. */
+  fetchImports(ids: number[] | null): Promise<{ started: number; problem: Problem }>;
   setImportOptions(options: { format?: string; autoAdd?: boolean; threshold?: string }): void;
   // The app itself.
   setTheme(theme: string): void;
@@ -88,7 +95,8 @@ export type DjView =
   | { kind: "songs"; title: string; songs: Track[]; total: number; note?: string; /** The song playing now, marked in the list. */ currentPath?: string }
   | { kind: "tags"; song: Track; matches: TagMatch[] }
   | { kind: "filecheck"; song: Track; check: FileCheck }
-  | { kind: "lyrics"; song: Track; text: string; instrumental: boolean; /** The song the lyrics service matched, which may not be exactly yours. */ matched?: { title: string; artist: string; album: string }; /** Where the lyrics came from. */ source?: string }
+  | { kind: "genres"; job: GenreFill }
+  | { kind: "lyrics"; song: Track; text: string; instrumental: boolean; /** The song the lyrics service matched, which may not be exactly yours. */ matched?: { title: string; artist: string; album: string }; /** Where the lyrics came from. */ source?: string; /** Whether they are saved in the song's own tags. */ saved?: boolean }
   | { kind: "duplicates"; groups: { keep: Track; extras: Track[] }[] }
   | { kind: "imports"; ids: number[] };
 
@@ -144,7 +152,10 @@ export function systemPrompt(library: Track[]): string {
     "'this song', 'it' or 'the current song' means the song playing now. 'these' or 'the selected songs' means the selection. If the message refers to a song and both are empty, ask which song, once.",
     "Never show the user the Context block, ids or tool names: they are for you. Speak about songs by title and artist.",
     "Play counts are kept by the app. Use the History line in Context or get_play_count to answer how often a song was played. Counting began when the feature was added, so older listening is not in it. 'Most played' and 'never played' searches use search_library.",
+    "To fill in missing genres for many songs, call suggest_genres. It runs in the background and the user reviews and writes the results on the card, so do not list the songs or promise it is done.",
+    "Lyrics: get_lyrics shows them (from the song's own tags if saved there, else from LRCLIB). The user can save them into the song's tags (ID3 and the other formats) with the card's button, or you can with save_lyrics. Never say you cannot store lyrics in a song's tags: you can.",
     "If a song's length looks wrong to you or the user (a pop song of 25 minutes, a bar that does not match the sound), call check_file: it compares the library's length with what the file really plays for. If it says the length is wrong, call fix_length. Say what you found in plain words.",
+    "Never describe a MusicBrainz match or its genre suggestion as the song's own tags. A genre suggestion is only a suggestion: say 'MusicBrainz suggests …' and that it is not in the file. When you show a song's tags, give what Context says it has now, and mark anything empty as empty.",
     "The Context block gives the tags the playing song has now. To show or check a song's current tags, read them from there. Use lookup_tags only to find what the tags should be.",
     "Songs in the Context block already have ids: use them directly. For any other song, call search_library first and use the ids it returns. Never invent ids, titles or artists. Queue positions are numbered from 1.",
     "Most songs have no genre tag, and none has a mood. For a style, era or mood ('80s synth-pop', 'chill', 'workout'), do not search by genre words. Search the era with year_from and year_to (or '80s' in the query) and a limit of 50 to 100, then choose the songs that fit by what you know of the artists and titles. Also try artists you know fit. Never answer 'none found' after one genre search.",
@@ -216,6 +227,12 @@ export class DjSession {
   private byId = new Map<number, Track>();
   private byPath = new Map<string, number>();
 
+  /**
+   * `live` gives a song as the library has it now. Songs are remembered from earlier in the chat, and their tags may
+   * have been edited since (by hand, in Picard, by an Apply): working from the old ones would skip or repeat changes.
+   */
+  constructor(private live: (track: Track) => Track = (t) => t) {}
+
   idFor(track: Track): number {
     let id = this.byPath.get(track.path);
     if (id === undefined) {
@@ -232,7 +249,7 @@ export class DjSession {
     const unknown: number[] = [];
     for (const raw of list) {
       const track = this.byId.get(Number(raw));
-      if (track) tracks.push(track);
+      if (track) tracks.push(this.live(track));
       else unknown.push(Number(raw));
     }
     return { tracks, unknown };

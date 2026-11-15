@@ -1,5 +1,5 @@
 import type { DjTool, ToolContext, ToolOutcome } from "./dj";
-import { MAX_LYRICS_CHARS } from "./lyrics";
+import { MAX_LYRICS_CHARS, type Lyrics } from "./lyrics";
 import { ACCENTS, THEMES } from "./themes";
 import { changedFields, type TagEditPayload } from "./tagEdit";
 import type { ImportItem, TagsPatch, Track } from "./types";
@@ -66,6 +66,17 @@ function songArg(args: Args, ctx: ToolContext): Track | null | undefined {
   return noId(args) ? ctx.host.player().currentTrack : ctx.session.resolve([args.id]).tracks[0];
 }
 const noSongMessage = (args: Args) => (noId(args) ? "Nothing is playing. Give a song id from search_library." : NO_IDS);
+
+/** The song's lyrics: from its own tags when saved there (no network), else from the web. Errors come back as { error }. */
+async function findLyrics(track: Track, ctx: ToolContext): Promise<{ lyrics: Lyrics | null; saved: boolean } | { error: string }> {
+  const savedText = await ctx.host.readLyrics(track).catch(() => null);
+  if (savedText) return { lyrics: { source: "saved in the song's tags", text: savedText, instrumental: false, matched: { title: track.title, artist: track.artist, album: track.album } }, saved: true };
+  try {
+    return { lyrics: await ctx.host.fetchLyrics(track), saved: false };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 const NO_IDS = "No valid song ids. Call search_library first and use the ids it returns.";
 
@@ -465,7 +476,8 @@ export const TOOLS_TABLE: DjTool[] = [
       return {
         result: {
           song: { id: ctx.session.idFor(track), title: track.title, artist: track.artist, album: track.album },
-          matches: matches.map((m) => ({ title: m.title, artist: m.artist, album: m.album, album_artist: m.albumArtist, year: m.year, track: m.trackNumber, disc: m.discNumber, genre_hint: m.genreHint || undefined, release_kind: m.releaseKind || undefined, confidence: m.confidence, reasons: m.reasons })),
+          note: "musicbrainz_genre_suggestion is only what voters on MusicBrainz tagged the recording with. It is NOT a tag of the user's file and is never written by Apply. The song's real tags are in the Context block.",
+          matches: matches.map((m) => ({ title: m.title, artist: m.artist, album: m.album, album_artist: m.albumArtist, year: m.year, track: m.trackNumber, disc: m.discNumber, musicbrainz_genre_suggestion: m.genreHint || undefined, release_kind: m.releaseKind || undefined, confidence: m.confidence, reasons: m.reasons })),
         },
         note,
         view: matches.length ? { kind: "tags", song: track, matches } : undefined,
@@ -530,6 +542,30 @@ export const TOOLS_TABLE: DjTool[] = [
     async (_a, ctx) => problem(await ctx.host.refreshPicardChanges(), "Refreshed the songs from Picard"),
   ),
 
+  define(
+    "suggest_genres",
+    "Find a genre on MusicBrainz for every song that has none. It runs in the background (about a second per song) and shows a card where the person watches progress, unticks any they do not want, and writes the rest. Nothing is written until they click. Use it when asked to fill in, fix or add missing genres for the library.",
+    {},
+    [],
+    async (_a, ctx) => {
+      const job = ctx.host.genreFill();
+      const missing = job.missingCount();
+      if (job.state.phase === "done") job.reset();
+      if (job.state.phase === "idle" && missing === 0) return done("Every song already has a genre", { songs_without_genre: 0 });
+      // Started, not waited for: it takes minutes, and the card shows how it goes.
+      if (job.state.phase === "idle") void job.start();
+      return {
+        result: {
+          songs_without_genre: missing,
+          running: job.state.phase === "looking" || job.state.phase === "idle",
+          estimated_minutes: Math.ceil((missing * 1.2) / 60),
+          note: "It is running in the background. The user reviews the suggestions on the card and writes them. Do not list the songs.",
+        },
+        note: `Looking up genres for ${songs(missing)}`,
+        view: { kind: "genres", job },
+      };
+    },
+  ),
   define(
     "check_file",
     "Check a song's file against the library: the length the library holds, the length the file really plays for (read from the audio, not the tags), its size, bitrate and format. Use it when a song's length looks wrong. Give a song id, or leave it out for the song that is playing. Changes nothing.",
@@ -617,28 +653,52 @@ export const TOOLS_TABLE: DjTool[] = [
   ),
   define(
     "get_lyrics",
-    "Look up the lyrics of a song on the web (LRCLIB). Give a song id, or leave it out for the song that is playing. Sends only its title, artist, album and length.",
+    "Show the lyrics of a song. If they are already saved in the song's own tags they come from there; otherwise they are looked up on the web (LRCLIB), sending only its title, artist, album and length. The card has a button to save them into the song's tags. Give a song id, or leave it out for the song that is playing.",
     { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
     [],
     async (args, ctx) => {
       const track = songArg(args, ctx);
       if (!track) return fail(noSongMessage(args));
-      let lyrics;
-      try {
-        lyrics = await ctx.host.fetchLyrics(track);
-      } catch (e) {
-        return fail(e instanceof Error ? e.message : String(e));
-      }
+      const found = await findLyrics(track, ctx);
+      if ("error" in found) return fail(found.error);
+      const { lyrics, saved } = found;
       if (!lyrics) return { result: { found: false, song: `${track.artist} - ${track.title}` }, note: `No lyrics found for "${track.title}"` };
       if (lyrics.instrumental) {
         return { result: { found: true, instrumental: true }, note: `"${track.title}" is an instrumental`, view: { kind: "lyrics", song: track, text: "", instrumental: true, matched: lyrics.matched, source: lyrics.source } };
       }
       const cut = lyrics.text.length > MAX_LYRICS_CHARS;
       return {
-        result: { found: true, matched: lyrics.matched, lyrics: cut ? lyrics.text.slice(0, MAX_LYRICS_CHARS) : lyrics.text, truncated: cut },
-        note: `Fetched lyrics for "${track.title}"`,
-        view: { kind: "lyrics", song: track, text: lyrics.text, instrumental: false, matched: lyrics.matched, source: lyrics.source },
+        result: { found: true, saved_in_the_songs_tags: saved, matched: lyrics.matched, lyrics: cut ? lyrics.text.slice(0, MAX_LYRICS_CHARS) : lyrics.text, truncated: cut },
+        note: `${saved ? "Read the saved" : "Fetched"} lyrics for "${track.title}"`,
+        view: { kind: "lyrics", song: track, text: lyrics.text, instrumental: false, matched: lyrics.matched, source: lyrics.source, saved },
       };
+    },
+  ),
+  define(
+    "save_lyrics",
+    "Save a song's lyrics into the song's own tags (the lyrics frame in an mp3, the lyrics field in FLAC, M4A and OGG), so any player can show them. Looks them up first if they are not saved yet. This changes the file, so the person is asked first. Give a song id, or leave it out for the song that is playing.",
+    { id: int({ description: "Song id from search_library. Leave out for the current song." }) },
+    [],
+    async (args, ctx) => {
+      const track = songArg(args, ctx);
+      if (!track) return fail(noSongMessage(args));
+      const found = await findLyrics(track, ctx);
+      if ("error" in found) return fail(found.error);
+      const { lyrics, saved } = found;
+      if (!lyrics || lyrics.instrumental || !lyrics.text) return { result: { saved: false, reason: lyrics?.instrumental ? "It is an instrumental." : "No lyrics were found." }, note: `No lyrics to save for "${track.title}"` };
+      if (saved) return { result: { saved: true, already: true }, note: `The lyrics of "${track.title}" are already saved in its tags` };
+      const out = await ctx.host.writeTags([track], { lyrics: lyrics.text });
+      if (out.problem) return fail(out.problem);
+      if (out.failed.length) return fail(out.failed[0]);
+      return {
+        result: { saved: true, characters: lyrics.text.length },
+        note: `Saved the lyrics of "${track.title}" in its tags`,
+        view: { kind: "lyrics", song: track, text: lyrics.text, instrumental: false, matched: lyrics.matched, source: "saved in the song's tags", saved: true },
+      };
+    },
+    (args, ctx) => {
+      const track = songArg(args, ctx);
+      return track ? `Save the lyrics of "${track.title}" into the file's tags?` : null;
     },
   ),
 
@@ -649,7 +709,7 @@ export const TOOLS_TABLE: DjTool[] = [
   }),
   define(
     "import_from_link",
-    "Bring in a song (or playlist) from a YouTube link. It downloads, proposes tags, and waits in Discovery until it is added to the library.",
+    "Bring in a song (or playlist) from a YouTube link. A single song downloads, proposes tags, and waits in Discovery until it is added to the library. A playlist is only listed: its songs are held until fetched (fetch_imports, or the user ticks them), so a whole playlist is never downloaded by accident.",
     { url: str("The link."), format: str(undefined, { enum: ["mp3", "m4a", "flac"] }) },
     ["url"],
     async (args, { host }) => {
@@ -658,6 +718,25 @@ export const TOOLS_TABLE: DjTool[] = [
       return problem(await host.importLink(url, typeof args.format === "string" ? args.format : undefined), "Sent the link to Discovery");
     },
     (args) => `Download from ${String(args.url ?? "").trim() || "a link"} into Discovery?`,
+  ),
+  define(
+    "fetch_imports",
+    "Start downloading songs that were held back from a playlist. Playlist songs are listed but not fetched, so the user picks. Give import_ids for specific ones, or leave them out for every held song.",
+    { import_ids: { type: "array", items: int(), description: "Ids from list_imports. Leave out for all held songs." } },
+    [],
+    async (args, { host }) => {
+      const ids = Array.isArray(args.import_ids) ? args.import_ids.map(Number).filter(Number.isFinite) : null;
+      const out = await host.fetchImports(ids);
+      if (out.problem) return fail(out.problem);
+      if (out.started === 0) return fail("No held songs to fetch. Call list_imports to see what is held.");
+      return { ...done(`Started fetching ${songs(out.started)}`, { started: out.started }), view: { kind: "imports", ids: host.imports().map((i) => i.id) } };
+    },
+    // A whole playlist is a lot of downloads: ask before more than a few.
+    (args, { host }) => {
+      const held = host.imports().filter((i) => i.stage === "held").length;
+      const count = Array.isArray(args.import_ids) ? args.import_ids.length : held;
+      return count > 5 ? `Download ${songs(count)} from the playlist?` : null;
+    },
   ),
   define(
     "import_files",

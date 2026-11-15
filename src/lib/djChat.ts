@@ -3,8 +3,10 @@ import { tauriApi, type Api } from "./api";
 import { contextNote, DjSession, type DjView, runTurn, systemPrompt, type DjHost, type Problem } from "./dj";
 import { createLmClient, DEFAULT_LM_ENDPOINT, type ChatMessage, type LmClient } from "./lm";
 import { fetchLyrics } from "./lyrics";
+import { createGenreFill } from "./genreFill";
 import { fetchRelease, lookupTags } from "./musicbrainz";
 import { THRESHOLDS, type Imports } from "./imports";
+import type { Track } from "./types";
 import { imports as appImports, store as appStore, type Store } from "./store";
 import { setAccent, setTheme } from "./themes";
 import type { TagWriteResult } from "./types";
@@ -71,6 +73,27 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
     return problem ?? imports.itemErrors.value[id] ?? null;
   };
 
+  const writeTags: DjHost["writeTags"] = async (tracks, edit) => {
+    store.tagResults.value = null;
+    const problem = await soft(() => store.writeTags(tracks, edit));
+    const results = (store.tagResults.value as TagWriteResult[] | null) ?? [];
+    return {
+      saved: results.filter((r) => r.track).length,
+      failed: results.filter((r) => r.error).map((r) => `${r.path}: ${r.error}`),
+      problem,
+    };
+  };
+
+  // One job for the whole chat, so closing a card or the panel does not lose its progress.
+  const genreFill = createGenreFill({
+    library: () => store.library.value,
+    lookup: (track) => lookupTags(track),
+    write: async (track, genre) => {
+      const out = await writeTags([track], { genre });
+      return out.problem ?? out.failed[0] ?? null;
+    },
+  });
+
   return {
     library: () => store.library.value,
     queue: () => store.queue.value,
@@ -105,6 +128,7 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
     restoreRemoved: () => soft(() => store.restoreRemoved()),
     removeFromLibrary: (tracks) => soft(() => store.removeFromLibrary(tracks)),
     inspectFile: (track) => store.inspectFile(track),
+    readLyrics: (track) => api.readLyrics(track.path),
     fixLength: (track, lengthMs) => store.fixLength(track, lengthMs),
     trashDuplicates: async (extras) => {
       const keepers = new Map(store.duplicateGroups.value.flatMap((g) => g.extras.map((t) => [t.path, g.keep.path] as const)));
@@ -113,21 +137,13 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
       const problem = await soft(() => store.trashDuplicates(pairs));
       return { report: store.cleanupReport.value, problem };
     },
-    writeTags: async (tracks, edit) => {
-      store.tagResults.value = null;
-      const problem = await soft(() => store.writeTags(tracks, edit));
-      const results = (store.tagResults.value as TagWriteResult[] | null) ?? [];
-      return {
-        saved: results.filter((r) => r.track).length,
-        failed: results.filter((r) => r.error).map((r) => `${r.path}: ${r.error}`),
-        problem,
-      };
-    },
+    writeTags,
     reveal: (tracks) => soft(() => store.revealInFinder(tracks)),
     openLink: (url) => guard(() => api.openLink(url)),
     openInPicard: (tracks) => soft(() => store.openInPicard(tracks)),
     fetchLyrics: (track) => fetchLyrics(track),
     lookupTags: (track) => lookupTags(track),
+    genreFill: () => genreFill,
     fetchRelease: (releaseId) => fetchRelease(releaseId),
     refreshPicardChanges: () => soft(() => store.refreshPicardFolders()),
     importLink: async (url, format) => {
@@ -148,6 +164,11 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
     openImportInPicard: (id) => importProblem(id, () => imports.openInPicard(id)),
     cancelImportPicard: (id) => importProblem(id, () => imports.cancelPicard(id)),
     removeImport: (id) => guard(() => imports.remove(id)),
+    fetchImports: async (ids) => {
+      imports.error.value = null;
+      const started = await imports.fetchHeld(ids ?? undefined);
+      return { started, problem: imports.error.value };
+    },
     setImportOptions: ({ format, autoAdd, threshold }) => {
       if (format === "mp3" || format === "m4a" || format === "flac") imports.setFormat(format);
       if (autoAdd !== undefined) imports.setAutoAdd(autoAdd);
@@ -197,8 +218,11 @@ export function createDjChat(host: DjHost, makeClient: (endpoint: () => string) 
   /** Why the models could not be listed, shown instead of the model picker. */
   const modelsError = ref<string | null>(null);
 
+  /** A song as the library has it now. */
+  const liveSong = (track: Track) => host.library().find((t) => t.path === track.path) ?? track;
+
   let history: ChatMessage[] = [];
-  let session = new DjSession();
+  let session = new DjSession(liveSong);
 
   async function loadModels() {
     try {
@@ -239,7 +263,7 @@ export function createDjChat(host: DjHost, makeClient: (endpoint: () => string) 
   function reset() {
     respond(false);
     history = [];
-    session = new DjSession();
+    session = new DjSession(liveSong);
     lines.value = [];
   }
 

@@ -43,6 +43,7 @@ export const COMMANDS: readonly CommandDef[] = [
   { id: "dj", title: "Show or hide the DJ", group: "Navigation", keys: { key: "\\" } },
   { id: "toggleMode", title: "Switch between thin bar and large window", group: "Navigation", keys: cmd("t", { shift: true }) },
 
+  { id: "selectAll", title: "Select every song in the Discovery inbox", group: "Selection", keys: cmd("a") },
   { id: "play", title: "Play selected songs (one song asks what to do first)", group: "Selection", keys: { key: "Enter" }, local: true },
   { id: "enqueue", title: "Add selected songs to the queue", group: "Selection", keys: cmd("Enter") },
   { id: "playNext", title: "Play selected songs next", group: "Selection", keys: cmd("Enter", { shift: true }) },
@@ -137,10 +138,12 @@ export function focusKind(el: { tagName?: string; type?: string; isContentEditab
 }
 
 const CARET_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Enter"]);
+/** Cmd+A, C, V, X and Z belong to a text field while the cursor is in one: select, copy, paste, cut, undo the text. */
+const TEXT_EDIT_KEYS = new Set(["a", "c", "v", "x", "z"]);
 
 /** Whether a shortcut may fire while the focus is on `focus`, without stealing what that element does with the key. */
 export function allowedWhileFocused(spec: KeySpec, focus: FocusKind): boolean {
-  if (focus.editable) return !!spec.meta && !CARET_KEYS.has(spec.key);
+  if (focus.editable) return !!spec.meta && !CARET_KEYS.has(spec.key) && !TEXT_EDIT_KEYS.has(spec.key.toLowerCase());
   if (spec.key === " " && focus.pressable) return false;
   return true;
 }

@@ -29,6 +29,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     cachedLibrary: vi.fn(async () => null),
     removeFromLibrary: vi.fn(async () => {}),
     inspectFile: vi.fn(async () => ({}) as never),
+    readLyrics: vi.fn(async () => null),
     fixLength: vi.fn(async () => makeTrack()),
     revealInFinder: vi.fn(async () => {}),
     openLink: vi.fn(async () => {}),
@@ -41,6 +42,9 @@ function fakeApi(overrides: Partial<Api> = {}) {
     importSetTags: vi.fn(async () => ({}) as never),
     importAdd: vi.fn(async () => makeTrack()),
     importOpenInPicard: vi.fn(async () => {}),
+    importReveal: vi.fn(async () => {}),
+    importStop: vi.fn(async () => 0),
+    importFetch: vi.fn(async () => 0),
     importCancelPicard: vi.fn(async () => {}),
     replaceQueueTracks: vi.fn(async () => {}),
     moveQueueTrack: vi.fn(async () => {}),
@@ -927,12 +931,13 @@ describe("library songs in Picard", () => {
 
   it("when the user comes back, re-checks those folders and applies what Picard changed", async () => {
     const renamed = makeTrack({ path: "/m/Korn/Follow/1-03 Got the Life.mp3", title: "Got the Life", artist: "Korn", album: "Follow" });
-    const { api, store } = await loaded({ refreshFolders: vi.fn(async () => [{ dir: "/m/Korn/Follow", tracks: [renamed, b] }]) });
+    const { api, store } = await loaded({ refreshFolders: vi.fn(async () => [{ dir: "/m/Korn", tracks: [renamed, b] }]) });
     await store.openInPicard([a]);
 
     await store.refreshPicardFolders();
 
-    expect(api.refreshFolders).toHaveBeenCalledWith(["/m/Korn/Follow"]);
+    // The artist folder, not just the album: a rename can move a song to another album folder.
+    expect(api.refreshFolders).toHaveBeenCalledWith(["/m/Korn"]);
     expect(store.library.value.map((t) => t.path).sort()).toEqual([renamed.path, b.path, c.path].sort());
     // Still being watched: the user may save in Picard later.
     expect(Object.keys(store.picardFolders.value)).toEqual(["/m/Korn/Follow"]);
@@ -1230,6 +1235,80 @@ describe("fixing a wrong length", () => {
     const { api } = fakeApi();
     await createStore(api).inspectFile(song);
     expect(api.inspectFile).toHaveBeenCalledWith("/m/a.mp3", 1234);
+  });
+});
+
+describe("targeted refresh after an add", () => {
+  const root = "/lib";
+  const song = (path: string, title = "T") => makeTrack({ path, title, artist: "Primus", album: "Pork Soda" });
+  async function ready(over: Partial<Api> = {}) {
+    const fake = fakeApi({ cachedLibrary: vi.fn(async () => ({ folder: root, tracks: [], scannedAtMs: 1 })), ...over });
+    const store = createStore(fake.api);
+    await store.init();
+    return { ...fake, store };
+  }
+
+  it("re-checks only the folder the song went into, a moment after the add", async () => {
+    vi.useFakeTimers();
+    try {
+      const { api, store } = await ready();
+      store.addToLibrary(song(`${root}/Primus/Pork Soda/02 My Name Is Mud.mp3`));
+      expect(api.refreshFolders).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(api.refreshFolders).toHaveBeenCalledOnce();
+      expect(api.refreshFolders).toHaveBeenCalledWith([`${root}/Primus/Pork Soda`]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("checks each folder once however many songs were added, and says what it found next to them", async () => {
+    vi.useFakeTimers();
+    try {
+      const copy = song(`${root}/Primus/Pork Soda/02 My Name Is Mud (2).mp3`, "My Name Is Mud");
+      const { api, store } = await ready({ refreshFolders: vi.fn(async () => [{ dir: `${root}/Primus/Pork Soda`, tracks: [copy] }]) });
+      for (let i = 1; i <= 5; i++) store.addToLibrary(song(`${root}/Primus/Pork Soda/0${i} Song.mp3`, `S${i}`));
+      store.addToLibrary(song(`${root}/Primus/Seas/01 Other.mp3`, "Other"));
+
+      await vi.advanceTimersByTimeAsync(1300);
+
+      expect(api.refreshFolders).toHaveBeenCalledOnce();
+      expect(api.refreshFolders).toHaveBeenCalledWith([`${root}/Primus/Pork Soda`, `${root}/Primus/Seas`]);
+      expect(store.library.value.some((t) => t.path === copy.path)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does nothing for a song outside the library folder, and reports a failure without losing the list", async () => {
+    vi.useFakeTimers();
+    try {
+      const { api, store } = await ready();
+      store.addToLibrary(song("/Users/dustin/Downloads/music/a.mp3"));
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(api.refreshFolders).not.toHaveBeenCalled();
+
+      const failing = await ready({ refreshFolders: vi.fn(async () => Promise.reject("The drive is not mounted.")) });
+      failing.store.addToLibrary(song(`${root}/Primus/Pork Soda/01 Song.mp3`));
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(failing.store.libraryError.value).toContain("not mounted");
+      expect(failing.store.library.value).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("widens to the artist folder when asked, for songs something may have renamed", async () => {
+    vi.useFakeTimers();
+    try {
+      const { api, store } = await ready();
+      store.refreshAround([`${root}/Primus/Frizzle Fry (Remastered)/Too Many Puppies.mp3`], { widen: true });
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(api.refreshFolders).toHaveBeenCalledWith([`${root}/Primus`]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

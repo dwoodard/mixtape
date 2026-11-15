@@ -6,7 +6,7 @@ use crate::track::{is_audio_file, read_track, Track};
 use lofty::config::WriteOptions;
 use lofty::file::{FileType, TaggedFileExt};
 use lofty::tag::items::Timestamp;
-use lofty::tag::{Accessor, ItemKey, Tag, TagExt};
+use lofty::tag::{Accessor, ItemKey, Tag, TagExt, TagType};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +24,16 @@ pub struct TagEdit {
     pub disc_number: Option<String>,
     pub year: Option<String>,
     pub genre: Option<String>,
+    /// The words of the song, kept in the file's own lyrics tag (USLT in an mp3). Line breaks are kept.
+    pub lyrics: Option<String>,
+}
+
+/// The most lyrics text accepted: far more than any song has, so a mistake cannot fill a tag with a book.
+const MAX_LYRICS_CHARS: usize = 100_000;
+
+/// Lyrics with the line endings every format agrees on and no blank space at the ends. Empty means none.
+fn clean_lyrics(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n").trim().to_string()
 }
 
 impl TagEdit {
@@ -36,6 +46,9 @@ impl TagEdit {
         number(self.track_number.as_deref(), "Track", u32::MAX)?;
         number(self.disc_number.as_deref(), "Disc", u32::MAX)?;
         number(self.year.as_deref(), "Year", 9999)?;
+        if self.lyrics.as_deref().is_some_and(|l| l.chars().count() > MAX_LYRICS_CHARS) {
+            return Err(format!("Lyrics are limited to {MAX_LYRICS_CHARS} characters."));
+        }
         Ok(())
     }
 }
@@ -75,6 +88,14 @@ fn apply(tag: &mut Tag, edit: &TagEdit) -> Result<(), String> {
                 tag.insert_text(ItemKey::AlbumArtist, v);
             }
             None => tag.remove_key(ItemKey::AlbumArtist),
+        }
+    }
+    if let Some(lyrics) = edit.lyrics.as_deref().map(clean_lyrics) {
+        // Either way, no copy under the other key is left to disagree with the new one.
+        tag.remove_key(ItemKey::Lyrics);
+        tag.remove_key(ItemKey::UnsyncLyrics);
+        if !lyrics.is_empty() && !insert_lyrics(tag, &lyrics) {
+            return Err("This kind of file cannot hold lyrics in its tags.".into());
         }
     }
     if let Some(v) = number(edit.track_number.as_deref(), "Track", u32::MAX)? {
@@ -117,6 +138,21 @@ fn temp_path(path: &Path) -> PathBuf {
     path.with_file_name(format!(".{stem}.mixtape-tmp.{ext}"))
 }
 
+/// Puts lyrics in the tag under the key its format uses: the "unsynchronized lyrics" frame (USLT) in an mp3, the plain
+/// lyrics field elsewhere. Returns whether the tag accepted them.
+fn insert_lyrics(tag: &mut Tag, lyrics: &str) -> bool {
+    let (first, second) = if tag.tag_type() == TagType::Id3v2 { (ItemKey::UnsyncLyrics, ItemKey::Lyrics) } else { (ItemKey::Lyrics, ItemKey::UnsyncLyrics) };
+    tag.insert_text(first, lyrics.to_string()) || tag.insert_text(second, lyrics.to_string())
+}
+
+/// The lyrics saved in the file's tags, if it has any.
+pub fn read_lyrics(path: &Path) -> Option<String> {
+    let tagged = lofty::read_from_path(path).ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    let text = clean_lyrics(tag.get_string(ItemKey::UnsyncLyrics).or_else(|| tag.get_string(ItemKey::Lyrics))?);
+    (!text.is_empty()).then_some(text)
+}
+
 /// Applies `edit` to the file at `path` and returns the track as re-read from
 /// disk. The original is only replaced after the edited copy has been read
 /// back and confirmed to have the new tags and the same audio length.
@@ -145,6 +181,11 @@ pub fn write_tags(path: &Path, edit: &TagEdit) -> Result<Track, String> {
         let after = read_track(&temp).ok_or("The edited copy could not be read back.")?;
         if !matches(&after, edit) {
             return Err("The edited copy did not contain the new tags, so nothing was changed.".into());
+        }
+        if let Some(wanted) = edit.lyrics.as_deref().map(clean_lyrics) {
+            if read_lyrics(&temp).unwrap_or_default() != wanted {
+                return Err("The edited copy did not contain the lyrics, so nothing was changed.".into());
+            }
         }
         if after.duration_ms.abs_diff(before.duration_ms) > 100 {
             return Err("The audio length changed, so nothing was changed.".into());
@@ -183,6 +224,7 @@ mod tests {
             disc_number: Some("2".into()),
             year: Some("1995".into()),
             genre: Some("Ska".into()),
+            lyrics: None,
         }
     }
 
@@ -226,6 +268,52 @@ mod tests {
         let track = result.expect("edit on the real folder");
         assert_eq!(track.artist, "New Artist");
         assert_eq!(leftovers, vec![std::ffi::OsString::from("song.mp3")], "no working copy left behind");
+    }
+
+    const WORDS: &str = "First line\nSecond line, with an é and a ’\n\nAfter a blank line";
+
+    #[test]
+    fn lyrics_are_saved_in_the_tags_and_read_back_in_every_supported_format() {
+        for ext in ["mp3", "flac", "m4a", "ogg"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = fixture(dir.path(), ext);
+            assert_eq!(read_lyrics(&path), None, "{ext}: none to start with");
+
+            write_tags(&path, &TagEdit { lyrics: Some(WORDS.into()), ..Default::default() }).unwrap_or_else(|e| panic!("{ext}: {e}"));
+
+            assert_eq!(read_lyrics(&path).as_deref(), Some(WORDS), "{ext}");
+        }
+    }
+
+    #[test]
+    fn lyrics_keep_their_line_breaks_and_lose_only_outer_blank_space() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fixture(dir.path(), "mp3");
+        write_tags(&path, &TagEdit { lyrics: Some("\r\n  one\r\ntwo \r\n\r\n".into()), ..Default::default() }).unwrap();
+        assert_eq!(read_lyrics(&path).as_deref(), Some("one\ntwo"));
+    }
+
+    #[test]
+    fn other_edits_leave_the_lyrics_alone_and_an_empty_string_removes_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fixture(dir.path(), "mp3");
+        write_tags(&path, &TagEdit { lyrics: Some(WORDS.into()), ..Default::default() }).unwrap();
+
+        write_tags(&path, &TagEdit { genre: Some("Ska".into()), ..Default::default() }).unwrap();
+        assert_eq!(read_lyrics(&path).as_deref(), Some(WORDS), "a genre edit must not drop the lyrics");
+
+        write_tags(&path, &TagEdit { lyrics: Some("  ".into()), ..Default::default() }).unwrap();
+        assert_eq!(read_lyrics(&path), None);
+    }
+
+    #[test]
+    fn lyrics_that_are_far_too_long_are_refused_before_the_file_is_touched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fixture(dir.path(), "mp3");
+        let before = std::fs::read(&path).unwrap();
+        let err = write_tags(&path, &TagEdit { lyrics: Some("la ".repeat(60_000)), ..Default::default() }).unwrap_err();
+        assert!(err.contains("limited"), "{err}");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
     #[test]

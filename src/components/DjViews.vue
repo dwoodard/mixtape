@@ -5,6 +5,7 @@ import { formatDate, formatTime } from "../lib/format";
 import { changedFields, TAG_FIELDS } from "../lib/tagEdit";
 import { musicbrainzUrl, tagEditFromMatch, type ReleaseInfo, type TagMatch } from "../lib/musicbrainz";
 import type { FileCheck, ImportItem, Track } from "../lib/types";
+import { MIN_CONFIDENCE } from "../lib/genreFill";
 import CoverArt from "./CoverArt.vue";
 
 /** What the DJ is talking about, drawn with the controls a person would use on it. Acts through the same host the DJ uses. */
@@ -13,7 +14,7 @@ const props = defineProps<{ view: DjView; host: DjHost }>();
 const SHOWN = 6;
 const expanded = ref(false);
 
-const songs = computed(() => (props.view.kind === "songs" ? props.view.songs : []));
+const songs = computed(() => (props.view.kind === "songs" ? props.view.songs.map(songNow) : []));
 const visibleSongs = computed(() => (expanded.value ? songs.value : songs.value.slice(0, SHOWN)));
 const playsOf = (t: Track) => props.host.plays()[t.path];
 const hue = (t: Track) => `${t.albumArtist || t.artist}\u0000${t.album}`;
@@ -45,6 +46,8 @@ function changesFor(song: Track, match: TagMatch) {
   }));
 }
 function apply(song: Track, match: TagMatch, index: number) {
+  // The write copies the whole file and checks it before swapping it in, which takes a while on a network drive.
+  say(`tags-${index}`, "Saving to the file… this can take a while on a network drive.");
   void run(`tags-${index}`, async () => {
     const edit = changedFields(tagEditFromMatch(match), [song]);
     if (Object.keys(edit).length === 0) return "Already matches.";
@@ -53,6 +56,13 @@ function apply(song: Track, match: TagMatch, index: number) {
     return out.failed.length ? out.failed[0] : "Saved to the file.";
   });
 }
+/**
+ * Every card follows the library: a song edited anywhere (the tag dialog, Picard, an Apply on another card) shows its
+ * new tags here too, instead of the ones it was drawn with.
+ */
+const liveByPath = computed(() => new Map(props.host.library().map((t) => [t.path, t])));
+const songNow = (song: Track): Track => liveByPath.value.get(song.path) ?? song;
+
 const level = (confidence: number) => (confidence >= 75 ? "high" : confidence >= 50 ? "mid" : "low");
 
 // A match opens to show everything about it in the chat: every tag beside the song's own, and the release it is from.
@@ -103,6 +113,17 @@ function compareRows(song: Track, m: TagMatch) {
 const isThisSong = (song: Track, m: TagMatch, t: { title: string; recordingId: string }) =>
   (!!m.recordingId && t.recordingId === m.recordingId) || t.title.trim().toLowerCase() === song.title.trim().toLowerCase();
 
+/** Writes just MusicBrainz's genre suggestion into the song, for the person who wants it. Apply never does this on its own. */
+function addGenre(song: Track, match: TagMatch, index: number) {
+  const key = `genre-${index}`;
+  say(key, "Saving to the file… this can take a while on a network drive.");
+  void run(key, async () => {
+    const out = await props.host.writeTags([song], { genre: match.genreHint });
+    if (out.problem) return out.problem;
+    return out.failed.length ? out.failed[0] : `Genre set to ${match.genreHint}.`;
+  });
+}
+
 function openInPicard(song: Track, key: string) {
   void run(key, async () => (await props.host.openInPicard([song])) ?? "Opened in Picard.");
 }
@@ -115,12 +136,41 @@ function openOnMusicBrainz(m: TagMatch, key: string) {
 const fold = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 const lyricsMatch = computed(() => {
   if (props.view.kind !== "lyrics") return null;
-  const { song, matched } = props.view;
+  const { matched } = props.view;
+  const song = songNow(props.view.song);
   const shown = matched ?? { title: song.title, artist: song.artist, album: song.album };
   // Different words for the same song are fine ("Beyoncé" / "Beyonce"); a different title or artist is worth saying.
   const differs = !!matched && (fold(matched.title) !== fold(song.title) || (!!song.artist && fold(matched.artist) !== fold(song.artist)));
   return { ...shown, differs };
 });
+
+// --- fill in missing genres ---
+const job = computed(() => (props.view.kind === "genres" ? props.view.job : null));
+const chosen = computed(() => job.value?.state.suggestions.filter((s) => s.include && s.state === "pending") ?? []);
+/** "Rock 30 · Pop 22 · …": what the suggestions add up to, so the person can judge them at a glance. */
+const genreTotals = computed(() => {
+  const counts = new Map<string, number>();
+  for (const s of job.value?.state.suggestions ?? []) counts.set(s.genre, (counts.get(s.genre) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([g, n]) => `${g} ${n}`).join(" · ");
+});
+const percent = (done: number, total: number) => (total > 0 ? Math.round((done / total) * 100) : 0);
+
+/** Whether these lyrics are in the song's own tags: they came from there, or the person just saved them. */
+const lyricsInTags = ref(false);
+const lyricsSaved = computed(() => lyricsInTags.value || (props.view.kind === "lyrics" && !!props.view.saved));
+function saveLyrics() {
+  const view = props.view;
+  if (view.kind !== "lyrics" || !view.text) return;
+  const song = songNow(view.song);
+  say("lyrics", "Saving to the file… this can take a while on a network drive.");
+  void run("lyrics", async () => {
+    const out = await props.host.writeTags([song], { lyrics: view.text });
+    if (out.problem) return out.problem;
+    if (out.failed.length) return out.failed[0];
+    lyricsInTags.value = true;
+    return "Saved in the song's tags.";
+  });
+}
 
 // --- file check ---
 const check = computed<FileCheck | null>(() => (props.view.kind === "filecheck" ? props.view.check : null));
@@ -134,7 +184,7 @@ function fixLength() {
 }
 
 // --- duplicates ---
-const groups = computed(() => (props.view.kind === "duplicates" ? props.view.groups : []));
+const groups = computed(() => (props.view.kind === "duplicates" ? props.view.groups.map((g) => ({ keep: songNow(g.keep), extras: g.extras.map(songNow) })) : []));
 const visibleGroups = computed(() => (expanded.value ? groups.value : groups.value.slice(0, 4)));
 function trashExtras(index: number, extras: Track[]) {
   void run(`dup-${index}`, async () => {
@@ -152,7 +202,7 @@ const items = computed<ImportItem[]>(() => {
   return props.view.ids.flatMap((id) => live.filter((i) => i.id === id));
 });
 const importName = (i: ImportItem) => i.proposal.title || i.videoTitle || i.url;
-const stageText = (i: ImportItem) => (i.stage === "fetching" ? `Downloading ${Math.round(i.progress * 100)}%` : i.stage === "ready" && i.picard === "waiting" ? "Waiting for Picard" : i.stage);
+const stageText = (i: ImportItem) => (i.stage === "held" ? "Held, not fetched" : i.stage === "fetching" ? `Downloading ${Math.round(i.progress * 100)}%` : i.stage === "ready" && i.picard === "waiting" ? "Waiting for Picard" : i.stage);
 </script>
 
 <template>
@@ -193,7 +243,7 @@ const stageText = (i: ImportItem) => (i.stage === "fetching" ? `Downloading ${Ma
     <!-- Tag matches: open one for every tag and its release, Apply to write -->
     <template v-else-if="view.kind === 'tags'">
       <header>
-        <b>Tags for “{{ view.song.title }}”</b>
+        <b>Tags for “{{ songNow(view.song).title }}”</b>
         <span class="muted">from MusicBrainz</span>
       </header>
       <div v-for="(m, i) in view.matches" :key="i" class="match">
@@ -211,10 +261,13 @@ const stageText = (i: ImportItem) => (i.stage === "fetching" ? `Downloading ${Ma
           <table class="compare">
             <thead><tr><th /><th>Now</th><th>MusicBrainz</th></tr></thead>
             <tbody>
-              <tr v-for="r in compareRows(view.song, m)" :key="r.label" :class="{ differs: r.differs }">
+              <tr v-for="r in compareRows(songNow(view.song), m)" :key="r.label" :class="{ differs: r.differs }">
                 <th>{{ r.label }}</th>
                 <td>{{ r.now }}</td>
-                <td>{{ r.there }}<span v-if="r.hint" class="muted small"> (hint, not written)</span></td>
+                <td>
+                  {{ r.there }}<span v-if="r.hint" class="muted small"> (suggestion, not in the file)</span>
+                  <button v-if="r.hint && r.there !== '—' && r.now === '(empty)'" class="mini" :disabled="busy[`genre-${i}`]" title="Write this genre into the song" @click="addGenre(songNow(view.song), m, i)">{{ busy[`genre-${i}`] ? "Saving…" : "Add" }}</button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -229,7 +282,7 @@ const stageText = (i: ImportItem) => (i.stage === "fetching" ? `Downloading ${Ma
               <div class="tracks">
                 <template v-for="d in releases[m.releaseId].info!.discs" :key="d.position">
                   <div v-if="releases[m.releaseId].info!.discs.length > 1" class="disc muted small">Disc {{ d.position }}{{ d.title ? ` · ${d.title}` : "" }}</div>
-                  <div v-for="t in d.tracks" :key="`${d.position}-${t.number}`" class="trk" :class="{ here: isThisSong(view.song, m, t) }">
+                  <div v-for="t in d.tracks" :key="`${d.position}-${t.number}`" class="trk" :class="{ here: isThisSong(songNow(view.song), m, t) }">
                     <span class="muted num">{{ t.number }}</span>
                     <span class="ellipsis">{{ t.title }}</span>
                     <span class="muted">{{ t.lengthMs ? formatTime(t.lengthMs) : "" }}</span>
@@ -241,25 +294,78 @@ const stageText = (i: ImportItem) => (i.stage === "fetching" ? `Downloading ${Ma
         </template>
 
         <div class="apply">
-          <button v-if="changesFor(view.song, m).length" class="on" :disabled="busy[`tags-${i}`]" @click="apply(view.song, m, i)">
-            Apply {{ changesFor(view.song, m).length }} change{{ changesFor(view.song, m).length === 1 ? "" : "s" }}
+          <button v-if="changesFor(songNow(view.song), m).length" class="on" :disabled="busy[`tags-${i}`]" @click="apply(songNow(view.song), m, i)">
+            {{ busy[`tags-${i}`] ? "Saving…" : `Apply ${changesFor(songNow(view.song), m).length} change${changesFor(songNow(view.song), m).length === 1 ? "" : "s"}` }}
           </button>
           <span v-else class="ok">✓ Already matches</span>
           <button v-if="isOpen(i)" title="Open this release on musicbrainz.org" :disabled="busy[`web-${i}`] || !m.releaseId && !m.recordingId" @click="openOnMusicBrainz(m, `web-${i}`)">MusicBrainz ↗</button>
           <button v-if="isOpen(i)" title="Tag this song in MusicBrainz Picard" @click="openInPicard(view.song, `picard-${i}`)">Picard</button>
           <button v-if="isOpen(i)" title="Show the song in the library" @click="host.showInLibrary(view.song)">Show</button>
         </div>
-        <ul v-if="isOpen(i) && changesFor(view.song, m).length" class="changes">
-          <li v-for="c in changesFor(view.song, m)" :key="c.label"><span class="muted">{{ c.label }}</span> {{ c.from }} → <b>{{ c.to }}</b></li>
+        <ul v-if="isOpen(i) && changesFor(songNow(view.song), m).length" class="changes">
+          <li v-for="c in changesFor(songNow(view.song), m)" :key="c.label"><span class="muted">{{ c.label }}</span> {{ c.from }} → <b>{{ c.to }}</b></li>
         </ul>
-        <span v-for="k in [`tags-${i}`, `web-${i}`, `picard-${i}`]" :key="k" v-show="outcome[k]" class="note">{{ outcome[k] }}</span>
+        <span v-for="k in [`tags-${i}`, `genre-${i}`, `web-${i}`, `picard-${i}`]" :key="k" v-show="outcome[k]" class="note">{{ outcome[k] }}</span>
       </div>
+    </template>
+
+    <!-- Fill in missing genres: watch, review, write -->
+    <template v-else-if="view.kind === 'genres' && job">
+      <header>
+        <b>Fill in missing genres</b>
+        <span class="muted">from MusicBrainz</span>
+      </header>
+
+      <template v-if="job.state.phase === 'idle'">
+        <p class="note">{{ job.missingCount() }} songs have no genre. Looking them all up takes about {{ Math.ceil((job.missingCount() * 1.2) / 60) }} minutes. Nothing is written until you say so.</p>
+        <div class="apply"><button class="on" :disabled="job.missingCount() === 0" @click="job.start()">Start</button></div>
+      </template>
+
+      <template v-else-if="job.state.phase === 'looking'">
+        <p class="note">Looked up {{ job.state.looked }} of {{ job.state.total }} · {{ job.state.suggestions.length }} suggestions</p>
+        <span class="bar"><span :style="{ width: `${percent(job.state.looked, job.state.total)}%` }" /></span>
+        <div class="apply"><button @click="job.cancel()">Stop and review</button></div>
+      </template>
+
+      <template v-else-if="job.state.phase === 'review' || job.state.phase === 'writing'">
+        <p class="note">
+          {{ job.state.suggestions.length }} suggestion{{ job.state.suggestions.length === 1 ? "" : "s" }} from {{ job.state.looked }} songs
+          <template v-if="job.state.skipped">· {{ job.state.skipped }} with no confident match (under {{ MIN_CONFIDENCE }}%)</template>
+        </p>
+        <p v-if="job.state.error" class="note error">Stopped early: {{ job.state.error }}</p>
+        <p v-if="genreTotals" class="note">{{ genreTotals }}</p>
+        <div class="genre-list">
+          <label v-for="s in job.state.suggestions" :key="s.track.path" class="genre-row" :class="s.state">
+            <input type="checkbox" :checked="s.include" :disabled="s.state !== 'pending' || job.state.phase === 'writing'" @change="job.setInclude(s.track.path, ($event.target as HTMLInputElement).checked)" />
+            <span class="ellipsis">{{ songNow(s.track).title }} <span class="muted">{{ songNow(s.track).artist }}</span></span>
+            <b class="ellipsis">{{ s.genre }}</b>
+            <span class="muted small" :title="s.error ?? undefined">{{ s.state === "written" ? "✓" : s.state === "failed" ? "failed" : `${s.confidence}%` }}</span>
+          </label>
+        </div>
+        <template v-if="job.state.phase === 'writing'">
+          <p class="note">Writing {{ job.state.written + job.state.failedWrites }} of {{ job.state.written + job.state.failedWrites + chosen.length }} · each song is copied and checked, so a network drive is slow</p>
+          <span class="bar"><span :style="{ width: `${percent(job.state.written + job.state.failedWrites, job.state.written + job.state.failedWrites + chosen.length)}%` }" /></span>
+          <div class="apply"><button @click="job.cancel()">Stop</button></div>
+        </template>
+        <div v-else class="apply">
+          <button class="on" :disabled="chosen.length === 0" @click="job.write()">Write {{ chosen.length }} genre{{ chosen.length === 1 ? "" : "s" }}</button>
+          <button @click="job.setAll(true)">All</button>
+          <button @click="job.setAll(false)">None</button>
+          <button title="Throw these away" @click="job.reset()">Discard</button>
+        </div>
+      </template>
+
+      <template v-else>
+        <p class="note">Wrote {{ job.state.written }} genre{{ job.state.written === 1 ? "" : "s" }}<template v-if="job.state.failedWrites"> · {{ job.state.failedWrites }} failed</template>.</p>
+        <p v-for="s in job.state.suggestions.filter((x) => x.state === 'failed').slice(0, 3)" :key="s.track.path" class="note error">{{ s.track.title }}: {{ s.error }}</p>
+        <div class="apply"><button @click="job.reset()">Done</button></div>
+      </template>
     </template>
 
     <!-- File check, with Fix length -->
     <template v-else-if="view.kind === 'filecheck' && check">
       <header>
-        <b>File check: {{ view.song.title }}</b>
+        <b>File check: {{ songNow(view.song).title }}</b>
         <span class="spacer" />
         <span class="badge" :class="check.verdict === 'ok' ? 'high' : check.verdict === 'cannotCheck' ? 'mid' : 'low'">{{ verdictText }}</span>
       </header>
@@ -287,10 +393,19 @@ const stageText = (i: ImportItem) => (i.stage === "fetching" ? `Downloading ${Ma
         <span class="muted small">Lyrics{{ view.kind === 'lyrics' && view.source ? ` · ${view.source}` : "" }}</span>
       </header>
       <p v-if="lyricsMatch?.differs" class="warn">
-        Matched “{{ lyricsMatch.title }}” by {{ lyricsMatch.artist }}, but your song is “{{ view.song.title }}” by {{ view.song.artist }}. These may be the wrong lyrics.
+        Matched “{{ lyricsMatch.title }}” by {{ lyricsMatch.artist }}, but your song is “{{ songNow(view.song).title }}” by {{ songNow(view.song).artist }}. These may be the wrong lyrics.
       </p>
       <p v-if="view.instrumental" class="note">This one is an instrumental.</p>
-      <pre v-else class="lyrics">{{ view.text }}</pre>
+      <template v-else>
+        <pre class="lyrics">{{ view.text }}</pre>
+        <div class="apply">
+          <span v-if="lyricsSaved" class="ok">✓ Saved in the song's tags</span>
+          <button v-else class="on" :disabled="busy.lyrics" title="Keep these lyrics in the song's own tags, so any player can show them" @click="saveLyrics()">
+            {{ busy.lyrics ? "Saving…" : "Save in the song's tags" }}
+          </button>
+          <span v-if="outcome.lyrics && !lyricsSaved" class="note">{{ outcome.lyrics }}</span>
+        </div>
+      </template>
     </template>
 
     <!-- Duplicates, with Trash -->
@@ -323,6 +438,7 @@ const stageText = (i: ImportItem) => (i.stage === "fetching" ? `Downloading ${Ma
             <span v-if="i.error" class="error small">{{ i.error }}</span>
           </span>
           <span class="acts">
+            <button v-if="i.stage === 'held'" class="on" :disabled="busy[`imp-${i.id}`]" title="Download this song" @click="run(`imp-${i.id}`, async () => { const out = await host.fetchImports([i.id]); return out.problem ?? 'Fetching.'; })">Fetch</button>
             <button v-if="i.stage === 'ready'" class="on" :disabled="busy[`imp-${i.id}`]" @click="run(`imp-${i.id}`, async () => (await host.addImport(i.id)) ?? 'Added to the library.')">Add</button>
             <button v-if="i.stage === 'ready' && i.picard === 'none'" title="Tag it in MusicBrainz Picard" @click="run(`imp-${i.id}`, async () => (await host.openImportInPicard(i.id)) ?? 'Opened in Picard.')">Picard</button>
             <button v-if="i.stage !== 'added'" title="Remove from Discovery" @click="run(`imp-${i.id}`, async () => (await host.removeImport(i.id)) ?? 'Removed.')">×</button>
@@ -369,6 +485,12 @@ button { padding: 0 7px; font-size: 11px; }
 .compare th, .compare td { padding: 1px 6px; text-align: left; border-top: 1px solid var(--line); }
 .compare thead th { color: var(--muted); font-weight: 600; border-top: none; }
 .compare tbody th { color: var(--muted); font-weight: 400; white-space: nowrap; }
+.mini { padding: 0 6px; font-size: 10px; margin-left: 4px; }
+.genre-list { max-height: 200px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; margin: 2px 0; }
+.genre-row { display: grid; grid-template-columns: 16px 1fr auto 34px; gap: 6px; align-items: center; padding: 2px 6px; font-size: 11px; border-top: 1px solid var(--line); cursor: pointer; }
+.genre-row:first-child { border-top: none; }
+.genre-row.written { opacity: 0.55; }
+.genre-row.failed { color: #ffb4b4; }
 .compare tr.differs td:last-child { font-weight: 700; color: var(--accent); }
 .release { margin: 2px 0; }
 .tracks { max-height: 150px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }

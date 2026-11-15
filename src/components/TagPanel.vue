@@ -2,7 +2,8 @@
 import { computed } from "vue";
 import { formatTime } from "../lib/format";
 import type { Track } from "../lib/types";
-import { persistedFlag } from "../lib/ui";
+import { store } from "../lib/store";
+import { persistedFlag, searchLibrary } from "../lib/ui";
 import CoverArt from "./CoverArt.vue";
 
 const props = defineProps<{ track: Track | null }>();
@@ -10,22 +11,30 @@ const props = defineProps<{ track: Track | null }>();
 // Collapsed by default so the queue keeps the room; the choice is remembered.
 const { flag: open, toggle } = persistedFlag("mixtape.tagsOpen", false);
 
-const rows = computed(() => {
+/** A tag value that leads somewhere: the songs that share it, or the file in Finder. */
+type Row = { label: string; value: string | number; link?: { title: string; go: () => void } };
+
+const rows = computed<Row[]>(() => {
   const t = props.track;
   if (!t) return [];
+  const songsWith = (label: string, value: string): Row["link"] =>
+    value ? { title: `Show every song with this ${label} in the library`, go: () => searchLibrary(value) } : undefined;
   return [
-    ["Title", t.title],
-    ["Artist", t.artist],
-    ["Album", t.album],
-    ["Album artist", t.albumArtist],
-    ["Track", t.trackNumber ?? ""],
-    ["Disc", t.discNumber ?? ""],
-    ["Year", t.year ?? ""],
-    ["Genre", t.genre],
-    ["Length", formatTime(t.durationMs)],
-    ["File", t.path],
-  ] as [string, string | number][];
+    { label: "Title", value: t.title },
+    { label: "Artist", value: t.artist, link: songsWith("artist", t.artist) },
+    { label: "Album", value: t.album, link: songsWith("album", t.album) },
+    { label: "Album artist", value: t.albumArtist, link: songsWith("artist", t.albumArtist) },
+    { label: "Track", value: t.trackNumber ?? "" },
+    { label: "Disc", value: t.discNumber ?? "" },
+    { label: "Year", value: t.year ?? "", link: t.year ? { title: `Show every song from ${t.year} in the library`, go: () => searchLibrary(String(t.year)) } : undefined },
+    { label: "Genre", value: t.genre, link: songsWith("genre", t.genre) },
+    { label: "Length", value: formatTime(t.durationMs) },
+    { label: "File", value: t.path, link: { title: "Show the file in Finder", go: () => void store.revealInFinder([t]) } },
+  ];
 });
+
+/** The cover opens the album, when the song has one. */
+const albumLink = computed(() => (props.track?.album ? () => searchLibrary(props.track!.album) : null));
 </script>
 
 <template>
@@ -38,11 +47,17 @@ const rows = computed(() => {
     </h2>
     <div v-show="open" id="tag-details">
       <div v-if="track" class="body with-art">
-        <CoverArt class="art" :path="track.path" :hue-key="`${track.albumArtist || track.artist}\u0000${track.album}`" :title="track.album || track.title" />
+        <button v-if="albumLink" class="art-link" :title="`Show ${track.album} in the library`" @click="albumLink()">
+          <CoverArt class="art" :path="track.path" :hue-key="`${track.albumArtist || track.artist}\u0000${track.album}`" :title="track.album || track.title" />
+        </button>
+        <CoverArt v-else class="art" :path="track.path" :hue-key="`${track.albumArtist || track.artist}\u0000${track.album}`" :title="track.title" />
         <dl>
-          <template v-for="[label, value] in rows" :key="label">
-            <dt>{{ label }}</dt>
-            <dd class="ellipsis" :title="String(value)">{{ value || "—" }}</dd>
+          <template v-for="r in rows" :key="r.label">
+            <dt>{{ r.label }}</dt>
+            <dd class="ellipsis" :title="r.link ? r.link.title : String(r.value)">
+              <button v-if="r.link && r.value" class="link" @click="r.link.go()">{{ r.value }}</button>
+              <template v-else>{{ r.value || "—" }}</template>
+            </dd>
           </template>
         </dl>
       </div>
@@ -70,4 +85,9 @@ dl { flex: 1; min-width: 0; margin: 0; display: grid; grid-template-columns: 80p
 dt { color: var(--muted); }
 dd { margin: 0; min-width: 0; user-select: text; -webkit-user-select: text; }
 .empty { color: var(--muted); }
+/* A value that is a link: it reads as text until pointed at. */
+.link { display: block; max-width: 100%; padding: 0; border: none; background: none; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
+.link:hover { color: var(--accent); text-decoration-style: solid; text-decoration-color: var(--accent); }
+.art-link { flex: none; padding: 0; border: none; background: none; border-radius: 8px; cursor: pointer; }
+.art-link:hover .art { outline: 2px solid var(--accent); outline-offset: 1px; }
 </style>

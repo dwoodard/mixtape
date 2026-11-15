@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Api } from "./api";
-import { autoAddEligible, createImports, findOwned, missingKeyFields, needsAttention } from "./imports";
+import { autoAddEligible, createImports, findOwned, heldOwnership, isHeld, isLoading, missingKeyFields, needsAttention, parseVideoTitle, rangeBetween, selectWithClick } from "./imports";
 import { makeTrack } from "./testing";
 import type { FlagStorage } from "./ui";
 import type { ImportEvent, ImportItem, Track } from "./types";
@@ -46,6 +46,9 @@ function setup(library: Track[] = [], apiOverrides: Partial<Api> = {}, storage =
     importSetTags: vi.fn(async (_id: number, patch: object) => item({ proposal: { ...item().proposal, ...patch } })),
     importAdd: vi.fn(async () => makeTrack({ path: "/lib/Artist/Album/Song.mp3" })),
     importOpenInPicard: vi.fn(async () => {}),
+    importReveal: vi.fn(async () => {}),
+    importStop: vi.fn(async () => 0),
+    importFetch: vi.fn(async () => 0),
     importCancelPicard: vi.fn(async () => {}),
     importUndo: vi.fn(async () => "/lib/Artist/Album/Song.mp3"),
     importRemove: vi.fn(async () => {}),
@@ -314,5 +317,224 @@ describe("adding files", () => {
     });
     expect(await imports.addFiles()).toBe(0);
     expect(imports.error.value).toBe("Nothing new to add");
+  });
+});
+
+describe("Reveal in Finder", () => {
+  it("asks the backend to show the song's file", async () => {
+    const { imports, api } = setup();
+    await imports.reveal(4);
+    expect(api.importReveal).toHaveBeenCalledWith(4);
+    expect(imports.itemErrors.value[4]).toBeUndefined();
+  });
+
+  it("shows why it could not, on that song, and clears the message the next time", async () => {
+    const reveal = vi.fn().mockRejectedValueOnce("The song has no file yet.").mockResolvedValueOnce(undefined);
+    const { imports } = setup([], { importReveal: reveal });
+    await imports.reveal(4);
+    expect(imports.itemErrors.value[4]).toBe("The song has no file yet.");
+    await imports.reveal(4);
+    expect(imports.itemErrors.value[4]).toBeUndefined();
+  });
+});
+
+describe("finding a song the library already has", () => {
+  const lib = [makeTrack({ title: "Don’t Stop Believin’", artist: "Journey", path: "/m/j.mp3" })];
+
+  it("ignores punctuation, accents and case", () => {
+    expect(findOwned(lib, "Don't Stop Believin'", "journey")).toBe(lib[0]);
+    expect(findOwned([makeTrack({ title: "Halo", artist: "Beyoncé", path: "/m/h.mp3" })], "HALO!", "Beyonce")).not.toBeNull();
+  });
+
+  it("does not match a different song or artist, or a title with nothing in it", () => {
+    expect(findOwned(lib, "Don't Stop Believin' (Live)", "Journey")).toBeNull();
+    expect(findOwned(lib, "Don't Stop Believin'", "Glee Cast")).toBeNull();
+    expect(findOwned(lib, "!!!", "Journey")).toBeNull();
+    expect(findOwned(lib, "", "Journey")).toBeNull();
+  });
+});
+
+describe("loading songs", () => {
+  it("counts only songs still coming in", () => {
+    for (const stage of ["queued", "probing", "fetching", "converting"] as const) expect(isLoading(item({ stage }))).toBe(true);
+    for (const stage of ["ready", "added", "failed"] as const) expect(isLoading(item({ stage }))).toBe(false);
+  });
+
+  it("stops the given songs, or all of them, and says how many", async () => {
+    const stop = vi.fn(async () => 3);
+    const { imports } = setup([], { importStop: stop });
+    expect(await imports.stopLoading([2, 3, 4])).toBe(3);
+    expect(stop).toHaveBeenLastCalledWith([2, 3, 4]);
+    await imports.stopLoading();
+    expect(stop).toHaveBeenLastCalledWith(null);
+  });
+
+  it("reports a failure and stops nothing", async () => {
+    const { imports } = setup([], { importStop: vi.fn(async () => Promise.reject("nope")) });
+    expect(await imports.stopLoading([1])).toBe(0);
+    expect(imports.error.value).toBe("nope");
+  });
+});
+
+describe("selecting with shift-click", () => {
+  const order = [10, 11, 12, 13, 14];
+
+  it("finds the run between two songs, either way round, and just the song when there is no start", () => {
+    expect(rangeBetween(order, 11, 13)).toEqual([11, 12, 13]);
+    expect(rangeBetween(order, 13, 11)).toEqual([11, 12, 13]);
+    expect(rangeBetween(order, null, 12)).toEqual([12]);
+    expect(rangeBetween(order, 99, 12)).toEqual([12]);
+    expect(rangeBetween(order, 11, 99)).toEqual([]);
+  });
+
+  it("a plain click flips one song and starts the next run there", () => {
+    const first = selectWithClick(new Set(), order, null, 11, false);
+    expect([...first.picked]).toEqual([11]);
+    expect(first.anchor).toBe(11);
+    const off = selectWithClick(first.picked, order, first.anchor, 11, false);
+    expect(off.picked.size).toBe(0);
+  });
+
+  it("a shift-click selects the run from the last click, keeping what was already ticked", () => {
+    const out = selectWithClick(new Set([10]), order, 11, 13, true);
+    expect([...out.picked].sort()).toEqual([10, 11, 12, 13]);
+    expect(out.anchor).toBe(13);
+  });
+
+  it("a shift-click on a ticked song clears the run instead", () => {
+    const out = selectWithClick(new Set([10, 11, 12, 13, 14]), order, 10, 12, true);
+    expect([...out.picked].sort()).toEqual([13, 14]);
+  });
+
+  it("a shift-click with nothing clicked before is just that song", () => {
+    expect([...selectWithClick(new Set(), order, null, 13, true).picked]).toEqual([13]);
+  });
+
+  it("does not change the set it was given", () => {
+    const before = new Set([10]);
+    selectWithClick(before, order, 10, 13, true);
+    expect([...before]).toEqual([10]);
+  });
+});
+
+describe("held playlist songs", () => {
+  it("are not loading, and are told apart from the rest", () => {
+    expect(isHeld(item({ stage: "held" }))).toBe(true);
+    expect(isHeld(item({ stage: "queued" }))).toBe(false);
+    expect(isLoading(item({ stage: "held" }))).toBe(false);
+  });
+
+  it("start fetching for the given songs, or all of them, and report how many", async () => {
+    const fetch = vi.fn(async () => 2);
+    const { imports } = setup([], { importFetch: fetch });
+    expect(await imports.fetchHeld([4, 5])).toBe(2);
+    expect(fetch).toHaveBeenLastCalledWith([4, 5]);
+    await imports.fetchHeld();
+    expect(fetch).toHaveBeenLastCalledWith(null);
+  });
+
+  it("report a failure to fetch and start nothing", async () => {
+    const { imports } = setup([], { importFetch: vi.fn(async () => Promise.reject("busy")) });
+    expect(await imports.fetchHeld([1])).toBe(0);
+    expect(imports.error.value).toBe("busy");
+  });
+
+  it("can be skipped, which removes them without fetching", async () => {
+    const { imports, api } = setup();
+    await imports.clearHeld([7, 8]);
+    expect(vi.mocked(api.importRemove).mock.calls).toEqual([[7], [8]]);
+    expect(api.importFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("adding many at once", () => {
+  const ready = (id: number, title: string, artist = "Primus") => item({ id, stage: "ready", proposal: { ...item().proposal, title, artist } });
+
+  it("skips songs the library already has, adds the rest, and says which it skipped", async () => {
+    const owned = makeTrack({ title: "My Name Is Mud", artist: "Primus", path: "/m/primus/mud.mp3" });
+    const { imports, api } = setup([owned]);
+    const out = await imports.addMany([ready(1, "My Name Is Mud"), ready(2, "Jerry Was a Race Car Driver")]);
+
+    expect(out).toEqual({ added: 1, skipped: 1 });
+    expect(vi.mocked(api.importAdd).mock.calls).toEqual([[2]]);
+    expect(imports.notice.value).toContain("Added 1. Skipped 1 already in your library: My Name Is Mud");
+    expect(imports.notice.value).toContain("Add anyway");
+  });
+
+  it("adds a song that appears twice in one batch only once, because the library is checked before each", async () => {
+    const library: Track[] = [];
+    const { imports, api } = setup(library, {
+      importAdd: vi.fn(async (id: number) => {
+        const t = makeTrack({ title: "Pudding Time", artist: "Primus", path: `/m/${id}.mp3` });
+        library.push(t);
+        return t;
+      }),
+    });
+    const out = await imports.addMany([ready(1, "Pudding Time"), ready(2, "Pudding Time"), ready(3, "Pudding Time")]);
+    expect(out).toEqual({ added: 1, skipped: 2 });
+    expect(api.importAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it("compares title and artist loosely, and does not skip a different artist's song of the same name", async () => {
+    const { imports, api } = setup([makeTrack({ title: "Southbound Pachyderm", artist: "PRIMUS", path: "/m/a.mp3" })]);
+    const out = await imports.addMany([ready(1, "southbound pachyderm!"), ready(2, "Southbound Pachyderm", "Some Cover Band")]);
+    expect(out).toEqual({ added: 1, skipped: 1 });
+    expect(vi.mocked(api.importAdd).mock.calls).toEqual([[2]]);
+  });
+
+  it("names at most three skipped songs, then counts the rest, and says nothing when nothing was skipped", async () => {
+    const owned = ["A", "B", "C", "D", "E"].map((t) => makeTrack({ title: t, artist: "Primus", path: `/m/${t}.mp3` }));
+    const { imports } = setup(owned);
+    await imports.addMany(owned.map((t, i) => ready(i + 1, t.title)));
+    expect(imports.notice.value).toContain("A, B, C, and 2 more");
+
+    const clean = setup([]);
+    await clean.imports.addMany([ready(1, "Fresh")]);
+    expect(clean.imports.notice.value).toBeNull();
+  });
+
+  it("ignores songs that are not ready", async () => {
+    const { imports, api } = setup([]);
+    await imports.addMany([item({ id: 1, stage: "held" }), item({ id: 2, stage: "fetching" })]);
+    expect(api.importAdd).not.toHaveBeenCalled();
+  });
+});
+
+describe("adding a song that is already there", () => {
+  it("passes no permission to keep a copy by default, and shows the library's refusal on that song", async () => {
+    const refuse = vi.fn(async () => Promise.reject("Already in the library: Primus/Pork Soda/02 My Name Is Mud.mp3. It was not added again."));
+    const { imports, api } = setup([], { importAdd: refuse });
+    expect(await imports.add(4)).toBe(false);
+    expect(api.importAdd).toHaveBeenCalledWith(4);
+    expect(imports.itemErrors.value[4]).toContain("Already in the library");
+  });
+
+  it("keeps a second copy only when the person chose Add anyway", async () => {
+    const { imports, api } = setup();
+    expect(await imports.add(4, true)).toBe(true);
+    expect(api.importAdd).toHaveBeenCalledWith(4, true);
+  });
+
+  it("bulk adds never ask for a second copy", async () => {
+    const { imports, api } = setup();
+    await imports.addMany([item({ id: 7, stage: "ready" })]);
+    expect(api.importAdd).toHaveBeenCalledWith(7);
+  });
+});
+
+
+describe("heldOwnership", () => {
+  const lib = [{ title: "My Name Is Mud", artist: "Primus" }, { title: "Frizzle Fry", artist: "Primus" }] as Track[];
+  it("parses a video title", () => {
+    expect(parseVideoTitle("Primus - Tommy The Cat (Official Music Video)")).toEqual({ artist: "Primus", title: "Tommy The Cat" });
+  });
+  it("is have for the same artist and title", () => {
+    expect(heldOwnership({ videoTitle: "Primus - My Name Is Mud" }, lib)?.match).toBe("have");
+  });
+  it("is maybe when only the title matches", () => {
+    expect(heldOwnership({ videoTitle: "Frizzle Fry" }, lib)?.match).toBe("maybe");
+  });
+  it("is null when the library lacks it", () => {
+    expect(heldOwnership({ videoTitle: "Primus - DMV" }, lib)).toBeNull();
   });
 });

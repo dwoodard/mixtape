@@ -28,6 +28,8 @@ pub const FORMATS: [&str; 3] = ["mp3", "m4a", "flac"];
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Stage {
+    /// Listed from a playlist but not fetched: nothing downloads until the person asks for it.
+    Held,
     Queued,
     Probing,
     Fetching,
@@ -75,6 +77,26 @@ pub struct ImportItem {
     staged: Option<PathBuf>,
     #[serde(skip)]
     added_size: u64,
+}
+
+/// Whether a song is still being brought in: waiting its turn, being looked up, downloaded or converted.
+fn is_loading(stage: Stage) -> bool {
+    matches!(stage, Stage::Queued | Stage::Probing | Stage::Fetching | Stage::Converting)
+}
+
+/// The songs that can be stopped: those still loading, narrowed to `wanted` when it is given.
+fn loading_ids(items: &[ImportItem], wanted: Option<&[u64]>) -> Vec<u64> {
+    items.iter().filter(|i| is_loading(i.stage) && wanted.is_none_or(|w| w.contains(&i.id))).map(|i| i.id).collect()
+}
+
+/// Where an item's file is: in the library once added, the fetched copy while it is ready, nowhere before or after that.
+fn file_of_item(item: &ImportItem) -> Result<PathBuf, String> {
+    match (item.stage, &item.added_path, &item.staged) {
+        (Stage::Added, Some(path), _) => Ok(PathBuf::from(path)),
+        (Stage::Ready, _, Some(staged)) => Ok(staged.clone()),
+        (Stage::Failed, ..) => Err("That one failed, so there is no file.".into()),
+        _ => Err("The song has no file yet.".into()),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -425,9 +447,10 @@ impl Imports {
                 let format = format.to_string();
                 std::thread::spawn(move || match this.inner.runner.playlist(&url).and_then(|j| parse_playlist(&j, PLAYLIST_LIMIT)) {
                     Ok((_name, entries)) => {
+                        // Listed, not fetched: a playlist can be hundreds of songs, and the person picks the ones they want.
                         for (link, title) in entries {
                             if let Ok(id) = this.new_item(&link, &format, &title) {
-                                this.spawn_pipeline(id, title);
+                                this.update(id, |i| i.stage = Stage::Held);
                             }
                         }
                     }
@@ -700,6 +723,39 @@ impl Imports {
         .ok_or_else(|| "That item is gone.".to_string())
     }
 
+    /// Starts fetching songs that were held back from a playlist: the ones in `wanted`, or all of them when it is None.
+    /// Returns how many were started.
+    pub fn fetch_held(&self, wanted: Option<&[u64]>) -> usize {
+        let hints: Vec<(u64, String)> = {
+            let state = self.inner.state.lock().unwrap();
+            state.items.iter().filter(|i| i.stage == Stage::Held && wanted.is_none_or(|w| w.contains(&i.id))).map(|i| (i.id, i.video_title.clone())).collect()
+        };
+        for (id, hint) in &hints {
+            self.update(*id, |i| i.stage = Stage::Queued);
+            self.spawn_pipeline(*id, hint.clone());
+        }
+        hints.len()
+    }
+
+    /// Stops songs that are still loading and takes them out of the list: the ones in `wanted`, or all of them when it is
+    /// None. Downloads in progress are killed and songs still waiting for their turn never start. Songs that are ready,
+    /// added or failed are left alone. Returns how many were stopped.
+    pub fn stop_loading(&self, wanted: Option<&[u64]>) -> usize {
+        let ids = loading_ids(&self.inner.state.lock().unwrap().items, wanted);
+        for id in &ids {
+            self.remove(*id);
+        }
+        ids.len()
+    }
+
+    /// The song's file on disk, for showing it in Finder: the one in the library once it is added, or the fetched
+    /// copy while it waits for review.
+    pub fn file_of(&self, id: u64) -> Result<PathBuf, String> {
+        let state = self.inner.state.lock().unwrap();
+        let item = state.items.iter().find(|i| i.id == id).ok_or("That item is gone.")?;
+        file_of_item(item)
+    }
+
     /// Hands the staged song to MusicBrainz Picard and starts watching for it
     /// to be saved there. Picard may rename the file when it saves, so the
     /// song's whole staging folder is watched, not one file name.
@@ -950,6 +1006,82 @@ fn newest_audio(dir: &Path) -> Option<Fingerprint> {
 
 #[cfg(test)]
 mod tests {
+
+    fn blank_item(id: u64, stage: Stage) -> ImportItem {
+        ImportItem {
+            id,
+            url: String::new(),
+            stage,
+            progress: 0.0,
+            error: None,
+            video_title: String::new(),
+            channel: String::new(),
+            duration_secs: None,
+            proposal: Proposal::default(),
+            sources: BTreeMap::new(),
+            alternatives: BTreeMap::new(),
+            notes: Vec::new(),
+            confidence: 0.0,
+            format: "mp3".into(),
+            destination: None,
+            added_path: None,
+            picard: PicardState::None,
+            staged: None,
+            added_size: 0,
+        }
+    }
+
+    #[test]
+    fn only_songs_still_loading_can_be_stopped() {
+        let items = vec![
+            blank_item(1, Stage::Queued),
+            blank_item(2, Stage::Probing),
+            blank_item(3, Stage::Fetching),
+            blank_item(4, Stage::Converting),
+            blank_item(5, Stage::Ready),
+            blank_item(6, Stage::Added),
+            blank_item(7, Stage::Failed),
+        ];
+        assert_eq!(loading_ids(&items, None), vec![1, 2, 3, 4]);
+        // Asking for songs that are not loading changes nothing for them.
+        assert_eq!(loading_ids(&items, Some(&[2, 5, 6, 99])), vec![2]);
+        assert!(loading_ids(&items, Some(&[])).is_empty());
+    }
+
+    #[test]
+    fn an_items_file_is_the_library_copy_once_added_and_the_fetched_copy_while_ready() {
+        let item = |stage, added: Option<&str>, staged: Option<&str>| ImportItem {
+            id: 1,
+            url: String::new(),
+            stage,
+            progress: 0.0,
+            error: None,
+            video_title: String::new(),
+            channel: String::new(),
+            duration_secs: None,
+            proposal: Proposal::default(),
+            sources: BTreeMap::new(),
+            alternatives: BTreeMap::new(),
+            notes: Vec::new(),
+            confidence: 0.0,
+            format: "mp3".into(),
+            destination: None,
+            added_path: added.map(str::to_owned),
+            picard: PicardState::None,
+            staged: staged.map(PathBuf::from),
+            added_size: 0,
+        };
+        assert_eq!(file_of_item(&item(Stage::Ready, None, Some("/app/imports/1/a.mp3"))), Ok(PathBuf::from("/app/imports/1/a.mp3")));
+        // Once added, the file that matters is the one in the library, not the fetched copy.
+        assert_eq!(
+            file_of_item(&item(Stage::Added, Some("/music/Primus/Frizzle Fry.mp3"), Some("/app/imports/1/a.mp3"))),
+            Ok(PathBuf::from("/music/Primus/Frizzle Fry.mp3"))
+        );
+        assert!(file_of_item(&item(Stage::Queued, None, None)).is_err());
+        assert!(file_of_item(&item(Stage::Fetching, None, None)).is_err());
+        assert!(file_of_item(&item(Stage::Failed, None, None)).unwrap_err().contains("failed"));
+        assert!(file_of_item(&item(Stage::Ready, None, None)).is_err(), "ready but no file recorded");
+    }
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
@@ -1147,11 +1279,57 @@ mod tests {
     }
 
     #[test]
-    fn a_playlist_becomes_one_item_per_entry() {
-        let h = harness(Fake::ok());
+    fn a_playlist_becomes_one_held_item_per_entry_and_nothing_is_fetched() {
+        let fake = Fake::ok();
+        let peak = fake.peak.clone();
+        let h = harness(fake);
         h.imports.add_link("https://www.youtube.com/playlist?list=PLabc", "m4a").unwrap();
-        wait_until(&h.imports, "three ready", |i| i.len() == 3 && i.iter().all(|x| x.stage == Stage::Ready));
-        assert!(h.imports.list().iter().all(|i| i.format == "m4a"));
+        wait_until(&h.imports, "three held", |i| i.len() == 3 && i.iter().all(|x| x.stage == Stage::Held));
+        std::thread::sleep(Duration::from_millis(150));
+        // Still held, and nothing was ever fetched.
+        assert!(h.imports.list().iter().all(|i| i.stage == Stage::Held && i.format == "m4a"));
+        assert_eq!(peak.load(Ordering::SeqCst), 0);
+        assert_eq!(h.imports.list().iter().map(|i| i.video_title.as_str()).collect::<Vec<_>>(), ["One", "Two", "Three"]);
+    }
+
+    #[test]
+    fn fetching_held_songs_starts_only_the_ones_asked_for() {
+        let h = harness(Fake::ok());
+        h.imports.add_link("https://www.youtube.com/playlist?list=PLabc", "mp3").unwrap();
+        wait_until(&h.imports, "three held", |i| i.len() == 3 && i.iter().all(|x| x.stage == Stage::Held));
+        let ids: Vec<u64> = h.imports.list().iter().map(|i| i.id).collect();
+
+        assert_eq!(h.imports.fetch_held(Some(&[ids[1], 999])), 1, "an id that is not there is ignored");
+        wait_until(&h.imports, "the second ready", |i| i.iter().any(|x| x.id == ids[1] && x.stage == Stage::Ready));
+        let stages: Vec<Stage> = h.imports.list().iter().map(|i| i.stage).collect();
+        assert_eq!(stages, [Stage::Held, Stage::Ready, Stage::Held]);
+
+        // Songs that already started are not held, so fetching again does nothing for them.
+        assert_eq!(h.imports.fetch_held(Some(&[ids[1]])), 0);
+        assert_eq!(h.imports.fetch_held(None), 2);
+        wait_until(&h.imports, "all ready", |i| i.iter().all(|x| x.stage == Stage::Ready));
+    }
+
+    #[test]
+    fn a_held_song_can_be_removed_without_ever_fetching() {
+        let fake = Fake::ok();
+        let peak = fake.peak.clone();
+        let h = harness(fake);
+        h.imports.add_link("https://www.youtube.com/playlist?list=PLabc", "mp3").unwrap();
+        wait_until(&h.imports, "three held", |i| i.len() == 3 && i.iter().all(|x| x.stage == Stage::Held));
+        let first = h.imports.list()[0].id;
+        h.imports.remove(first);
+        assert_eq!(h.imports.list().len(), 2);
+        assert_eq!(h.imports.fetch_held(None), 2);
+        wait_until(&h.imports, "two ready", |i| i.len() == 2 && i.iter().all(|x| x.stage == Stage::Ready));
+        assert!(peak.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[test]
+    fn a_held_song_is_not_loading_and_has_no_file() {
+        let items = vec![blank_item(1, Stage::Held), blank_item(2, Stage::Queued)];
+        assert_eq!(loading_ids(&items, None), vec![2], "stopping leaves held songs alone");
+        assert!(file_of_item(&items[0]).is_err());
     }
 
     #[test]
@@ -1161,6 +1339,8 @@ mod tests {
         let peak = fake.peak.clone();
         let h = harness(fake);
         h.imports.add_link("https://www.youtube.com/playlist?list=PLabc", "mp3").unwrap();
+        wait_until(&h.imports, "three held", |i| i.len() == 3 && i.iter().all(|x| x.stage == Stage::Held));
+        assert_eq!(h.imports.fetch_held(None), 3);
         wait_until(&h.imports, "all ready", |i| i.len() == 3 && i.iter().all(|x| x.stage == Stage::Ready));
         assert!(peak.load(Ordering::SeqCst) <= MAX_AT_ONCE, "peak was {}", peak.load(Ordering::SeqCst));
     }
@@ -1724,7 +1904,7 @@ mod tests {
         let lib = tempfile::tempdir().unwrap();
         let (staged, proposal, _) = imports.take_for_add(item.id).unwrap();
         let tagged = Proposal { artist: "jawed".into(), album: "YouTube".into(), ..proposal };
-        let added = crate::importer::add_to_library(&staged, &tagged, lib.path(), &[], true).unwrap();
+        let added = crate::importer::add_to_library(&staged, &tagged, lib.path(), &[], true, false).unwrap();
         assert_eq!(added.path, lib.path().join("jawed/YouTube/Me at the zoo.mp3"));
         assert_eq!((added.track.title.as_str(), added.track.artist.as_str(), added.track.year), ("Me at the zoo", "jawed", Some(2005)));
         assert!((18_000..=21_000).contains(&added.track.duration_ms), "{}", added.track.duration_ms);

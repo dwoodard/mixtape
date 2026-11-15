@@ -55,6 +55,14 @@ interface Recording {
   tags?: { name: string; count?: number }[];
 }
 
+/** Tags people put on MusicBrainz that are not genres: where, when, who sings, how it was heard. */
+const NOT_GENRES = /^(seen live|favou?rites?|favou?rite.*|under \d+ listens|\d{2,4}s?|usa|american|british|english|canadian|australian|uk|us|male vocalists?|female vocalists?|singer-songwriter|albums? i own|my music|good|love|awesome|cover|covers|live|remix|soundtrack|christmas|instrumental|explicit)$/i;
+
+/** The most voted tag that is really a genre, or "" when there is none. */
+export function pickGenreTag(tags: { name: string; count?: number }[] | undefined): string {
+  return [...(tags ?? [])].filter((t) => !NOT_GENRES.test(t.name.trim())).sort((a, b) => (b.count ?? 0) - (a.count ?? 0))[0]?.name.trim() ?? "";
+}
+
 const norm = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 const credit = (list?: { name?: string }[]) => (list ?? []).map((c) => c.name ?? "").join("").trim();
 const quote = (s: string) => `"${s.replace(/[\\"]/g, "\\$&")}"`;
@@ -101,7 +109,7 @@ function toMatch(r: Recording, track: Track): TagMatch {
   }
   if (release?.status === "Official") confidence += 5;
 
-  const tag = [...(r.tags ?? [])].sort((a, b) => (b.count ?? 0) - (a.count ?? 0))[0]?.name ?? "";
+  const tag = pickGenreTag(r.tags);
   const kind = release?.["release-group"]?.["secondary-types"]?.[0] ?? release?.["release-group"]?.["primary-type"] ?? "";
   return {
     recordingId: r.id ?? "",

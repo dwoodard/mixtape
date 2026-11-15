@@ -25,7 +25,10 @@ export const TAG_FIELDS: { key: TagField; label: string; numeric?: boolean }[] =
 
 export type TagDraft = Record<TagField, string>;
 /** What the backend takes: only the fields that change; an empty string clears. */
-export type TagEditPayload = Partial<Record<TagField, string>>;
+export type TagEditPayload = Partial<Record<TagField, string>> & {
+  /** The words of the song, kept in the file's lyrics tag. Line breaks are kept; an empty string removes them. */
+  lyrics?: string;
+};
 
 export interface TagChange {
   field: TagField;

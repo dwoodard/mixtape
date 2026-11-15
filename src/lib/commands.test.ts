@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCommands, dispatchKey, type Command, type KeyEventLike } from "./commands";
-import type { Store } from "./store";
+import { imports, type Store } from "./store";
 import { makePlayerState, makeTrack } from "./testing";
-import { appMode, djPanelOpen, helpOpen, libraryView, paletteOpen, publishSelection, selectedSongs, tagEditPaths } from "./ui";
+import { appMode, djPanelOpen, inboxPicked, helpOpen, libraryView, paletteOpen, publishSelection, selectedSongs, tagEditPaths } from "./ui";
 
 function fakeStore(over: Record<string, unknown> = {}) {
   const store = {
@@ -131,6 +131,45 @@ describe("commands", () => {
       expect(djPanelOpen.value).toBe(false);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("Cmd+A ticks every song in the Discovery inbox, and only there", async () => {
+    imports.items.value = [{ id: 4 }, { id: 5 }, { id: 9 }] as never;
+    inboxPicked.value = new Set([5]);
+    try {
+      appMode.value = "player";
+      expect(get(createCommands(fakeStore()), "selectAll").enabled).toBe(false);
+
+      appMode.value = "discovery";
+      const command = get(createCommands(fakeStore()), "selectAll");
+      expect(command.enabled).toBe(true);
+      await command.run!();
+      expect([...inboxPicked.value].sort()).toEqual([4, 5, 9]);
+
+      imports.items.value = [];
+      expect(get(createCommands(fakeStore()), "selectAll").enabled).toBe(false);
+    } finally {
+      imports.items.value = [];
+      inboxPicked.value = new Set();
+      appMode.value = "player";
+    }
+  });
+
+  it("Cmd+A does not take over a text box", () => {
+    imports.items.value = [{ id: 1 }] as never;
+    appMode.value = "discovery";
+    try {
+      const commands = createCommands(fakeStore());
+      const event = { key: "a", metaKey: true, shiftKey: false, altKey: false, ctrlKey: false, repeat: false, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+      expect(dispatchKey(event, commands, { editable: true, pressable: false })).toBe(false);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(dispatchKey(event, commands, { editable: false, pressable: false })).toBe(true);
+      expect([...inboxPicked.value]).toEqual([1]);
+    } finally {
+      imports.items.value = [];
+      inboxPicked.value = new Set();
+      appMode.value = "player";
     }
   });
 

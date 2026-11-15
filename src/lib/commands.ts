@@ -1,9 +1,10 @@
 import { nextTick } from "vue";
-import type { Store } from "./store";
+import { imports, type Store } from "./store";
 import { allowedWhileFocused, COMMANDS, findCommand, type CommandDef, type FocusKind, type KeyLike } from "./shortcuts";
 import {
   appMode,
   helpOpen,
+  inboxPicked,
   libraryView,
   paletteOpen,
   selectedSongs,
@@ -78,6 +79,11 @@ export function createCommands(store: Store): Command[] {
     viewAlbums: { run: showView("albums") },
     viewArtists: { run: showView("artists") },
     viewDuplicates: { enabled: store.duplicateGroups.value.length > 0, run: showView("duplicates") },
+    // Only the Discovery inbox has a select-all: the song lists keep their own selection.
+    selectAll: {
+      enabled: appMode.value === "discovery" && imports.items.value.length > 0,
+      run: () => void (inboxPicked.value = new Set(imports.items.value.map((i) => i.id))),
+    },
     discovery: { run: () => setAppMode(appMode.value === "player" ? "discovery" : "player") },
     // In the thin bar the chat shares the queue's panel; in the large window it slides out on the right.
     dj: { run: () => (large ? toggleDjPanel() : store.toggleThinView("dj", window.innerWidth)) },

@@ -1,17 +1,34 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { needsAttention } from "../lib/imports";
+import { heldOwnership, isHeld, isLoading, needsAttention } from "../lib/imports";
 import { imports, store } from "../lib/store";
+import { showInLibrary } from "../lib/ui";
 import type { ImportItem } from "../lib/types";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import ImportStage from "./ImportStage.vue";
 
 /** Everything brought in, in the order it arrived. */
 const props = defineProps<{ focus: number | null; picked: ReadonlySet<number> }>();
-const emit = defineEmits<{ focus: [id: number]; toggle: [id: number] }>();
+const emit = defineEmits<{ focus: [id: number]; toggle: [id: number, shift: boolean] }>();
 
 const ready = computed(() => imports.items.value.filter((i) => i.stage === "ready"));
 const readyPicked = computed(() => ready.value.filter((i) => props.picked.has(i.id)));
+/** Songs still coming in, and which of them are ticked: these are the ones that can be stopped. */
+/** Songs held back from a playlist, and which of them are ticked: the ones to fetch. */
+const held = computed(() => imports.items.value.filter(isHeld));
+/** Which held songs the library already seems to have, by song id. */
+const heldOwned = computed(() => new Map(held.value.map((i) => [i.id, heldOwnership(i, store.library.value)] as const)));
+const heldHave = computed(() => [...heldOwned.value.values()].filter((o) => o?.match === "have").length);
+const heldPicked = computed(() => held.value.filter((i) => props.picked.has(i.id)));
+const loading = computed(() => imports.items.value.filter(isLoading));
+const loadingPicked = computed(() => loading.value.filter((i) => props.picked.has(i.id)));
+const loadingRest = computed(() => loading.value.filter((i) => !props.picked.has(i.id)));
+const ids = (list: ImportItem[]) => list.map((i) => i.id);
+/** A shift-click on a row picks a run of songs; a plain click shows the song on the right. */
+function onRowClick(item: ImportItem, event: MouseEvent) {
+  if (event.shiftKey) emit("toggle", item.id, true);
+  else emit("focus", item.id);
+}
 const attention = (i: ImportItem) => i.stage === "ready" && needsAttention(i, store.library.value);
 /** Right-click on a song in the inbox. */
 const menu = ref<{ x: number; y: number; item: ImportItem } | null>(null);
@@ -24,6 +41,7 @@ const menuItems = computed<MenuItem[]>(() => {
   const item = menu.value?.item;
   if (!item) return [];
   const items: MenuItem[] = [];
+  if (item.stage === "held") items.push({ label: "Fetch", action: () => imports.fetchHeld([item.id]) });
   if (item.stage === "ready") {
     if (item.picard === "waiting") {
       items.push({ label: "Send to Picard again", action: () => imports.openInPicard(item.id), disabled: picardMissing.value });
@@ -41,8 +59,12 @@ const menuItems = computed<MenuItem[]>(() => {
     }
     items.push({ label: "Add to library", action: () => imports.add(item.id), separated: true });
   }
+  // A ready song has its fetched copy to show; an added one, its place in the library.
+  if (item.stage === "ready" || item.stage === "added") {
+    items.push({ label: "Reveal in Finder", action: () => imports.reveal(item.id), separated: item.stage === "added" });
+  }
   if (item.stage === "added") items.push({ label: "Undo add", action: () => imports.undo(item.id) });
-  items.push({ label: item.stage === "failed" ? "Clear" : "Remove", action: () => imports.remove(item.id), danger: true, separated: items.length > 0 });
+  items.push({ label: item.stage === "failed" ? "Clear" : isLoading(item) ? "Stop and remove" : isHeld(item) ? "Skip" : "Remove", action: () => imports.remove(item.id), danger: true, separated: items.length > 0 });
   return items;
 });
 
@@ -60,16 +82,41 @@ const autoList = computed(() =>
       </button>
       <button :disabled="ready.length === 0" @click="imports.addMany(ready)">Add all ready ({{ ready.length }})</button>
     </div>
+    <p v-if="imports.notice.value" class="notice" role="status">
+      {{ imports.notice.value }}
+      <button class="tiny" @click="imports.notice.value = null">Dismiss</button>
+    </p>
+    <!-- A playlist is listed first and fetched only for the songs picked -->
+    <div v-if="held.length" class="bulk held" role="group" aria-label="Held songs">
+      <span class="muted">{{ held.length }} held, not fetched<template v-if="heldHave"> · {{ heldHave }} already in your library</template></span>
+      <button class="on" :disabled="heldPicked.length === 0" title="Fetch the ticked songs" @click="imports.fetchHeld(heldPicked.map((i) => i.id))">
+        Fetch {{ heldPicked.length || "" }} selected
+      </button>
+      <button title="Fetch every held song" @click="imports.fetchHeld()">Fetch all {{ held.length }}</button>
+      <button :disabled="heldPicked.length === 0" title="Take the ticked held songs out without fetching them" @click="imports.clearHeld(heldPicked.map((i) => i.id))">Skip selected</button>
+    </div>
+    <!-- Songs still coming in can be stopped: the ticked ones, the rest, or everything. -->
+    <div v-if="loading.length" class="bulk stop" role="group" aria-label="Stop loading">
+      <span class="muted">{{ loading.length }} loading</span>
+      <button :disabled="loadingPicked.length === 0" title="Stop the ticked songs that are still loading and take them out" @click="imports.stopLoading(ids(loadingPicked))">
+        Stop {{ loadingPicked.length || "" }} selected
+      </button>
+      <button :disabled="loadingPicked.length === 0 || loadingRest.length === 0" title="Keep the ticked songs and stop all the other loading ones" @click="imports.stopLoading(ids(loadingRest))">
+        Stop the rest
+      </button>
+      <button class="danger" title="Stop everything that is still loading" @click="imports.stopLoading()">Stop all</button>
+    </div>
 
     <div class="scroll">
       <table v-if="imports.items.value.length">
         <thead><tr><th /><th>Title</th><th>Artist</th><th>Status</th><th title="How sure we are of the artist and title">Match</th></tr></thead>
         <tbody>
-          <tr v-for="it in imports.items.value" :key="it.id" :class="{ focus: focus === it.id }" @click="emit('focus', it.id)" @contextmenu.prevent="openMenu(it, $event)">
-            <td><input type="checkbox" :checked="picked.has(it.id)" aria-label="Select" @click.stop="emit('toggle', it.id)" /></td>
+          <tr v-for="it in imports.items.value" :key="it.id" :class="{ focus: focus === it.id, picked: picked.has(it.id) }" @mousedown="$event.shiftKey && $event.preventDefault()" @click="onRowClick(it, $event)" @contextmenu.prevent="openMenu(it, $event)">
+            <td><input type="checkbox" :checked="picked.has(it.id)" aria-label="Select (shift-click for a range)" title="Shift-click to select a range" @click.stop="emit('toggle', it.id, $event.shiftKey)" /></td>
             <td class="ellipsis">{{ it.proposal.title || it.videoTitle || it.url }}</td>
             <td class="ellipsis muted">{{ it.proposal.artist }}</td>
-            <td><ImportStage :item="it" /></td>
+            <td><ImportStage :item="it" :owned="heldOwned.get(it.id)?.match" />
+              <button v-if="heldOwned.get(it.id)" class="tiny" title="Go to this song in your library" @click.stop="showInLibrary(heldOwned.get(it.id)!.track)">Show</button></td>
             <td :class="it.confidence >= 0.8 ? 'hi' : 'lo'">
               {{ it.stage === "queued" || it.stage === "probing" || it.stage === "failed" ? "" : `${Math.round(it.confidence * 100)}%` }}
               <span v-if="attention(it)" class="flag" title="Needs a look">!</span>
@@ -117,7 +164,14 @@ const autoList = computed(() =>
 <style scoped>
 .inbox { flex: 1; min-width: 0; }
 .panel-title small { color: var(--muted); font-weight: 400; }
-.bulk { display: flex; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.bulk { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.notice { margin: 0; padding: 6px 10px; font-size: 12px; background: #4a3a1f; color: #ffd9a0; border-bottom: 1px solid var(--line); }
+.notice .tiny { margin-left: 6px; }
+.bulk.stop, .bulk.held { background: var(--panel-3); }
+.bulk.held .muted { margin-right: auto; font-size: 12px; }
+.bulk.stop .muted { margin-right: auto; font-size: 12px; }
+.bulk .danger { border-color: #d24a4a; color: #ffb4b4; }
+tr.picked:not(.focus) { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .scroll { flex: 1; min-height: 0; overflow: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }

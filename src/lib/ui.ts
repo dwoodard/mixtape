@@ -132,6 +132,16 @@ export function showInLibrary(track: { path: string; title: string }) {
   revealPath.value = track.path;
 }
 
+/** Switches to Player mode's Tracks view filtered to `query` (an artist, an album, a genre): the songs that go with it. */
+export function searchLibrary(query: string) {
+  setAppMode("player");
+  libraryView.value = "tracks";
+  libraryQuery.value = query;
+}
+
+/** The songs ticked in the Discovery inbox, by import id. Shared so the Cmd+A shortcut can fill it. */
+export const inboxPicked = ref<Set<number>>(new Set());
+
 /** Songs picked in the song list that is showing, so shortcuts and the command palette can act on them. */
 export const selectedSongs = ref<Track[]>([]);
 let selectionOwner: symbol | null = null;

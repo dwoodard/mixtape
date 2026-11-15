@@ -442,6 +442,8 @@ pub fn to_edit(p: &Proposal) -> TagEdit {
         disc_number: Some(p.disc.clone()),
         year: Some(p.year.clone()),
         genre: Some(p.genre.clone()),
+        // A proposal has no lyrics: whatever the file already has stays.
+        lyrics: None,
     }
 }
 
@@ -466,18 +468,33 @@ fn free_name(target: PathBuf) -> PathBuf {
         .expect("an unused name exists")
 }
 
+/// Whether the file at `existing` is the song being added: the same title and, to within two seconds, the same length.
+/// (The folder already says it is the same artist and album.)
+fn is_same_song(existing: &Path, staged: &Path, proposal: &Proposal) -> bool {
+    let (Some(have), Some(new)) = (read_track(existing), read_track(staged)) else { return false };
+    let fold = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    !fold(&proposal.title).is_empty() && fold(&have.title) == fold(&proposal.title) && have.duration_ms.abs_diff(new.duration_ms) <= 2_000
+}
+
 /// Puts a staged file into the library at the place [`place`] chooses. Tags
 /// are written to a working copy (the staged file stays as it was, so the add
 /// can be undone), unless `retag` is false because another program such as
 /// Picard already wrote them. The copy is transferred to the library under a
 /// temporary name and checked, then moved into place. Never overwrites an
 /// existing file.
-pub fn add_to_library(staged: &Path, proposal: &Proposal, root: &Path, library: &[CachedTrack], retag: bool) -> Result<Added, String> {
+pub fn add_to_library(staged: &Path, proposal: &Proposal, root: &Path, library: &[CachedTrack], retag: bool, allow_copy: bool) -> Result<Added, String> {
     if !root.is_dir() {
         return Err(format!("{} is not available. Is the drive mounted?", root.display()));
     }
     let ext = staged.extension().and_then(|e| e.to_str()).ok_or("The fetched file has no extension.")?;
-    let dest = free_name(place(root, proposal, ext, library));
+    let wanted = place(root, proposal, ext, library);
+    // The saved library can be out of date (files renamed or added behind the app's back), so what is really in the
+    // folder decides: the same song already at that place is not added a second time as "Song (2)", unless asked for.
+    if wanted.exists() && !allow_copy && is_same_song(&wanted, staged, proposal) {
+        let shown = wanted.strip_prefix(root).unwrap_or(&wanted).display();
+        return Err(format!("Already in the library: {shown}. It was not added again. To keep a second copy on purpose, choose “Add anyway”."));
+    }
+    let dest = free_name(wanted);
     let dir = dest.parent().ok_or("No destination folder.")?.to_path_buf();
 
     // 1. Tag a local working copy next to the staged file.
@@ -989,7 +1006,7 @@ mod tests {
         let staged = staged(work.path());
         let original = std::fs::read(&staged).unwrap();
 
-        let added = add_to_library(&staged, &proposal(), lib.path(), &[], true).unwrap();
+        let added = add_to_library(&staged, &proposal(), lib.path(), &[], true, false).unwrap();
 
         assert_eq!(added.path, lib.path().join("The Dead South/Served Live/04 People Are Strange.mp3"));
         assert_eq!((added.track.title.as_str(), added.track.artist.as_str(), added.track.album.as_str()), ("People Are Strange", "The Dead South", "Served Live"));
@@ -1020,7 +1037,7 @@ mod tests {
         let staged = staged(work.path());
         let _ = std::process::Command::new("xattr").args(["-w", "com.apple.quarantine", "0081;00000000;Test;"]).arg(&staged).status();
 
-        let added = add_to_library(&staged, &proposal(), &root, &[], true).expect("add into the real folder");
+        let added = add_to_library(&staged, &proposal(), &root, &[], true, false).expect("add into the real folder");
         assert!(added.path.exists());
         assert_eq!(read_track(&added.path).unwrap().title, "People Are Strange");
 
@@ -1144,7 +1161,7 @@ mod tests {
         let existing = lib.path().join("The_Dead_South/Served Live/01 Old.mp3");
         let library = [lib_track(existing.to_str().unwrap(), "The Dead South", "Served Live", "")];
 
-        let added = add_to_library(&staged(work.path()), &proposal(), lib.path(), &library, true).unwrap();
+        let added = add_to_library(&staged(work.path()), &proposal(), lib.path(), &library, true, false).unwrap();
 
         assert_eq!(added.path, lib.path().join("The_Dead_South/Served Live/04 People Are Strange.mp3"));
         assert!(!lib.path().join("The Dead South").exists(), "no look-alike folder is created");
@@ -1161,7 +1178,7 @@ mod tests {
         let before = std::fs::read(&staged).unwrap();
         let stale = Proposal { album: "Stale Guess".into(), ..by_picard.clone() };
 
-        let added = add_to_library(&staged, &stale, lib.path(), &[], false).unwrap();
+        let added = add_to_library(&staged, &stale, lib.path(), &[], false, false).unwrap();
 
         assert_eq!(std::fs::read(&added.path).unwrap(), before, "not rewritten");
         assert_eq!(added.track.album, "From Picard");
@@ -1177,13 +1194,44 @@ mod tests {
     }
 
     #[test]
+    fn the_same_song_already_in_the_folder_is_not_added_again_even_when_the_saved_library_does_not_know_it() {
+        let work = tempfile::tempdir().unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        let staged = staged(work.path());
+
+        let first = add_to_library(&staged, &proposal(), lib.path(), &[], true, false).unwrap();
+        // An empty library list: the file is on the disk but the app has not been told.
+        let err = add_to_library(&staged, &proposal(), lib.path(), &[], true, false).unwrap_err();
+
+        assert!(err.starts_with("Already in the library:"), "{err}");
+        assert!(err.contains("04 People Are Strange.mp3") && err.contains("Add anyway"), "{err}");
+        assert_eq!(std::fs::read_dir(first.path.parent().unwrap()).unwrap().count(), 1, "no second file, no leftovers");
+    }
+
+    #[test]
+    fn a_different_song_with_the_same_file_name_is_still_added_under_a_free_name() {
+        let work = tempfile::tempdir().unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        let staged = staged(work.path());
+        let first = add_to_library(&staged, &proposal(), lib.path(), &[], true, false).unwrap();
+        // Something else already sits at the place this one would go: same name, a different title inside.
+        let mut other = proposal();
+        other.title = "Something Else".into();
+        other.track = "4".into();
+        std::fs::rename(&first.path, first.path.with_file_name("04 Something Else.mp3")).unwrap();
+        let again = add_to_library(&staged, &other, lib.path(), &[], true, false).unwrap();
+        assert!(again.path.to_string_lossy().ends_with("04 Something Else (2).mp3"), "{:?}", again.path);
+    }
+
+    #[test]
     fn never_overwrites_an_existing_file() {
         let work = tempfile::tempdir().unwrap();
         let lib = tempfile::tempdir().unwrap();
         let staged = staged(work.path());
 
-        let first = add_to_library(&staged, &proposal(), lib.path(), &[], true).unwrap();
-        let second = add_to_library(&staged, &proposal(), lib.path(), &[], true).unwrap();
+        let first = add_to_library(&staged, &proposal(), lib.path(), &[], true, false).unwrap();
+        // Asked for on purpose: a second copy of the same song.
+        let second = add_to_library(&staged, &proposal(), lib.path(), &[], true, true).unwrap();
 
         assert_ne!(first.path, second.path);
         assert!(second.path.to_string_lossy().ends_with("04 People Are Strange (2).mp3"));
@@ -1194,7 +1242,7 @@ mod tests {
     fn an_unavailable_library_folder_is_reported_and_nothing_is_created() {
         let work = tempfile::tempdir().unwrap();
         let staged = staged(work.path());
-        let err = add_to_library(&staged, &proposal(), Path::new("/Volumes/not-mounted/Music"), &[], true).unwrap_err();
+        let err = add_to_library(&staged, &proposal(), Path::new("/Volumes/not-mounted/Music"), &[], true, false).unwrap_err();
         assert!(err.contains("not available"));
     }
 
@@ -1205,7 +1253,7 @@ mod tests {
         let staged = staged(work.path());
         let bad = Proposal { year: "nineteen".into(), ..proposal() };
 
-        assert!(add_to_library(&staged, &bad, lib.path(), &[], true).is_err());
+        assert!(add_to_library(&staged, &bad, lib.path(), &[], true, false).is_err());
 
         assert!(walk(lib.path()).iter().all(|p| p.is_dir() && p == lib.path() || p.extension().is_none()));
         assert!(!lib.path().join("The Dead South/Served Live").join("04 People Are Strange.mp3").exists());
@@ -1216,7 +1264,7 @@ mod tests {
     fn undo_removes_the_added_file_and_the_folders_it_emptied_but_not_the_library() {
         let work = tempfile::tempdir().unwrap();
         let lib = tempfile::tempdir().unwrap();
-        let added = add_to_library(&staged(work.path()), &proposal(), lib.path(), &[], true).unwrap();
+        let added = add_to_library(&staged(work.path()), &proposal(), lib.path(), &[], true, false).unwrap();
 
         remove_added(lib.path(), &added.path, added.size).unwrap();
 
@@ -1229,9 +1277,9 @@ mod tests {
     fn undo_keeps_folders_that_still_have_other_songs() {
         let work = tempfile::tempdir().unwrap();
         let lib = tempfile::tempdir().unwrap();
-        let a = add_to_library(&staged(work.path()), &proposal(), lib.path(), &[], true).unwrap();
+        let a = add_to_library(&staged(work.path()), &proposal(), lib.path(), &[], true, false).unwrap();
         let other = Proposal { title: "Another".into(), track: "5".into(), ..proposal() };
-        let b = add_to_library(&staged(work.path()), &other, lib.path(), &[], true).unwrap();
+        let b = add_to_library(&staged(work.path()), &other, lib.path(), &[], true, false).unwrap();
 
         remove_added(lib.path(), &a.path, a.size).unwrap();
 
@@ -1242,7 +1290,7 @@ mod tests {
     fn undo_leaves_a_file_that_changed_and_refuses_paths_outside_the_library() {
         let work = tempfile::tempdir().unwrap();
         let lib = tempfile::tempdir().unwrap();
-        let added = add_to_library(&staged(work.path()), &proposal(), lib.path(), &[], true).unwrap();
+        let added = add_to_library(&staged(work.path()), &proposal(), lib.path(), &[], true, false).unwrap();
 
         assert!(remove_added(lib.path(), &added.path, added.size + 1).unwrap_err().contains("changed"));
         assert!(added.path.exists());

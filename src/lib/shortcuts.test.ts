@@ -68,6 +68,20 @@ describe("shortcut table", () => {
   });
 });
 
+describe("select all", () => {
+  it("is Cmd+A", () => {
+    expect(findCommand(press("a", { metaKey: true }))?.id).toBe("selectAll");
+    expect(shortcutText("selectAll")).toBe("⌘A");
+  });
+
+  it("leaves Cmd+A, C, V, X and Z to a text box while typing in one, but not other Cmd shortcuts", () => {
+    const typing = { editable: true, pressable: false };
+    for (const key of ["a", "c", "v", "x", "z", "A"]) expect(allowedWhileFocused({ key, meta: true }, typing), key).toBe(false);
+    expect(allowedWhileFocused({ key: "k", meta: true }, typing)).toBe(true);
+    expect(allowedWhileFocused({ key: "a", meta: true }, { editable: false, pressable: false })).toBe(true);
+  });
+});
+
 describe("matches", () => {
   it("ignores letter case", () => {
     expect(matches(press("T", { metaKey: true, shiftKey: true }), { key: "t", meta: true, shift: true })).toBe(true);

@@ -32,6 +32,9 @@ export function suggestionsFor(host: DjHost): Suggestion[] {
   if (queue.length > 0) out.push({ label: left > 0 || !playing ? "What's left in the queue?" : "Show the queue", prompt: left > 0 || !playing ? "What's left in the queue?" : "Show me the queue" });
   if (readyImports > 0) out.push({ label: `Review Discovery (${readyImports})`, prompt: "What's in Discovery?" });
   if (host.duplicateGroups().length > 0) out.push({ label: "Find duplicates", prompt: "Find duplicate songs" });
+  // Most libraries are missing genres; a few missing is not worth a button.
+  const fill = host.genreFill();
+  if (fill.state.phase !== "idle" || fill.missingCount() > 20) out.push({ label: "Fill in missing genres", prompt: "Fill in the missing genres" });
   out.push(
     { label: "Queue 15 songs I haven't played", prompt: "Queue 15 songs I haven't played yet, mixed up, and shuffle them" },
     { label: "80s mix", prompt: "Queue a mix of 15 songs from the 80s" },

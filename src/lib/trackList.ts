@@ -3,12 +3,12 @@ import type { PlayStat, Track } from "./types";
 export type SortKey = "default" | "title" | "artist" | "album" | "durationMs" | "year" | "addedMs" | "plays";
 export type SortDirection = "asc" | "desc";
 
-/** Case-insensitive match of every word in `query` against title, artist, album, or genre. */
+/** Case-insensitive match of every word in `query` against title, artist, album, genre, or year. */
 export function filterTracks(tracks: Track[], query: string): Track[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) return tracks;
   return tracks.filter((t) => {
-    const haystack = `${t.title} ${t.artist} ${t.album} ${t.genre}`.toLowerCase();
+    const haystack = `${t.title} ${t.artist} ${t.album} ${t.genre} ${t.year ?? ""}`.toLowerCase();
     return words.every((w) => haystack.includes(w));
   });
 }

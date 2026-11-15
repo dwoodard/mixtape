@@ -99,7 +99,7 @@ export interface TagWriteResult {
   error: string | null;
 }
 
-export type ImportStage = "queued" | "probing" | "fetching" | "converting" | "ready" | "added" | "failed";
+export type ImportStage = "held" | "queued" | "probing" | "fetching" | "converting" | "ready" | "added" | "failed";
 
 export type ImportField = "title" | "artist" | "album" | "albumArtist" | "year" | "track" | "genre";
 

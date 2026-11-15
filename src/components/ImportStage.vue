@@ -3,10 +3,11 @@ import { computed } from "vue";
 import type { ImportItem } from "../lib/types";
 
 /** Where a song is in the import pipeline, in words (with a bar while it works). */
-const props = defineProps<{ item: ImportItem }>();
+const props = defineProps<{ item: ImportItem; owned?: "have" | "maybe" | null }>();
 
 const label = computed(() => {
   switch (props.item.stage) {
+    case "held": return props.owned === "have" ? "Held · already in library" : props.owned === "maybe" ? "Held · maybe in library" : "Held · not fetched";
     case "queued": return "Queued";
     case "probing": return "Looking it up…";
     case "fetching": return `Fetching ${Math.round(props.item.progress * 100)}%`;
@@ -21,7 +22,7 @@ const busy = computed(() => ["probing", "fetching", "converting"].includes(props
 </script>
 
 <template>
-  <span class="stage" :class="item.stage" :title="item.error ?? undefined">
+  <span class="stage" :class="[item.stage, item.stage === 'held' && owned]" :title="item.error ?? undefined">
     {{ label }}
     <span v-if="item.stage === 'fetching'" class="bar"><i :style="{ width: `${Math.round(item.progress * 100)}%` }" /></span>
     <span v-else-if="busy" class="bar spin"><i /></span>
@@ -30,6 +31,9 @@ const busy = computed(() => ["probing", "fetching", "converting"].includes(props
 
 <style scoped>
 .stage { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.stage.held { color: var(--muted); font-style: italic; }
+.stage.held.have { color: #6fb1f0; font-style: normal; }
+.stage.held.maybe { color: #f0c674; font-style: normal; }
 .stage.ready { color: #8fd7a0; }
 .stage.added { color: #6fb1f0; }
 .stage.failed { color: #ffb4b4; }

@@ -24,6 +24,22 @@ describe("filterTracks", () => {
   });
 });
 
+describe("filterTracks by year", () => {
+  const a = makeTrack({ path: "/a", title: "Right in Two", year: 2019 });
+  const b = makeTrack({ path: "/b", title: "Other", year: 2008 });
+  const none = makeTrack({ path: "/c", title: "No year", year: null });
+
+  it("finds the songs from a year, alone or with other words", () => {
+    expect(filterTracks([a, b, none], "2019").map((t) => t.title)).toEqual(["Right in Two"]);
+    expect(filterTracks([a, b, none], "two 2019")).toHaveLength(1);
+    expect(filterTracks([a, b, none], "two 2008")).toHaveLength(0);
+  });
+
+  it("does not turn a missing year into the word null", () => {
+    expect(filterTracks([none], "null")).toHaveLength(0);
+  });
+});
+
 describe("shuffleTracks", () => {
   const many = Array.from({ length: 30 }, (_, i) => makeTrack({ path: String(i) }));
 

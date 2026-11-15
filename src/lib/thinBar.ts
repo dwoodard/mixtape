@@ -85,9 +85,11 @@ export function thinParts(tier: number): ThinParts {
 export const DJ_PANEL_HEIGHT = 420;
 export const DJ_PANEL_MIN_WIDTH = 340;
 
-/** The height of one queue row, and of the panel's header and tools above the rows (logical pixels). */
+/** The height of one queue row, of the panel's header and tools above the rows, and of the Queue / DJ switch (logical pixels). */
 const PANEL_ROW = 28;
-const PANEL_CHROME = 72;
+/** Keep in step with `.views` in ThinBar.vue. */
+export const PANEL_VIEWS_HEIGHT = 22;
+const PANEL_CHROME = 72 + PANEL_VIEWS_HEIGHT;
 
 /** The panel height that shows the whole queue (an empty queue still shows its message). */
 export function panelWantedHeight(rows: number): number {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { contextNote, DjSession, runTool, runTurn, systemPrompt, type DjHost } from "./dj";
 import type { DuplicateGroup } from "./duplicates";
+import { createGenreFill, type GenreFill } from "./genreFill";
 import type { Lyrics } from "./lyrics";
 import type { ReleaseInfo, TagMatch } from "./musicbrainz";
 import type { ChatMessage, Completion, LmClient } from "./lm";
@@ -45,6 +46,7 @@ function fakeHost(player: Partial<PlayerState> = {}, queue: Track[] = [], extra:
     loadSavedFolder: ok(),
     restoreRemoved: ok(),
     removeFromLibrary: ok(),
+    readLyrics: vi.fn(async () => null as string | null),
     inspectFile: vi.fn(async () => ({ path: "/m/3.mp3", sizeBytes: 6_094_087, storedMs: 180_000, realMs: 180_000, codec: "mp3", bitrateKbps: 192, sampleRate: 44100, impliedKbps: 271, verdict: "ok", notes: [] }) as FileCheck),
     fixLength: ok(),
     trashDuplicates: vi.fn(async () => ({ report: null as CleanupReport | null, problem: null as string | null })),
@@ -53,6 +55,7 @@ function fakeHost(player: Partial<PlayerState> = {}, queue: Track[] = [], extra:
     openLink: ok(),
     openInPicard: ok(),
     lookupTags: vi.fn(async () => [] as TagMatch[]),
+    genreFill: () => createGenreFill({ library: () => library, lookup: async () => [], write: async () => null }),
     fetchRelease: vi.fn(async () => ({ title: "", artist: "", date: "", country: "", status: "", label: "", discs: [] }) as ReleaseInfo),
     fetchLyrics: vi.fn(async () => ({ source: "lrclib.net", text: "la la", instrumental: false, matched: { title: "Halo", artist: "Beyoncé", album: "" } }) as Lyrics | null),
     importLink: ok(),
@@ -64,6 +67,7 @@ function fakeHost(player: Partial<PlayerState> = {}, queue: Track[] = [], extra:
     cancelImportPicard: ok(),
     refreshPicardChanges: ok(),
     removeImport: ok(),
+    fetchImports: vi.fn(async () => ({ started: 1, problem: null as string | null })),
     setImportOptions: vi.fn(),
     setTheme: vi.fn(),
     setAccent: vi.fn(),
@@ -550,6 +554,15 @@ describe("whole-app tools", () => {
       expect(result.matches[0]).toMatchObject({ album: "I Am... Sasha Fierce", confidence: 92, year: "2008" });
     });
 
+    it("labels the genre as MusicBrainz's suggestion and says it is not the file's own tag", async () => {
+      const host = fakeHost({ currentTrack: library[2] }, [], { lookupTags: vi.fn(async () => [{ ...match, genreHint: "progressive rock" }]) });
+      const out = await runTool("lookup_tags", {}, host, new DjSession());
+      const result = out.result as { note: string; matches: Record<string, unknown>[] };
+      expect(result.matches[0]).toMatchObject({ musicbrainz_genre_suggestion: "progressive rock" });
+      expect(result.matches[0]).not.toHaveProperty("genre_hint");
+      expect(result.note).toContain("NOT a tag of the user's file");
+    });
+
     it("then writes the chosen match through edit_tags, which asks first", async () => {
       const host = fakeHost({ currentTrack: library[2] }, [], { lookupTags: vi.fn(async () => [match]) });
       const session = new DjSession();
@@ -682,6 +695,7 @@ describe("systemPrompt guidance", () => {
     expect(prompt).toContain("4 have a genre tag and 4 have a year");
     expect(prompt).toContain("do not search by genre words");
     expect(prompt).toContain("never repeat or list what a card shows");
+    expect(prompt).toContain("Never describe a MusicBrainz match or its genre suggestion as the song's own tags");
   });
 });
 
@@ -803,6 +817,158 @@ describe("a song tool given no id", () => {
   it("still asks for a song when nothing is playing, and rejects an id it never handed out", async () => {
     expect((await runTool("get_lyrics", { id: null }, fakeHost(), new DjSession())).result).toEqual({ error: "Nothing is playing. Give a song id from search_library." });
     expect((await runTool("get_lyrics", { id: 99 }, fakeHost(), new DjSession())).result).toHaveProperty("error");
+  });
+});
+
+describe("a session follows edits made since a song was first seen", () => {
+  it("resolves ids to the song as it is now, so edit_tags compares against the new tags", async () => {
+    const drawn = library[2]; // Halo, 2008
+    const edited = { ...drawn, year: 2019 };
+    const session = new DjSession((t) => (t.path === edited.path ? edited : t));
+    const host = fakeHost();
+    const found = await runTool("search_library", { query: "halo" }, host, session);
+    const id = (found.result as { songs: { id: number }[] }).songs[0].id;
+
+    // The year was 2008 when the song was found but is 2019 now: asking for 2008 is a real change.
+    await runTool("edit_tags", { ids: [id], year: "2008" }, host, session, async () => true);
+    expect(host.writeTags).toHaveBeenCalledWith([edited], { year: "2008" });
+    // And asking for 2019 is not.
+    const same = fakeHost();
+    const out = await runTool("edit_tags", { ids: [id], year: "2019" }, same, session, async () => true);
+    expect(same.writeTags).not.toHaveBeenCalled();
+    expect(out.note).toContain("already");
+  });
+
+  it("without a live lookup it behaves as before", () => {
+    const session = new DjSession();
+    const id = session.idFor(library[0]);
+    expect(session.resolve([id]).tracks).toEqual([library[0]]);
+  });
+});
+
+describe("suggest_genres", () => {
+  const noGenre = [makeTrack({ path: "/m/a.mp3", title: "A", genre: "" }), makeTrack({ path: "/m/b.mp3", title: "B", genre: "" })];
+  const hostWith = (job: GenreFill) => fakeHost({}, [], { genreFill: () => job });
+  const jobFor = (songs: Track[]) => createGenreFill({ library: () => songs, lookup: vi.fn(async () => []), write: vi.fn(async () => null) });
+
+  it("starts the lookup without waiting for it, and shows the card that follows it", async () => {
+    const job = jobFor(noGenre);
+    const start = vi.spyOn(job, "start");
+    const out = await runTool("suggest_genres", {}, hostWith(job), new DjSession());
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(out.view).toEqual({ kind: "genres", job });
+    expect(out.result).toMatchObject({ songs_without_genre: 2, running: true, estimated_minutes: 1 });
+    expect((out.result as { note: string }).note).toContain("Do not list the songs");
+  });
+
+  it("says so when every song has a genre, and shows no card", async () => {
+    const out = await runTool("suggest_genres", {}, hostWith(jobFor([makeTrack({ genre: "Rock" })])), new DjSession());
+    expect(out.view).toBeUndefined();
+    expect(out.result).toEqual({ songs_without_genre: 0 });
+  });
+
+  it("does not start a second run while one is going, and starts afresh after one is done", async () => {
+    const running = jobFor(noGenre);
+    running.state.phase = "looking";
+    const start = vi.spyOn(running, "start");
+    await runTool("suggest_genres", {}, hostWith(running), new DjSession());
+    expect(start).not.toHaveBeenCalled();
+
+    const finished = jobFor(noGenre);
+    finished.state.phase = "done";
+    const reset = vi.spyOn(finished, "reset");
+    await runTool("suggest_genres", {}, hostWith(finished), new DjSession());
+    expect(reset).toHaveBeenCalledOnce();
+  });
+});
+
+describe("held playlist songs", () => {
+  const held = (id: number) => ({ id, stage: "held", url: `u${id}`, videoTitle: `Song ${id}`, proposal: { title: `Song ${id}` }, confidence: 0, picard: "none" }) as unknown as ImportItem;
+
+  it("fetches the songs asked for, or all held ones when none are named", async () => {
+    const host = fakeHost({}, [], { imports: () => [held(1), held(2)] });
+    await runTool("fetch_imports", { import_ids: [2] }, host, new DjSession());
+    expect(host.fetchImports).toHaveBeenLastCalledWith([2]);
+    await runTool("fetch_imports", {}, host, new DjSession());
+    expect(host.fetchImports).toHaveBeenLastCalledWith(null);
+  });
+
+  it("asks before downloading more than a few songs, and not for a few", async () => {
+    const many = Array.from({ length: 12 }, (_, i) => held(i + 1));
+    const host = fakeHost({}, [], { imports: () => many });
+    const asked: string[] = [];
+    await runTool("fetch_imports", {}, host, new DjSession(), async (q) => (asked.push(q), false));
+    expect(asked).toEqual(["Download 12 songs from the playlist?"]);
+    expect(host.fetchImports).not.toHaveBeenCalled();
+
+    const few = vi.fn(async () => true);
+    await runTool("fetch_imports", { import_ids: [1, 2] }, host, new DjSession(), few);
+    expect(few).not.toHaveBeenCalled();
+    expect(host.fetchImports).toHaveBeenCalledWith([1, 2]);
+  });
+
+  it("says so when nothing was held, and passes on a problem", async () => {
+    const none = fakeHost({}, [], { fetchImports: vi.fn(async () => ({ started: 0, problem: null as string | null })) });
+    expect((await runTool("fetch_imports", {}, none, new DjSession())).result).toHaveProperty("error");
+    const bad = fakeHost({}, [], { fetchImports: vi.fn(async () => ({ started: 0, problem: "nope" as string | null })) });
+    expect((await runTool("fetch_imports", {}, bad, new DjSession())).result).toEqual({ error: "nope" });
+  });
+});
+
+describe("lyrics in the song's tags", () => {
+  const song = library[2];
+  const lyrics = (text = "la la"): Lyrics => ({ source: "lrclib.net", text, instrumental: false, matched: { title: "Halo", artist: "Beyoncé", album: "" } });
+
+  it("get_lyrics reads lyrics already saved in the tags and does not go to the web", async () => {
+    const host = fakeHost({ currentTrack: song }, [], { readLyrics: vi.fn(async () => "words in the tag") });
+    const out = await runTool("get_lyrics", {}, host, new DjSession());
+    expect(host.fetchLyrics).not.toHaveBeenCalled();
+    expect(out.result).toMatchObject({ found: true, saved_in_the_songs_tags: true, lyrics: "words in the tag" });
+    expect(out.view).toMatchObject({ kind: "lyrics", saved: true, source: "saved in the song's tags", text: "words in the tag" });
+  });
+
+  it("get_lyrics fetches when none are saved, and marks them as not yet saved", async () => {
+    const host = fakeHost({ currentTrack: song });
+    const out = await runTool("get_lyrics", {}, host, new DjSession());
+    expect(host.fetchLyrics).toHaveBeenCalledOnce();
+    expect(out.view).toMatchObject({ kind: "lyrics", saved: false });
+  });
+
+  it("save_lyrics writes what it fetched into the tags, after asking", async () => {
+    const host = fakeHost({ currentTrack: song });
+    const asked: string[] = [];
+    const out = await runTool("save_lyrics", {}, host, new DjSession(), async (q) => (asked.push(q), true));
+    expect(asked).toEqual(['Save the lyrics of "Halo" into the file\'s tags?']);
+    expect(host.writeTags).toHaveBeenCalledWith([song], { lyrics: "la la" });
+    expect(out.result).toMatchObject({ saved: true });
+    expect(out.view).toMatchObject({ kind: "lyrics", saved: true });
+  });
+
+  it("save_lyrics does nothing when the person says no", async () => {
+    const host = fakeHost({ currentTrack: song });
+    await runTool("save_lyrics", {}, host, new DjSession(), async () => false);
+    expect(host.writeTags).not.toHaveBeenCalled();
+  });
+
+  it("save_lyrics does not rewrite lyrics that are already in the tags", async () => {
+    const host = fakeHost({ currentTrack: song }, [], { readLyrics: vi.fn(async () => "already here") });
+    const out = await runTool("save_lyrics", {}, host, new DjSession(), async () => true);
+    expect(host.writeTags).not.toHaveBeenCalled();
+    expect(out.result).toEqual({ saved: true, already: true });
+  });
+
+  it("save_lyrics says why when there is nothing to save, and passes on a write problem", async () => {
+    const none = fakeHost({ currentTrack: song }, [], { fetchLyrics: vi.fn(async () => null as Lyrics | null) });
+    expect((await runTool("save_lyrics", {}, none, new DjSession(), async () => true)).result).toEqual({ saved: false, reason: "No lyrics were found." });
+    const instrumental = fakeHost({ currentTrack: song }, [], { fetchLyrics: vi.fn(async () => ({ ...lyrics(), instrumental: true, text: "" })) });
+    expect((await runTool("save_lyrics", {}, instrumental, new DjSession(), async () => true)).result).toMatchObject({ saved: false, reason: "It is an instrumental." });
+    const bad = fakeHost({ currentTrack: song }, [], { writeTags: vi.fn(async () => ({ saved: 0, failed: [] as string[], problem: "Couldn't replace the original" as string | null })) });
+    expect((await runTool("save_lyrics", {}, bad, new DjSession(), async () => true)).result).toEqual({ error: "Couldn't replace the original" });
+  });
+
+  it("the DJ is told it can save lyrics in tags", () => {
+    expect(systemPrompt(library)).toContain("Never say you cannot store lyrics in a song's tags");
   });
 });
 
