@@ -10,6 +10,9 @@ import { nextMode, Scene, VISUAL_LABELS, type SpectrumFrame } from "../lib/visua
 
 /** Audio-reactive canvas: moves with the playing song and takes its colors from the album cover. */
 const canvas = ref<HTMLCanvasElement | null>(null);
+const turbulence = ref<SVGFETurbulenceElement | null>(null);
+const warpNoise = ref<SVGFETurbulenceElement | null>(null);
+const warpMap = ref<SVGFEDisplacementMapElement | null>(null);
 const track = computed(() => store.player.value.currentTrack);
 const playing = computed(() => store.player.value.status === "playing");
 const label = computed(() => VISUAL_LABELS[visualMode.value]);
@@ -51,8 +54,19 @@ function tick(now: number) {
   // No new data for a moment means paused or stopped: let the visuals settle.
   const live = frame && now - lastFrameAt < 150 ? frame : null;
   scene.mode = visualMode.value;
-  scene.update(dt, live);
+  scene.update(dt, live, width, height);
   scene.draw(ctx, width, height);
+  // Slowly morphing noise drives the liquid wobble of the flame (see the filter in the template).
+  if (visualMode.value === "flame") {
+    const t = now / 1000;
+    turbulence.value?.setAttribute("baseFrequency", `${(0.011 + 0.004 * Math.sin(t * 0.8)).toFixed(4)} ${(0.04 + 0.012 * Math.cos(t * 1.1)).toFixed(4)}`);
+  }
+  // The song title and artist bend with the music, like text under moving smoke.
+  const t = now / 1000;
+  if (visualMode.value === "flame") {
+    warpNoise.value?.setAttribute("baseFrequency", `${(0.007 + 0.003 * Math.sin(t * 0.6)).toFixed(4)} ${(0.03 + 0.01 * Math.cos(t * 0.8)).toFixed(4)}`);
+    warpMap.value?.setAttribute("scale", (scene.intensity * 6).toFixed(2));
+  }
   if (visualMode.value !== "off" && (playing.value || !scene.settled)) raf = requestAnimationFrame(tick);
   else last = 0;
 }
@@ -119,7 +133,17 @@ watch([playing, visualMode], wake);
 
 <template>
   <div class="visual" aria-hidden="true">
-    <canvas ref="canvas"></canvas>
+    <svg class="defs" width="0" height="0" aria-hidden="true">
+      <filter id="flame-distort" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+        <feTurbulence ref="turbulence" type="fractalNoise" baseFrequency="0.011 0.04" numOctaves="2" seed="4" result="noise" />
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="22" xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+      <filter id="text-warp" x="-5%" y="-30%" width="110%" height="160%" color-interpolation-filters="sRGB">
+        <feTurbulence ref="warpNoise" type="fractalNoise" baseFrequency="0.007 0.03" numOctaves="2" seed="9" result="noise" />
+        <feDisplacementMap ref="warpMap" in="SourceGraphic" in2="noise" scale="0" xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+    </svg>
+    <canvas ref="canvas" :class="{ distort: visualMode === 'flame' }"></canvas>
     <button class="mode" type="button" :title="`Visual: ${label}. Click to switch.`" @click="setVisualMode(nextMode(visualMode))">{{ label }}</button>
   </div>
 </template>
@@ -127,6 +151,9 @@ watch([playing, visualMode], wake);
 <style scoped>
 /* Fills the song info panel as its background. */
 .visual { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; }
+/* Warps the flame's edges into a liquid, licking shape. */
+.defs { position: absolute; }
+canvas.distort { filter: url(#flame-distort); }
 canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 /* Dark and quiet behind the text (a fixed width, so it ends at the same spot at any window size), then clear. */
 .visual::after {

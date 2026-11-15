@@ -6,9 +6,9 @@ export interface SpectrumFrame {
   level: number;
 }
 
-export type VisualMode = "dots" | "ribbon" | "off";
-export const VISUAL_MODES: readonly VisualMode[] = ["dots", "ribbon", "off"];
-export const VISUAL_LABELS: Record<VisualMode, string> = { dots: "Dots", ribbon: "Ribbon", off: "Off" };
+export type VisualMode = "dots" | "ribbon" | "flame" | "off";
+export const VISUAL_MODES: readonly VisualMode[] = ["dots", "ribbon", "flame", "off"];
+export const VISUAL_LABELS: Record<VisualMode, string> = { dots: "Dots", ribbon: "Ribbon", flame: "Flame", off: "Off" };
 
 export function nextMode(mode: VisualMode): VisualMode {
   return VISUAL_MODES[(VISUAL_MODES.indexOf(mode) + 1) % VISUAL_MODES.length];
@@ -83,6 +83,8 @@ export class Scene {
   private beats = new BeatDetector();
   private phase = 0;
   private flash = 0;
+  private sparks: { x: number; y: number; vx: number; vy: number; age: number; life: number; size: number }[] = [];
+  private sparkDebt = 0;
 
   constructor(palette: Palette) {
     this.setPalette(palette);
@@ -91,7 +93,12 @@ export class Scene {
   /** True when nothing is moving, so the loop can rest. */
   get settled(): boolean {
     const flat = (row: number[]) => row.every((h) => Math.abs(h) < 0.004);
-    return this.level < 0.005 && this.bands.every((b) => b < 0.005) && this.rows.every(flat);
+    return this.level < 0.005 && this.bands.every((b) => b < 0.005) && this.rows.every(flat) && this.sparks.length === 0;
+  }
+
+  /** How strongly the music is moving right now, 0 to 1. Drives the bend of the text over the visual. */
+  get intensity(): number {
+    return Math.min(1, Math.max(this.level, this.flash * 0.8));
   }
 
   setPalette(palette: Palette) {
@@ -99,7 +106,7 @@ export class Scene {
   }
 
   /** Advances the animation by `dt` seconds. `frame` is the newest audio slice, or null when none is arriving. */
-  update(dt: number, frame: SpectrumFrame | null) {
+  update(dt: number, frame: SpectrumFrame | null, width = 300, height = 104) {
     const target = frame?.bands ?? [];
     const count = Math.max(target.length, this.bands.length);
     const attack = this.calm ? 0.12 : 0.04;
@@ -112,6 +119,8 @@ export class Scene {
     const third = Math.max(Math.floor(target.length / 6), 1);
     if (frame && this.beats.push(average(frame.bands, 0, third), dt) && !this.calm) this.flash = 1;
 
+    if (this.mode === "flame") this.updateSparks(dt, width, height);
+    else this.sparks.length = 0;
     if (this.mode !== "dots") return;
     this.sinceRow += dt;
     while (this.sinceRow >= ROW_INTERVAL) {
@@ -126,10 +135,11 @@ export class Scene {
     // (instead of painting a background) leaves a short trail behind moving shapes.
     if (this.mode === "off") return void ctx.clearRect(0, 0, width, height);
     ctx.globalCompositeOperation = "destination-out";
-    ctx.fillStyle = `rgba(0, 0, 0, ${this.mode === "dots" ? 0.65 : 0.3})`;
+    ctx.fillStyle = `rgba(0, 0, 0, ${this.mode === "dots" ? 0.65 : this.mode === "flame" ? 0.5 : 0.3})`;
     ctx.fillRect(0, 0, width, height);
     if (this.mode === "ribbon") this.drawRibbon(ctx, width, height);
     else if (this.mode === "dots") this.drawDots(ctx, width, height);
+    else if (this.mode === "flame") this.drawFlames(ctx, width, height);
   }
 
   private drawDots(ctx: CanvasRenderingContext2D, width: number, height: number) {
@@ -161,6 +171,74 @@ export class Scene {
         ctx.fillRect(x - size / 2, y - size / 2, size, size);
       }
     }
+  }
+
+  /** Height (0 to `height`) of the flame sheet at `x` across the width, `scale` shrinking it for the inner layers. */
+  private flameHeight(x: number, width: number, height: number, scale: number, time: number): number {
+    const { bands } = this;
+    const at = Math.abs((x / width) * 2 - 1) * (bands.length - 1);
+    const lo = Math.floor(at);
+    const band = (bands[lo] ?? 0) * (1 - (at - lo)) + (bands[Math.min(lo + 1, bands.length - 1)] ?? 0) * (at - lo);
+    const u = x / width;
+    // Slow overlapping waves, sharpened so the edge licks up in irregular peaks.
+    const wave = (Math.sin(u * 17 + time * 2.1) + Math.sin(u * 31 - time * 3.3) * 0.6 + Math.sin(u * 7 + time * 1.2) * 0.8) / 2.4;
+    const peak = Math.pow(0.5 + 0.5 * wave, 2.2);
+    const energy = band * 0.9 + this.level * 0.1;
+    return Math.min(height * 0.98, height * energy * (0.3 + 0.9 * peak) * scale * (1 + this.flash * 0.15));
+  }
+
+  /** A continuous sheet of fire along the bottom edge with a soft glow, and sparks drifting off it. */
+  private drawFlames(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    const { palette } = this;
+    if (this.bands.length === 0 && this.sparks.length === 0) return;
+    // Back to front: wide soft glow, the body, then a pale core. Each is lower than the one behind.
+    const layers = [
+      { scale: 1, time: 0, color: palette.accent, alpha: 0.5, blur: 14 },
+      { scale: 0.62, time: 0.7, color: mix(palette.accent, palette.highlight, 0.3), alpha: 0.55, blur: 8 },
+      { scale: 0.3, time: 1.4, color: mix(palette.accent, palette.highlight, 0.6), alpha: 0.6, blur: 4 },
+    ];
+    // Normal blending, so the layers stack into bands of color instead of adding up to white.
+    ctx.globalCompositeOperation = "source-over";
+    for (const layer of layers) {
+      const t = this.phase * (1 + layer.time * 0.15) + layer.time;
+      const gradient = ctx.createLinearGradient(0, height, 0, 0);
+      gradient.addColorStop(0, rgba(layer.color, layer.alpha));
+      gradient.addColorStop(0.55, rgba(layer.color, layer.alpha * 0.45));
+      gradient.addColorStop(1, rgba(layer.color, 0));
+      ctx.shadowColor = rgba(layer.color, 0.8);
+      ctx.shadowBlur = layer.blur;
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.moveTo(0, height + 2);
+      for (let x = 0; x <= width + 3; x += 3) ctx.lineTo(x, height - this.flameHeight(Math.min(x, width), width, height, layer.scale, t));
+      ctx.lineTo(width, height + 2);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+
+    for (const spark of this.sparks) {
+      const t = spark.age / spark.life;
+      ctx.fillStyle = rgba(mix(palette.highlight, palette.accent, t), (1 - t) * 0.7);
+      ctx.fillRect(spark.x, spark.y, spark.size, spark.size);
+    }
+  }
+
+  private updateSparks(dt: number, width: number, height: number) {
+    this.sparkDebt += dt * (this.level * 26 + this.flash * 20);
+    while (this.sparkDebt >= 1) {
+      this.sparkDebt -= 1;
+      if (this.sparks.length >= 70) break;
+      const x = Math.random() * width;
+      const top = height - this.flameHeight(x, width, height, 1, this.phase);
+      this.sparks.push({ x, y: top + Math.random() * 6, vx: (Math.random() - 0.5) * 14, vy: -(14 + Math.random() * 34), age: 0, life: 0.8 + Math.random() * 1.4, size: 0.8 + Math.random() * 1.1 });
+    }
+    for (const sp of this.sparks) {
+      sp.age += dt;
+      sp.x += (sp.vx + Math.sin(this.phase * 3 + sp.y * 0.08) * 10) * dt;
+      sp.y += sp.vy * dt;
+    }
+    this.sparks = this.sparks.filter((sp) => sp.age < sp.life && sp.y > -4);
   }
 
   private drawRibbon(ctx: CanvasRenderingContext2D, width: number, height: number) {

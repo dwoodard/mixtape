@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { formatClock, formatTime } from "../lib/format";
 import { store } from "../lib/store";
 import { tip } from "../lib/shortcuts";
-import { appMode, djPanelOpen, setAppMode, toggleDjPanel } from "../lib/ui";
+import { appMode, djPanelOpen, setAppMode, toggleDjPanel, visualMode } from "../lib/ui";
 import AudioVisual from "./AudioVisual.vue";
 import CoverArt from "./CoverArt.vue";
 import SeekBar from "./SeekBar.vue";
@@ -13,6 +13,8 @@ const p = computed(() => store.player.value);
 const playing = computed(() => p.value.status === "playing");
 const empty = computed(() => store.queue.value.length === 0);
 const track = computed(() => p.value.currentTrack);
+/** Whether the title and artist bend with the music: only in the Flame view (the filter lives in AudioVisual). */
+const warp = computed(() => playing.value && visualMode.value === "flame");
 const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Repeat one" })[p.value.repeat]);
 </script>
 
@@ -40,8 +42,8 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
       </div>
       <div class="lcd info">
         <AudioVisual />
-        <div class="title ellipsis" :title="track?.title">{{ track ? track.title : "Nothing playing" }}</div>
-        <div class="sub ellipsis">
+        <div class="title ellipsis" :class="{ warp }" :title="track?.title">{{ track ? track.title : "Nothing playing" }}</div>
+        <div class="sub ellipsis" :class="{ warp }">
           {{ track ? [track.artist, track.album].filter(Boolean).join(" · ") : "Open a folder to load your music" }}
         </div>
         <div class="volume-row">
@@ -94,6 +96,7 @@ const repeatLabel = computed(() => ({ off: "Repeat", all: "Repeat all", one: "Re
 .total { font-size: 11px; color: var(--lcd-dim); font-variant-numeric: tabular-nums; }
 .info { position: relative; overflow: hidden; flex: 1 1 0; min-width: 0; padding: 8px 14px; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
 .info > :not(.visual) { position: relative; z-index: 1; }
+.warp { filter: url(#text-warp); }
 .title { font-size: 15px; font-weight: 600; }
 .sub { font-size: 12px; color: var(--lcd-dim); }
 .volume-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }

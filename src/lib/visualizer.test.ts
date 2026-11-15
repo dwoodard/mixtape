@@ -5,7 +5,8 @@ import { BeatDetector, follow, nextMode, Scene, terrainRow } from "./visualizer"
 describe("nextMode", () => {
   it("cycles through every mode and wraps", () => {
     expect(nextMode("dots")).toBe("ribbon");
-    expect(nextMode("ribbon")).toBe("off");
+    expect(nextMode("ribbon")).toBe("flame");
+    expect(nextMode("flame")).toBe("off");
     expect(nextMode("off")).toBe("dots");
   });
 });
