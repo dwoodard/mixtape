@@ -10,7 +10,8 @@ import {
   selectedTracks,
   type Selection,
 } from "../lib/selection";
-import { sortTracks, toggleFilterPhrase, type SortDirection, type SortKey } from "../lib/trackList";
+import { toggleFacetTerm } from "../lib/facets";
+import { sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
 import { shortcutText } from "../lib/shortcuts";
 import { enterAction, isAddClick, optionClickTargets, songChoiceItems } from "../lib/songChoice";
@@ -272,7 +273,7 @@ function onKey(event: KeyboardEvent) {
       @enqueue="(t) => store.enqueue([t])"
       @sort="sortBy"
       @gap="filterByGap"
-      @filter="(text) => (libraryQuery = toggleFilterPhrase(libraryQuery, text))"
+      @filter="(facet, value) => (libraryQuery = toggleFacetTerm(libraryQuery, facet, value))"
     />
   <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="menu = null" />
   <ContextMenu v-if="choice" :x="choice.x" :y="choice.y" :items="choiceItems" @close="closeChoice" />

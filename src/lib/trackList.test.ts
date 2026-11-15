@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterTracks, shuffleTracks, sortTracks, toggleFilterPhrase, wantsNoCover } from "./trackList";
+import { filterTracks, shuffleTracks, sortTracks, wantsNoCover } from "./trackList";
 import { makeTrack } from "./testing";
 
 const tracks = [
@@ -122,19 +122,5 @@ describe("sorting by plays", () => {
 
   it("keeps the given order for songs with equal counts", () => {
     expect(sortTracks([c, a], "plays", "desc", {}).map((t) => t.title)).toEqual(["C", "A"]);
-  });
-});
-
-describe("toggleFilterPhrase", () => {
-  it("adds a clicked name to the filter and takes it out when clicked again", () => {
-    expect(toggleFilterPhrase("", "Smashing Pumpkins")).toBe("Smashing Pumpkins");
-    expect(toggleFilterPhrase("nocover", "Green Day")).toBe("nocover Green Day");
-    expect(toggleFilterPhrase("Smashing Pumpkins", "smashing  pumpkins")).toBe("");
-    expect(toggleFilterPhrase("nocover Green Day 2004", "green day")).toBe("nocover 2004");
-  });
-
-  it("leaves the filter alone for an empty name, and only removes a whole phrase", () => {
-    expect(toggleFilterPhrase("jazz", "  ")).toBe("jazz");
-    expect(toggleFilterPhrase("green", "Green Day")).toBe("green Green Day");
   });
 });

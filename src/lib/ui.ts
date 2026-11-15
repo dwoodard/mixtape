@@ -1,5 +1,6 @@
 import { ref } from "vue";
 import type { Track } from "./types";
+import type { SuggestGroup, SuggestSort } from "./facets";
 import { VISUAL_MODES, type VisualMode } from "./visualizer";
 
 export type LibraryView = "tracks" | "albums" | "artists" | "random" | "duplicates";
@@ -109,6 +110,16 @@ const visualChoice = persistedChoice<VisualMode>("mixtape.visual", "dots", VISUA
 /** Which visual the player deck draws beside the song info. */
 export const visualMode = visualChoice.choice;
 export const setVisualMode = visualChoice.set;
+
+const suggestSortChoice = persistedChoice<SuggestSort>("mixtape.suggestSort", "count", ["count", "name"]);
+/** How the filter box lists a facet's values: most songs first, or by name. */
+export const suggestSort = suggestSortChoice.choice;
+export const setSuggestSort = suggestSortChoice.set;
+
+const suggestGroupChoice = persistedChoice<SuggestGroup>("mixtape.suggestGroup", "year", ["year", "decade"]);
+/** Whether the filter box lists years one by one or as decades. */
+export const suggestGroup = suggestGroupChoice.choice;
+export const setSuggestGroup = suggestGroupChoice.set;
 
 const djPanel = persistedFlag("mixtape.djPanelOpen", false);
 /** Whether the DJ chat panel is slid out on the right of the large window. */

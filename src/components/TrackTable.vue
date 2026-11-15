@@ -20,8 +20,8 @@ const emit = defineEmits<{
   sort: [key: SortKey];
   /** The line on a row's left edge was clicked: filter the list to songs missing that. */
   gap: [filter: "nocover" | "nolyrics"];
-  /** An artist, album or year was clicked: add it to the filter, or take it out if it is already there. */
-  filter: [text: string];
+  /** An artist, album or year was clicked: add it to the filter as a facet (`artist:`, `album:`, `year:`), or take it out if it is already there. */
+  filter: [facet: "artist" | "album" | "year", value: string];
 }>();
 
 const columns: { key: SortKey; label: string }[] = [
@@ -83,9 +83,9 @@ const columns: { key: SortKey; label: string }[] = [
         </span>
         <span class="num">{{ i + 1 }}.</span>
         <span class="cell ellipsis">{{ t.title }}</span>
-        <span class="cell ellipsis muted"><span v-if="t.artist" class="by" :title="`Filter by ${t.artist}`" @click.stop="emit('filter', t.artist)" @dblclick.stop>{{ t.artist }}</span></span>
-        <span class="cell ellipsis muted"><span v-if="t.album" class="by" :title="`Filter by ${t.album}`" @click.stop="emit('filter', t.album)" @dblclick.stop>{{ t.album }}</span></span>
-        <span class="cell ellipsis muted"><span v-if="t.year" class="by" :title="`Filter by ${t.year}`" @click.stop="emit('filter', String(t.year))" @dblclick.stop>{{ t.year }}</span></span>
+        <span class="cell ellipsis muted"><span v-if="t.artist" class="by" :title="`Filter by ${t.artist}`" @click.stop="emit('filter', 'artist', t.artist)" @dblclick.stop>{{ t.artist }}</span></span>
+        <span class="cell ellipsis muted"><span v-if="t.album" class="by" :title="`Filter by ${t.album}`" @click.stop="emit('filter', 'album', t.album)" @dblclick.stop>{{ t.album }}</span></span>
+        <span class="cell ellipsis muted"><span v-if="t.year" class="by" :title="`Filter by ${t.year}`" @click.stop="emit('filter', 'year', String(t.year))" @dblclick.stop>{{ t.year }}</span></span>
         <span class="cell ellipsis muted">{{ formatDate(t.addedMs) }}</span>
         <span class="cell time">{{ formatTime(t.durationMs) }}</span>
         <span

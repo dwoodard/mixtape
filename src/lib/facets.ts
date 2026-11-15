@@ -112,10 +112,14 @@ export interface Suggestion {
   hint?: string;
   /** What replaces the word being typed. A facet name ends in `:` so its values come up next. */
   insert: string;
+  /** For a value: how many songs have it. */
+  count?: number;
 }
 
 export interface Suggestions {
   items: Suggestion[];
+  /** The facet whose values are listed, or null when the list is facet names. */
+  facet: FacetName | null;
   /** The part of the query the chosen item replaces. */
   start: number;
   end: number;
@@ -123,30 +127,102 @@ export interface Suggestions {
 
 const quoteIfNeeded = (value: string) => (/\s/.test(value) ? `"${value}"` : value);
 
-/** The distinct values of one facet in `tracks`, most common first, that contain `typed`. */
-function valuesFor(facet: FacetName, tracks: readonly Track[], typed: string): string[] {
-  if (facet === "no" || facet === "has") return NO_VALUES.filter((v) => v.includes(typed));
-  if (facet === "added") return ADDED_VALUES.filter((v) => v.includes(typed));
+/**
+ * `query` with `facet:value` added, or taken out again when it is already there, so clicking an artist, album or year in
+ * the list narrows the filter and clicking it a second time widens it. Matching ignores case.
+ */
+export function toggleFacetTerm(query: string, facet: FacetName, value: string): string {
+  const clean = value.replace(/"/g, "").trim();
+  if (clean === "") return query;
+  const existing = tokenize(query).find((t) => t.facet === facet && t.value === clean.toLowerCase());
+  if (existing) return `${query.slice(0, existing.start)} ${query.slice(existing.end)}`.replace(/\s+/g, " ").trim();
+  return `${query.trim()} ${facet}:${quoteIfNeeded(clean)}`.trim();
+}
+
+/** A finished `facet:value` word of the filter box, shown as a pill with a close button. */
+export interface FilterPill {
+  facet: FacetName;
+  /** The value as written, without quotes. */
+  value: string;
+  /** The word exactly as it appears in the query. */
+  raw: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * Splits the filter box text into finished facet words (pills) and the rest (what the text field shows).
+ * A facet word still being typed at the very end stays in the text while `typing`, so it only becomes a pill once it is finished.
+ */
+export function splitFilter(query: string, typing: boolean): { pills: FilterPill[]; text: string } {
+  const pills: FilterPill[] = [];
+  let text = "";
+  let from = 0;
+  for (const token of tokenize(query)) {
+    if (token.facet === null || token.value === "" || (typing && token.end === query.length)) continue;
+    const raw = query.slice(token.start, token.end);
+    pills.push({ facet: token.facet, value: unquote(raw.slice(raw.indexOf(":") + 1)), raw, start: token.start, end: token.end });
+    text += query.slice(from, token.start);
+    from = token.end;
+  }
+  text += query.slice(from);
+  const collapsed = text.replace(/\s+/g, " ").trimStart();
+  // A space typed after a word stays, but one left behind by a pill does not.
+  return { pills, text: /\s$/.test(query) ? collapsed : collapsed.trimEnd() };
+}
+
+/**
+ * The query for these pills followed by `text`: the reverse of [`splitFilter`].
+ * With `gap`, a space always separates them, so an empty text field counts as a new word after the last pill.
+ */
+export function joinFilter(pills: readonly FilterPill[], text: string, gap = false): string {
+  if (pills.length === 0) return text;
+  return pills.map((p) => p.raw).join(" ") + (text === "" && !gap ? "" : ` ${text}`);
+}
+
+/** `query` without the word the pill stands for. */
+export function removePill(query: string, pill: FilterPill): string {
+  return `${query.slice(0, pill.start)} ${query.slice(pill.end)}`.replace(/\s+/g, " ").trim();
+}
+
+/** How a facet's values are ordered in the suggestion list: most songs first, or by name (years: newest first). */
+export type SuggestSort = "count" | "name";
+/** How the year facet's values are grouped in the suggestion list: each year, or a decade as a range like `2010..2019`. */
+export type SuggestGroup = "year" | "decade";
+
+/** The distinct values of one facet in `tracks` that contain `typed`, with how many songs have each. */
+function valuesFor(facet: FacetName, tracks: readonly Track[], typed: string, sort: SuggestSort, group: SuggestGroup): { value: string; count?: number; label?: string }[] {
+  if (facet === "no" || facet === "has") return NO_VALUES.filter((v) => v.includes(typed)).map((value) => ({ value }));
+  if (facet === "added") return ADDED_VALUES.filter((v) => v.includes(typed)).map((value) => ({ value }));
   if (facet === "length") return [];
   const counts = new Map<string, number>();
   for (const t of tracks) {
     const raw = facet === "artist" ? t.artist : facet === "albumartist" ? t.albumArtist : facet === "album" ? t.album : facet === "title" ? t.title : facet === "genre" ? t.genre : t.year === null ? "" : String(t.year);
     if (raw && raw.toLowerCase().includes(typed)) counts.set(raw, (counts.get(raw) ?? 0) + 1);
   }
-  const byCount = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], undefined, { sensitivity: "base" }));
-  if (facet === "year") return byCount.map(([v]) => v).sort((a, b) => Number(b) - Number(a));
-  return byCount.map(([v]) => v);
+  let entries: { value: string; count: number; label?: string }[] = [...counts].map(([value, count]) => ({ value, count }));
+  if (facet === "year" && group === "decade") {
+    const decades = new Map<number, number>();
+    for (const e of entries) {
+      const decade = Math.floor(Number(e.value) / 10) * 10;
+      decades.set(decade, (decades.get(decade) ?? 0) + e.count);
+    }
+    entries = [...decades].map(([decade, count]) => ({ value: `${decade}..${decade + 9}`, label: `${decade}s`, count }));
+  }
+  const byName = (a: { value: string }, b: { value: string }) => a.value.localeCompare(b.value, undefined, { sensitivity: "base", numeric: true });
+  if (sort === "count") return entries.sort((a, b) => b.count - a.count || byName(a, b));
+  return entries.sort(facet === "year" ? (a, b) => parseInt(b.value) - parseInt(a.value) : byName);
 }
 
 /**
  * What to offer for the word under the caret, like GitHub's search box: the facet names while a word is being started,
  * then that facet's values once `name:` is typed. Empty when there is nothing to offer.
  */
-export function suggest(query: string, caret: number, tracks: readonly Track[]): Suggestions {
+export function suggest(query: string, caret: number, tracks: readonly Track[], sort: SuggestSort = "count", group: SuggestGroup = "year"): Suggestions {
   const token = tokenize(query).find((t) => caret >= t.start && caret <= t.end);
   const start = token?.start ?? caret;
   const end = token?.end ?? caret;
-  const none = { items: [], start, end };
+  const none = { items: [], facet: null, start, end };
   const raw = token ? query.slice(token.start, token.end) : "";
 
   if (token?.facet) {
@@ -154,11 +230,11 @@ export function suggest(query: string, caret: number, tracks: readonly Track[]):
     // Only offer values that exist among the songs the other facets already allow: `artist:X album:` lists X's albums.
     const others = tokenize(query).filter((t) => t !== token && t.facet !== null && t.facet !== "no" && t.facet !== "has" && t.value !== "");
     const narrowed = others.length === 0 ? tracks : tracks.filter((t) => others.every((o) => facetMatches(o, t, new Set())));
-    const items = valuesFor(token.facet, narrowed, typed)
+    const items = valuesFor(token.facet, narrowed, typed, sort, group)
       // The value already typed in full needs no suggestion.
-      .filter((v) => v.toLowerCase() !== typed)
-      .map((v) => ({ label: v, insert: `${token.facet}:${quoteIfNeeded(v)}` }));
-    return { items, start, end };
+      .filter((v) => v.value.toLowerCase() !== typed)
+      .map((v) => ({ label: v.label ?? v.value, insert: `${token.facet}:${quoteIfNeeded(v.value)}`, count: v.count }));
+    return { items, facet: token.facet, start, end };
   }
 
   // A word with no colon yet, or nothing typed: offer facet names that start with it. Free text that matches none gets nothing.
@@ -169,7 +245,7 @@ export function suggest(query: string, caret: number, tracks: readonly Track[]):
     hint: f.hint,
     insert: `${f.name}:`,
   }));
-  return { items, start, end };
+  return { items, facet: null, start, end };
 }
 
 /** `query` with the part `suggestions` points at replaced by the chosen item, and where the caret goes after. */
