@@ -1,7 +1,7 @@
 import type { ChatMessage, LmClient, ToolCall, ToolSpec } from "./lm";
 import type { DuplicateGroup } from "./duplicates";
 import type { Lyrics } from "./lyrics";
-import type { TagMatch } from "./musicbrainz";
+import type { ReleaseInfo, TagMatch } from "./musicbrainz";
 import type { TagEditPayload } from "./tagEdit";
 import { TOOLS_TABLE } from "./djTools";
 import type { CleanupReport, FileCheck, ImportItem, PlayerState, PlayStat, Repeat, TagsPatch, Track, WindowMode } from "./types";
@@ -53,6 +53,8 @@ export interface DjHost {
   trashDuplicates(extras: Track[]): Promise<{ report: CleanupReport | null; problem: Problem }>;
   writeTags(tracks: Track[], edit: TagEditPayload): Promise<{ saved: number; failed: string[]; problem: Problem }>;
   reveal(tracks: Track[]): Promise<Problem>;
+  /** Opens a web page in the browser (MusicBrainz or LRCLIB only). */
+  openLink(url: string): Promise<Problem>;
   openInPicard(tracks: Track[]): Promise<Problem>;
   /** Re-reads the folders of songs sent to Picard, so the library shows what Picard saved. */
   refreshPicardChanges(): Promise<Problem>;
@@ -60,6 +62,8 @@ export interface DjHost {
   fetchLyrics(track: Track): Promise<Lyrics | null>;
   /** Ways to tag a song, from MusicBrainz (Picard's database), best first. */
   lookupTags(track: Track): Promise<TagMatch[]>;
+  /** The details of one MusicBrainz release, to show beside a tag match. */
+  fetchRelease(releaseId: string): Promise<ReleaseInfo>;
   // Discovery.
   importLink(url: string, format?: string): Promise<Problem>;
   importFiles(paths: string[]): Promise<{ added: number; problem: Problem }>;

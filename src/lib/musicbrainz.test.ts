@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { lookupTags, resetMusicBrainzClock } from "./musicbrainz";
+import { fetchRelease, lookupTags, musicbrainzUrl, resetMusicBrainzClock } from "./musicbrainz";
 import { makeTrack } from "./testing";
 
 const reply = (body: unknown, status = 200) => ({ ok: status < 300, status, text: async () => JSON.stringify(body) });
@@ -73,3 +73,52 @@ describe("lookupTags", () => {
     expect(sleeps[0]).toBeGreaterThan(0);
   });
 });
+
+describe("fetchRelease", () => {
+  const id = "e6389564-0a50-4a19-9219-c22a42aa8de8";
+  const answer = {
+    title: "A Hymn Revival",
+    date: "2010-06-01",
+    country: "US",
+    status: "Official",
+    "artist-credit": [{ name: "The Lower Lights" }],
+    "label-info": [{ label: { name: "Lower Lights Records" } }, { label: { name: "Lower Lights Records" } }, { label: null }],
+    media: [{ position: 1, title: "", tracks: [{ number: "1", title: "Come Thou Fount", length: 200_000, recording: { id: "r1" } }, { number: "2", title: "Jesus, Savior, Pilot Me", length: null, recording: { id: "r2" } }] }],
+  };
+
+  it("reads the label, date, country and tracklist, and asks for the recordings and labels", async () => {
+    const doFetch = vi.fn(async () => reply(answer));
+    const info = await fetchRelease(id, doFetch, noWait);
+    expect(info).toMatchObject({ title: "A Hymn Revival", artist: "The Lower Lights", date: "2010-06-01", country: "US", status: "Official", label: "Lower Lights Records" });
+    expect(info.discs[0].tracks).toEqual([
+      { number: "1", title: "Come Thou Fount", lengthMs: 200_000, recordingId: "r1" },
+      { number: "2", title: "Jesus, Savior, Pilot Me", lengthMs: null, recordingId: "r2" },
+    ]);
+    const url = (doFetch.mock.calls[0] as unknown as [string])[0];
+    expect(url.startsWith(`https://musicbrainz.org/ws/2/release/${id}?`)).toBe(true);
+    expect(new URL(url).searchParams.get("inc")).toBe("recordings+artist-credits+labels");
+  });
+
+  it("refuses an id that is not a release id, and explains a missing page or a busy service", async () => {
+    await expect(fetchRelease("../../etc", async () => reply({}), noWait)).rejects.toThrow("not a MusicBrainz release id");
+    await expect(fetchRelease(id, async () => reply({}, 404), noWait)).rejects.toThrow("no page for that");
+    await expect(fetchRelease(id, async () => reply({}, 503), noWait)).rejects.toThrow("busy");
+  });
+});
+
+describe("musicbrainzUrl", () => {
+  const base = { title: "", artist: "", album: "", albumArtist: "", year: "", trackNumber: "", discNumber: "", genreHint: "", releaseKind: "", confidence: 0, reasons: [] };
+  const release = "e6389564-0a50-4a19-9219-c22a42aa8de8";
+  const recording = "f13db9d7-1c07-4e24-b8c8-4026e511b788";
+
+  it("links the release when there is one, else the recording, else nothing", () => {
+    expect(musicbrainzUrl({ ...base, releaseId: release, recordingId: recording })).toBe(`https://musicbrainz.org/release/${release}`);
+    expect(musicbrainzUrl({ ...base, releaseId: "", recordingId: recording })).toBe(`https://musicbrainz.org/recording/${recording}`);
+    expect(musicbrainzUrl({ ...base, releaseId: "", recordingId: "" })).toBeNull();
+  });
+
+  it("never builds a link from something that is not an id", () => {
+    expect(musicbrainzUrl({ ...base, releaseId: "../evil", recordingId: "x y" })).toBeNull();
+  });
+});
+

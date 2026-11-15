@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import type { DjHost, DjView } from "../lib/dj";
 import { formatDate, formatTime } from "../lib/format";
 import { changedFields, TAG_FIELDS } from "../lib/tagEdit";
-import { tagEditFromMatch, type TagMatch } from "../lib/musicbrainz";
+import { musicbrainzUrl, tagEditFromMatch, type ReleaseInfo, type TagMatch } from "../lib/musicbrainz";
 import type { FileCheck, ImportItem, Track } from "../lib/types";
 import CoverArt from "./CoverArt.vue";
 
@@ -54,6 +54,62 @@ function apply(song: Track, match: TagMatch, index: number) {
   });
 }
 const level = (confidence: number) => (confidence >= 75 ? "high" : confidence >= 50 ? "mid" : "low");
+
+// A match opens to show everything about it in the chat: every tag beside the song's own, and the release it is from.
+const openMatch = ref<Record<number, boolean>>({});
+const onlyMatch = computed(() => props.view.kind === "tags" && props.view.matches.length === 1);
+const isOpen = (i: number) => openMatch.value[i] ?? onlyMatch.value;
+
+const releases = ref<Record<string, { loading: boolean; error: string | null; info: ReleaseInfo | null }>>({});
+function loadRelease(match: TagMatch) {
+  const id = match.releaseId;
+  if (!id || releases.value[id]) return;
+  releases.value = { ...releases.value, [id]: { loading: true, error: null, info: null } };
+  props.host.fetchRelease(id).then(
+    (info) => (releases.value = { ...releases.value, [id]: { loading: false, error: null, info } }),
+    (e) => (releases.value = { ...releases.value, [id]: { loading: false, error: e instanceof Error ? e.message : String(e), info: null } }),
+  );
+}
+function toggleMatch(index: number, match: TagMatch) {
+  const opening = !isOpen(index);
+  openMatch.value = { ...openMatch.value, [index]: opening };
+  if (opening) loadRelease(match);
+}
+onMounted(() => {
+  if (props.view.kind === "tags" && props.view.matches.length === 1) loadRelease(props.view.matches[0]);
+});
+
+/** Every tag the song has now beside what MusicBrainz says. Genre is only a hint there, so it is never counted as a change. */
+function compareRows(song: Track, m: TagMatch) {
+  const text = (v: string | number | null | undefined) => (v === null || v === undefined ? "" : String(v));
+  const row = (label: string, now: string | number | null, there: string, hint = false) => ({
+    label,
+    now: text(now) || "(empty)",
+    there: there || "—",
+    differs: !hint && there !== "" && text(now) !== there,
+    hint,
+  });
+  return [
+    row("Title", song.title, m.title),
+    row("Artist", song.artist, m.artist),
+    row("Album", song.album, m.album),
+    row("Album artist", song.albumArtist, m.albumArtist),
+    row("Track", song.trackNumber, m.trackNumber),
+    row("Disc", song.discNumber, m.discNumber),
+    row("Year", song.year, m.year),
+    row("Genre", song.genre, m.genreHint, true),
+  ];
+}
+const isThisSong = (song: Track, m: TagMatch, t: { title: string; recordingId: string }) =>
+  (!!m.recordingId && t.recordingId === m.recordingId) || t.title.trim().toLowerCase() === song.title.trim().toLowerCase();
+
+function openInPicard(song: Track, key: string) {
+  void run(key, async () => (await props.host.openInPicard([song])) ?? "Opened in Picard.");
+}
+function openOnMusicBrainz(m: TagMatch, key: string) {
+  const url = musicbrainzUrl(m);
+  if (url) void run(key, async () => (await props.host.openLink(url)) ?? "Opened in your browser.");
+}
 
 // --- lyrics: what the service matched, and whether that is your song ---
 const fold = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -134,28 +190,69 @@ const stageText = (i: ImportItem) => (i.stage === "fetching" ? `Downloading ${Ma
       <p v-if="outcome.all" class="note">{{ outcome.all }}</p>
     </template>
 
-    <!-- Tag matches, with Apply -->
+    <!-- Tag matches: open one for every tag and its release, Apply to write -->
     <template v-else-if="view.kind === 'tags'">
       <header>
         <b>Tags for “{{ view.song.title }}”</b>
         <span class="muted">from MusicBrainz</span>
       </header>
       <div v-for="(m, i) in view.matches" :key="i" class="match">
-        <div class="line">
+        <button class="line open" :aria-expanded="isOpen(i)" @click="toggleMatch(i, m)">
+          <span class="chev" :class="{ on: isOpen(i) }" aria-hidden="true">›</span>
           <b class="ellipsis">{{ m.album || "(no album)" }}</b>
           <span class="badge" :class="level(m.confidence)" :title="m.reasons.join(', ') || 'matched by title and artist'">{{ m.confidence }}%</span>
-        </div>
+        </button>
         <div class="muted small">
           {{ [m.artist, m.year, m.trackNumber && `track ${m.trackNumber}`, m.discNumber && `disc ${m.discNumber}`, m.releaseKind].filter(Boolean).join(" · ") }}
         </div>
         <div v-if="m.reasons.length" class="muted small">{{ m.reasons.join(", ") }}</div>
-        <ul v-if="changesFor(view.song, m).length" class="changes">
+
+        <template v-if="isOpen(i)">
+          <table class="compare">
+            <thead><tr><th /><th>Now</th><th>MusicBrainz</th></tr></thead>
+            <tbody>
+              <tr v-for="r in compareRows(view.song, m)" :key="r.label" :class="{ differs: r.differs }">
+                <th>{{ r.label }}</th>
+                <td>{{ r.now }}</td>
+                <td>{{ r.there }}<span v-if="r.hint" class="muted small"> (hint, not written)</span></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div v-if="m.releaseId" class="release">
+            <p v-if="releases[m.releaseId]?.loading" class="note">Loading the release…</p>
+            <p v-else-if="releases[m.releaseId]?.error" class="note error">{{ releases[m.releaseId].error }}</p>
+            <template v-else-if="releases[m.releaseId]?.info">
+              <p class="note">
+                {{ [releases[m.releaseId].info!.label, releases[m.releaseId].info!.date, releases[m.releaseId].info!.country, releases[m.releaseId].info!.status].filter(Boolean).join(" · ") || "No more details." }}
+              </p>
+              <div class="tracks">
+                <template v-for="d in releases[m.releaseId].info!.discs" :key="d.position">
+                  <div v-if="releases[m.releaseId].info!.discs.length > 1" class="disc muted small">Disc {{ d.position }}{{ d.title ? ` · ${d.title}` : "" }}</div>
+                  <div v-for="t in d.tracks" :key="`${d.position}-${t.number}`" class="trk" :class="{ here: isThisSong(view.song, m, t) }">
+                    <span class="muted num">{{ t.number }}</span>
+                    <span class="ellipsis">{{ t.title }}</span>
+                    <span class="muted">{{ t.lengthMs ? formatTime(t.lengthMs) : "" }}</span>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <div class="apply">
+          <button v-if="changesFor(view.song, m).length" class="on" :disabled="busy[`tags-${i}`]" @click="apply(view.song, m, i)">
+            Apply {{ changesFor(view.song, m).length }} change{{ changesFor(view.song, m).length === 1 ? "" : "s" }}
+          </button>
+          <span v-else class="ok">✓ Already matches</span>
+          <button v-if="isOpen(i)" title="Open this release on musicbrainz.org" :disabled="busy[`web-${i}`] || !m.releaseId && !m.recordingId" @click="openOnMusicBrainz(m, `web-${i}`)">MusicBrainz ↗</button>
+          <button v-if="isOpen(i)" title="Tag this song in MusicBrainz Picard" @click="openInPicard(view.song, `picard-${i}`)">Picard</button>
+          <button v-if="isOpen(i)" title="Show the song in the library" @click="host.showInLibrary(view.song)">Show</button>
+        </div>
+        <ul v-if="isOpen(i) && changesFor(view.song, m).length" class="changes">
           <li v-for="c in changesFor(view.song, m)" :key="c.label"><span class="muted">{{ c.label }}</span> {{ c.from }} → <b>{{ c.to }}</b></li>
         </ul>
-        <div class="apply">
-          <button class="on" :disabled="busy[`tags-${i}`]" @click="apply(view.song, m, i)">{{ changesFor(view.song, m).length ? "Apply" : "Already matches" }}</button>
-          <span v-if="outcome[`tags-${i}`]" class="note">{{ outcome[`tags-${i}`] }}</span>
-        </div>
+        <span v-for="k in [`tags-${i}`, `web-${i}`, `picard-${i}`]" :key="k" v-show="outcome[k]" class="note">{{ outcome[k] }}</span>
       </div>
     </template>
 
@@ -264,6 +361,21 @@ button { padding: 0 7px; font-size: 11px; }
 .badge.mid { background: #d9822b; }
 .badge.low { background: #d24a4a; }
 .changes { margin: 2px 0; }
+.line.open { width: 100%; background: none; border: none; padding: 0; text-align: left; color: inherit; font-size: 12px; cursor: pointer; }
+.chev { display: inline-block; width: 10px; color: var(--muted); transition: transform 0.15s; }
+.chev.on { transform: rotate(90deg); }
+.ok { color: #6fcf97; font-weight: 600; }
+.compare { border-collapse: collapse; width: 100%; margin: 4px 0; font-size: 11px; }
+.compare th, .compare td { padding: 1px 6px; text-align: left; border-top: 1px solid var(--line); }
+.compare thead th { color: var(--muted); font-weight: 600; border-top: none; }
+.compare tbody th { color: var(--muted); font-weight: 400; white-space: nowrap; }
+.compare tr.differs td:last-child { font-weight: 700; color: var(--accent); }
+.release { margin: 2px 0; }
+.tracks { max-height: 150px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
+.trk { display: grid; grid-template-columns: 22px 1fr auto; gap: 6px; font-size: 11px; padding: 1px 0; }
+.trk.here { background: color-mix(in srgb, var(--accent) 22%, transparent); font-weight: 700; border-radius: 3px; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.note.error { color: #ffb4b4; }
 .apply { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 .facts { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; margin: 2px 0; }
 .facts dt { color: var(--muted); }

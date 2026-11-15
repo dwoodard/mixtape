@@ -32,6 +32,8 @@ export interface Api {
   /** Corrects the length the library holds for a song (the file itself is untouched). Returns the updated song. */
   fixLength(path: string, lengthMs: number): Promise<Track>;
   revealInFinder(paths: string[]): Promise<void>;
+  /** Opens a link in the browser. Only musicbrainz.org and lrclib.net are allowed. */
+  openLink(url: string): Promise<void>;
   trashDuplicates(pairs: DuplicatePair[]): Promise<CleanupReport>;
   writeTags(paths: string[], edit: TagEditPayload): Promise<TagWriteResult[]>;
   importTools(): Promise<ToolStatus>;
@@ -106,6 +108,7 @@ export const tauriApi: Api = {
   inspectFile: (path, storedMs) => invoke("inspect_file", { path, storedMs }),
   fixLength: (path, lengthMs) => invoke("fix_length", { path, lengthMs }),
   revealInFinder: (paths) => invoke("reveal_in_finder", { paths }),
+  openLink: (url) => invoke("open_link", { url }),
   trashDuplicates: (pairs) => invoke("trash_duplicates", { pairs }),
   writeTags: (paths, edit) => invoke("write_tags", { paths, edit }),
   importTools: () => invoke("import_tools"),

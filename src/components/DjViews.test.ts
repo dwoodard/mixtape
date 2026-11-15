@@ -37,19 +37,44 @@ describe("DjViews", () => {
     expect(html).toContain("Show all 9");
   });
 
-  it("draws each tag match with its confidence, what would change and an Apply button", async () => {
-    const html = await render({
-      kind: "tags",
-      song: makeTrack({ title: "Halo", album: "", year: 2008 }),
-      matches: [{ title: "Halo", artist: "Artist", album: "I Am", albumArtist: "", year: "2008", trackNumber: "3", discNumber: "", genreHint: "", releaseKind: "Album", confidence: 91, reasons: ["same length"] }],
-    });
+  const match = { recordingId: "", releaseId: "", title: "Halo", artist: "Artist", album: "I Am", albumArtist: "", year: "2008", trackNumber: "3", discNumber: "", genreHint: "pop", releaseKind: "Album", confidence: 91, reasons: ["same length"] };
+
+  it("draws a tag match with its confidence and an Apply button counting what would change", async () => {
+    const html = await render({ kind: "tags", song: makeTrack({ title: "Halo", album: "", year: 2008 }), matches: [match] });
     expect(html).toContain("91%");
-    expect(html).toContain("Album");
+    // Album and track differ; title, artist and year already match.
+    expect(html).toContain("Apply 2 changes");
+    expect(html).not.toContain("Already matches");
+  });
+
+  it("opens a single match by itself, showing every tag beside the song's own and marking what differs", async () => {
+    const html = await render({ kind: "tags", song: makeTrack({ title: "Halo", album: "", year: 2008 }), matches: [match] });
+    expect(html).toContain("MusicBrainz</th>");
+    for (const label of ["Title", "Artist", "Album", "Album artist", "Track", "Disc", "Year", "Genre"]) expect(html).toContain(`>${label}</th>`);
     expect(html).toContain("(empty)");
-    expect(html).toContain(">I Am<");
-    expect(html).toContain("Apply");
-    // The year already matches, so it is not listed as a change.
-    expect(html).not.toContain("Year");
+    expect(html).toContain("hint, not written");
+    // Album and track are marked as differing, year is not.
+    expect(html.match(/<tr class="differs"/g)).toHaveLength(2);
+    // And the ways to go further: the page, Picard, the library.
+    expect(html).toContain("MusicBrainz ↗");
+    expect(html).toContain(">Picard<");
+    expect(html).toContain(">Show<");
+  });
+
+  it("keeps several matches closed until one is opened, with only the summary showing", async () => {
+    const html = await render({ kind: "tags", song: makeTrack({ title: "Halo" }), matches: [match, { ...match, album: "Other", confidence: 60 }] });
+    expect(html).toContain("91%");
+    expect(html).toContain("60%");
+    expect(html).not.toContain("hint, not written");
+    expect(html).not.toContain("MusicBrainz ↗");
+    expect(html.match(/aria-expanded="false"/g)).toHaveLength(2);
+  });
+
+  it("says Already matches, as plain text and not a button, when nothing would change", async () => {
+    const song = makeTrack({ title: "Halo", artist: "Artist", album: "I Am", year: 2008, trackNumber: 3 });
+    const html = await render({ kind: "tags", song, matches: [match] });
+    expect(html).toMatch(/<span class="ok"[^>]*>✓ Already matches<\/span>/);
+    expect(html).not.toMatch(/Apply \d+ change/);
   });
 
   it("heads the lyrics with what the service matched, and warns only when that is not your song", async () => {

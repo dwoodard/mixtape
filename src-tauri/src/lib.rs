@@ -16,6 +16,7 @@ pub mod reveal;
 pub mod session;
 pub mod tags;
 pub mod track;
+pub mod weblink;
 pub mod window;
 pub mod window_state;
 
@@ -546,6 +547,14 @@ async fn reveal_in_finder(paths: Vec<String>) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Opens a link in the browser. Only musicbrainz.org and lrclib.net are allowed.
+#[tauri::command]
+async fn open_link(url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || weblink::open_link(&url))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// How many tracks are currently removed from the loaded library.
 #[tauri::command]
 fn removed_count(cache: State<CacheDir>) -> usize {
@@ -917,6 +926,7 @@ pub fn run() {
             inspect_file,
             fix_length,
             reveal_in_finder,
+            open_link,
             import_tools,
             import_list,
             import_add_link,

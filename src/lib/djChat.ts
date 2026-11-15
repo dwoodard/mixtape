@@ -3,7 +3,7 @@ import { tauriApi, type Api } from "./api";
 import { contextNote, DjSession, type DjView, runTurn, systemPrompt, type DjHost, type Problem } from "./dj";
 import { createLmClient, DEFAULT_LM_ENDPOINT, type ChatMessage, type LmClient } from "./lm";
 import { fetchLyrics } from "./lyrics";
-import { lookupTags } from "./musicbrainz";
+import { fetchRelease, lookupTags } from "./musicbrainz";
 import { THRESHOLDS, type Imports } from "./imports";
 import { imports as appImports, store as appStore, type Store } from "./store";
 import { setAccent, setTheme } from "./themes";
@@ -124,9 +124,11 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
       };
     },
     reveal: (tracks) => soft(() => store.revealInFinder(tracks)),
+    openLink: (url) => guard(() => api.openLink(url)),
     openInPicard: (tracks) => soft(() => store.openInPicard(tracks)),
     fetchLyrics: (track) => fetchLyrics(track),
     lookupTags: (track) => lookupTags(track),
+    fetchRelease: (releaseId) => fetchRelease(releaseId),
     refreshPicardChanges: () => soft(() => store.refreshPicardFolders()),
     importLink: async (url, format) => {
       if (format === "mp3" || format === "m4a" || format === "flac") imports.setFormat(format);

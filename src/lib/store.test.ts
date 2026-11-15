@@ -31,6 +31,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     inspectFile: vi.fn(async () => ({}) as never),
     fixLength: vi.fn(async () => makeTrack()),
     revealInFinder: vi.fn(async () => {}),
+    openLink: vi.fn(async () => {}),
     writeTags: vi.fn(async () => []),
     importTools: vi.fn(async () => ({ ytDlp: "/bin/yt-dlp", ffmpeg: "/bin/ffmpeg", picard: "/Applications/MusicBrainz Picard.app" })),
     importList: vi.fn(async () => []),

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { contextNote, DjSession, runTool, runTurn, systemPrompt, type DjHost } from "./dj";
 import type { DuplicateGroup } from "./duplicates";
 import type { Lyrics } from "./lyrics";
-import type { TagMatch } from "./musicbrainz";
+import type { ReleaseInfo, TagMatch } from "./musicbrainz";
 import type { ChatMessage, Completion, LmClient } from "./lm";
 import { makePlayerState, makeTrack } from "./testing";
 import type { CleanupReport, FileCheck, ImportItem, PlayerState, PlayStat, Track } from "./types";
@@ -50,8 +50,10 @@ function fakeHost(player: Partial<PlayerState> = {}, queue: Track[] = [], extra:
     trashDuplicates: vi.fn(async () => ({ report: null as CleanupReport | null, problem: null as string | null })),
     writeTags: vi.fn(async () => ({ saved: 1, failed: [] as string[], problem: null as string | null })),
     reveal: ok(),
+    openLink: ok(),
     openInPicard: ok(),
     lookupTags: vi.fn(async () => [] as TagMatch[]),
+    fetchRelease: vi.fn(async () => ({ title: "", artist: "", date: "", country: "", status: "", label: "", discs: [] }) as ReleaseInfo),
     fetchLyrics: vi.fn(async () => ({ source: "lrclib.net", text: "la la", instrumental: false, matched: { title: "Halo", artist: "Beyoncé", album: "" } }) as Lyrics | null),
     importLink: ok(),
     importFiles: vi.fn(async () => ({ added: 1, problem: null as string | null })),
@@ -537,7 +539,7 @@ describe("whole-app tools", () => {
   });
 
   describe("lookup_tags", () => {
-    const match: TagMatch = { title: "Halo", artist: "Beyoncé", album: "I Am... Sasha Fierce", albumArtist: "Beyoncé", year: "2008", trackNumber: "3", discNumber: "2", genreHint: "pop", releaseKind: "Album", confidence: 92, reasons: ["same length", "same album"] };
+    const match: TagMatch = { recordingId: "", releaseId: "", title: "Halo", artist: "Beyoncé", album: "I Am... Sasha Fierce", albumArtist: "Beyoncé", year: "2008", trackNumber: "3", discNumber: "2", genreHint: "pop", releaseKind: "Album", confidence: 92, reasons: ["same length", "same album"] };
 
     it("looks up the playing song and shows the matches, changing nothing", async () => {
       const host = fakeHost({ currentTrack: library[2] }, [], { lookupTags: vi.fn(async () => [match]) });
@@ -698,7 +700,7 @@ describe("views the chat draws", () => {
   });
 
   it("the queue, play count, lyrics, tag matches, duplicates and imports each get their own view", async () => {
-    const match = { title: "Halo", artist: "Beyoncé", album: "I Am", albumArtist: "Beyoncé", year: "2008", trackNumber: "3", discNumber: "1", genreHint: "", releaseKind: "Album", confidence: 90, reasons: [] } as TagMatch;
+    const match = { recordingId: "", releaseId: "", title: "Halo", artist: "Beyoncé", album: "I Am", albumArtist: "Beyoncé", year: "2008", trackNumber: "3", discNumber: "1", genreHint: "", releaseKind: "Album", confidence: 90, reasons: [] } as TagMatch;
     const group: DuplicateGroup = { key: "k", keep: library[1], extras: [library[2]] };
     const item = { id: 4, stage: "ready", url: "u", videoTitle: "v", proposal: { title: "T" }, confidence: 1, picard: "none" } as ImportItem;
     const host = fakeHost({ currentTrack: library[2] }, [library[0]], {
