@@ -10,6 +10,13 @@ export type TagField =
   | "year"
   | "genre";
 
+/** Whether text names a cover picture the app can load: an http(s) link, or an absolute path, `~/…` or `file://` link. */
+export const isCoverSource = (text: string): boolean => {
+  const t = text.trim();
+  return /^https?:\/\/\S+$/i.test(t) || /^(\/|~\/|file:\/\/)\S/.test(t);
+};
+export const COVER_SOURCE_ERROR = "The cover art must be an http(s) link or the path of a picture on this computer.";
+
 export const MULTIPLE = "(multiple values)";
 
 export const TAG_FIELDS: { key: TagField; label: string; numeric?: boolean }[] = [
@@ -28,7 +35,7 @@ export type TagDraft = Record<TagField, string>;
 export type TagEditPayload = Partial<Record<TagField, string>> & {
   /** The words of the song, kept in the file's lyrics tag. Line breaks are kept; an empty string removes them. */
   lyrics?: string;
-  /** An https link to a picture to embed as the front cover. The app downloads it and converts it to JPEG. */
+  /** Where to get the picture to embed as the front cover: an http(s) link or a file path. It is converted to JPEG. */
   coverUrl?: string;
 };
 
@@ -96,7 +103,7 @@ export function buildEdit(
   }
   const cover = coverUrl.trim();
   if (cover !== "") {
-    if (!/^https:\/\/\S+$/i.test(cover)) error ??= "The cover art must be a full https:// link to a picture.";
+    if (!isCoverSource(cover)) error ??= COVER_SOURCE_ERROR;
     else {
       edit.coverUrl = cover;
       changes.push({ field: "coverUrl", label: "Cover art", from: "(current art)", to: cover });

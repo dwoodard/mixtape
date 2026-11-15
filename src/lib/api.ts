@@ -38,6 +38,10 @@ export interface Api {
   openLink(url: string): Promise<void>;
   trashDuplicates(pairs: DuplicatePair[]): Promise<CleanupReport>;
   writeTags(paths: string[], edit: TagEditPayload): Promise<TagWriteResult[]>;
+  /** Lets the person pick a picture file; its path, or null when they cancel. */
+  pickImage(): Promise<string | null>;
+  /** Which of these songs have no cover picture, in their tags or in their folder. */
+  missingCovers(paths: string[]): Promise<string[]>;
   importTools(): Promise<ToolStatus>;
   picardOpenFiles(paths: string[]): Promise<void>;
   refreshFolders(dirs: string[]): Promise<FolderRefresh[]>;
@@ -121,6 +125,11 @@ export const tauriApi: Api = {
   openLink: (url) => invoke("open_link", { url }),
   trashDuplicates: (pairs) => invoke("trash_duplicates", { pairs }),
   writeTags: (paths, edit) => invoke("write_tags", { paths, edit }),
+  pickImage: async () => {
+    const picked = await open({ multiple: false, filters: [{ name: "Pictures", extensions: ["jpg", "jpeg", "png", "webp"] }] });
+    return typeof picked === "string" ? picked : null;
+  },
+  missingCovers: (paths) => invoke("missing_covers", { paths }),
   importTools: () => invoke("import_tools"),
   picardOpenFiles: (paths) => invoke("picard_open_files", { paths }),
   refreshFolders: (dirs) => invoke("refresh_folders", { dirs }),

@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { formatAgo } from "../lib/format";
 import { imports, store } from "../lib/store";
 import { tip, shortcutText } from "../lib/shortcuts";
-import { filterTracks, shuffleTracks } from "../lib/trackList";
+import { filterTracks, shuffleTracks, wantsNoCover } from "../lib/trackList";
 import { libraryQuery, libraryView, selectedSongs, setAppMode, showInLibrary, type LibraryView } from "../lib/ui";
 import AlbumsView from "./AlbumsView.vue";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
@@ -12,7 +12,9 @@ import ArtistsView from "./ArtistsView.vue";
 import TrackPane from "./TrackPane.vue";
 
 const query = libraryQuery;
-const filtered = computed(() => filterTracks(store.library.value, query.value));
+const filtered = computed(() => filterTracks(store.library.value, query.value, store.coverless.value));
+// "nocover" needs every song's file looked at once; songs added later are checked the next time.
+watch([query, () => store.library.value.length], () => wantsNoCover(query.value) && void store.checkCovers(), { immediate: true });
 
 // The Random tab keeps its order until the tab is clicked again.
 const shuffleSeed = ref(Date.now());
@@ -138,7 +140,7 @@ const scanLabel = computed(() => {
         :disabled="libraryView === 'duplicates'"
       />
       <span class="count">
-        {{ filtered.length }} tracks<template v-if="store.scannedAt.value">
+        {{ filtered.length }} tracks<template v-if="store.checkingCovers.value"> · checking covers…</template><template v-if="store.scannedAt.value">
           · scanned {{ formatAgo(store.scannedAt.value, Date.now()) }}</template>
       </span>
       <button v-if="store.scanning.value" @click="store.cancelScan()">Cancel</button>

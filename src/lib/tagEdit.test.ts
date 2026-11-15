@@ -35,13 +35,17 @@ describe("buildEdit", () => {
     expect(buildEdit([a], draftFor([a]))).toEqual({ edit: {}, changes: [], error: null });
   });
 
-  it("adds a cover link as a change, and rejects one that is not https", () => {
+  it("adds a cover link or file path as a change, and rejects anything else", () => {
     const ok = buildEdit([a], draftFor([a]), "  https://example.com/c.webp ");
     expect(ok.edit).toEqual({ coverUrl: "https://example.com/c.webp" });
     expect(ok.changes).toEqual([{ field: "coverUrl", label: "Cover art", from: "(current art)", to: "https://example.com/c.webp" }]);
-    const bad = buildEdit([a], draftFor([a]), "http://example.com/c.jpg");
-    expect(bad.error).toContain("https");
-    expect(bad.edit).toEqual({});
+    expect(buildEdit([a], draftFor([a]), "http://example.com/c.jpg").edit).toEqual({ coverUrl: "http://example.com/c.jpg" });
+    expect(buildEdit([a], draftFor([a]), "/Users/me/My Pictures/c.png").edit).toEqual({ coverUrl: "/Users/me/My Pictures/c.png" });
+    for (const bad of ["ftp://example.com/c.jpg", "c.jpg", "javascript:alert(1)"]) {
+      const out = buildEdit([a], draftFor([a]), bad);
+      expect(out.error, bad).toContain("http(s)");
+      expect(out.edit, bad).toEqual({});
+    }
     expect(buildEdit([a], draftFor([a]), "  ")).toEqual({ edit: {}, changes: [], error: null });
   });
 

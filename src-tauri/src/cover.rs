@@ -35,7 +35,8 @@ pub fn embedded(track: &Path) -> Option<Vec<u8>> {
         .map(|p| p.data().to_vec())
 }
 
-fn folder_picture(track: &Path) -> Option<Vec<u8>> {
+/// The picture file next to a track, best guess first.
+fn folder_picture_path(track: &Path) -> Option<PathBuf> {
     let dir = track.parent()?;
     let mut found: Vec<(usize, PathBuf)> = std::fs::read_dir(dir)
         .ok()?
@@ -52,7 +53,16 @@ fn folder_picture(track: &Path) -> Option<Vec<u8>> {
     found
         .into_iter()
         .find(|(_, p)| std::fs::metadata(p).is_ok_and(|m| m.len() <= MAX_SOURCE_BYTES))
-        .and_then(|(_, p)| std::fs::read(p).ok())
+        .map(|(_, p)| p)
+}
+
+fn folder_picture(track: &Path) -> Option<Vec<u8>> {
+    folder_picture_path(track).and_then(|p| std::fs::read(p).ok())
+}
+
+/// Whether `find_source` would find a picture for this track, without reading a folder picture's bytes.
+pub fn has_cover(track: &Path) -> bool {
+    embedded(track).is_some() || folder_picture_path(track).is_some()
 }
 
 /// Shrinks image bytes to a JPEG thumbnail. `None` if they are not a readable image.
@@ -288,5 +298,19 @@ mod tests {
 
     fn utf8_percent_encode(s: &str) -> String {
         percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
+    }
+
+    #[test]
+    fn has_cover_sees_embedded_pictures_and_folder_pictures() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = fixture_mp3(dir.path(), "bare.mp3");
+        assert!(!has_cover(&bare), "no picture anywhere");
+
+        let embedded_song = fixture_mp3(dir.path(), "embedded.mp3");
+        embed(&embedded_song, png(8, 8), PictureType::CoverFront);
+        assert!(has_cover(&embedded_song));
+
+        std::fs::write(dir.path().join("folder.jpg"), png(8, 8)).unwrap();
+        assert!(has_cover(&bare), "a folder picture counts");
     }
 }

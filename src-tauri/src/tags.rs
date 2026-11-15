@@ -27,7 +27,7 @@ pub struct TagEdit {
     pub genre: Option<String>,
     /// The words of the song, kept in the file's own lyrics tag (USLT in an mp3). Line breaks are kept.
     pub lyrics: Option<String>,
-    /// An https link to a picture to embed as the front cover. The app downloads it once and fills `cover`.
+    /// Where to get the picture to embed as the front cover: an http(s) link or a file on this computer. Loaded once into `cover`.
     pub cover_url: Option<String>,
     /// The JPEG bytes of the cover to embed. Never sent by the UI.
     #[serde(skip)]
@@ -53,7 +53,7 @@ impl TagEdit {
         number(self.disc_number.as_deref(), "Disc", u32::MAX)?;
         number(self.year.as_deref(), "Year", 9999)?;
         if let Some(url) = self.cover_url.as_deref() {
-            crate::coverart::check_url(url)?;
+            crate::coverart::check_source(url)?;
         }
         if self.lyrics.as_deref().is_some_and(|l| l.chars().count() > MAX_LYRICS_CHARS) {
             return Err(format!("Lyrics are limited to {MAX_LYRICS_CHARS} characters."));
@@ -329,11 +329,11 @@ mod tests {
     }
 
     #[test]
-    fn a_cover_link_must_be_https() {
+    fn a_cover_source_must_be_a_web_link_or_a_file_path() {
         let dir = tempfile::tempdir().unwrap();
         let path = fixture(dir.path(), "mp3");
-        let err = write_tags(&path, &TagEdit { cover_url: Some("http://example.com/a.jpg".into()), ..Default::default() }).unwrap_err();
-        assert!(err.contains("https"), "{err}");
+        let err = write_tags(&path, &TagEdit { cover_url: Some("ftp://example.com/a.jpg".into()), ..Default::default() }).unwrap_err();
+        assert!(err.contains("http(s)"), "{err}");
     }
 
     #[test]

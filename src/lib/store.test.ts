@@ -34,6 +34,8 @@ function fakeApi(overrides: Partial<Api> = {}) {
     revealInFinder: vi.fn(async () => {}),
     openLink: vi.fn(async () => {}),
     writeTags: vi.fn(async () => []),
+    missingCovers: vi.fn(async () => [] as string[]),
+    pickImage: vi.fn(async () => null as string | null),
     importTools: vi.fn(async () => ({ ytDlp: "/bin/yt-dlp", ffmpeg: "/bin/ffmpeg", picard: "/Applications/MusicBrainz Picard.app" })),
     importList: vi.fn(async () => []),
     importAddLink: vi.fn(async () => {}),
@@ -879,6 +881,21 @@ describe("writing tags", () => {
     expect(store.library.value.map((t) => t.title)).toEqual(["New A", "Old B"]);
     expect(store.tagResults.value?.[1].error).toBe("Can't read this file.");
     expect(store.writingTags.value).toBe(false);
+  });
+
+  it("checks each song for a cover once, and drops it from the list when new art is written", async () => {
+    const { api, store } = await loaded(
+      [{ path: "/m/a.mp3", track: a, error: null }],
+      { missingCovers: vi.fn(async (paths: string[]) => paths) },
+    );
+
+    await store.checkCovers();
+    expect([...store.coverless.value].sort()).toEqual(["/m/a.mp3", "/m/b.mp3"]);
+    await store.checkCovers();
+    expect(api.missingCovers).toHaveBeenCalledTimes(1);
+
+    await store.writeTags([a], { coverUrl: "https://example.com/c.jpg" });
+    expect([...store.coverless.value]).toEqual(["/m/b.mp3"]);
   });
 
   it("does nothing for no songs or no changes", async () => {

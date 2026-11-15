@@ -3,11 +3,23 @@ import type { PlayStat, Track } from "./types";
 export type SortKey = "default" | "title" | "artist" | "album" | "durationMs" | "year" | "addedMs" | "plays";
 export type SortDirection = "asc" | "desc";
 
-/** Case-insensitive match of every word in `query` against title, artist, album, genre, or year. */
-export function filterTracks(tracks: Track[], query: string): Track[] {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return tracks;
+/** Words in the filter box that mean "songs with no cover picture" instead of matching text. */
+const NO_COVER_WORDS = new Set(["nocover", "no:cover"]);
+
+/** Whether the filter asks for songs with no cover art, so the caller knows to check the files. */
+export const wantsNoCover = (query: string): boolean => query.toLowerCase().split(/\s+/).some((w) => NO_COVER_WORDS.has(w));
+
+/**
+ * Case-insensitive match of every word in `query` against title, artist, album, genre, or year.
+ * `nocover` (or `no:cover`) keeps only the songs in `coverless`, so it combines with other words.
+ */
+export function filterTracks(tracks: Track[], query: string, coverless: ReadonlySet<string> = new Set()): Track[] {
+  const all = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const words = all.filter((w) => !NO_COVER_WORDS.has(w));
+  const noCover = words.length !== all.length;
+  if (words.length === 0 && !noCover) return tracks;
   return tracks.filter((t) => {
+    if (noCover && !coverless.has(t.path)) return false;
     const haystack = `${t.title} ${t.artist} ${t.album} ${t.genre} ${t.year ?? ""}`.toLowerCase();
     return words.every((w) => haystack.includes(w));
   });

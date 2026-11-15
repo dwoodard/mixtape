@@ -66,6 +66,10 @@ export function createStore(api: Api, storage?: FlagStorage) {
   /** What the last tag write did, per file, for the editor to show. */
   const tagResults = ref<TagWriteResult[] | null>(null);
   const writingTags = ref(false);
+  /** Songs found to have no cover picture, and which songs have been checked so far (checking reads every file's tags). */
+  const coverless = ref<Set<string>>(new Set());
+  const coverChecked = new Set<string>();
+  const checkingCovers = ref(false);
   /** True while a duplicate clean-up is running (it must not be started twice). */
   const cleaningUp = ref(false);
 
@@ -377,7 +381,10 @@ export function createStore(api: Api, storage?: FlagStorage) {
       tagResults.value = results;
       const fresh = new Map(results.flatMap((r) => (r.track ? [[r.path, r.track] as const] : [])));
       if (fresh.size > 0) {
-        if (edit.coverUrl) refreshCovers([...fresh.keys()]);
+        if (edit.coverUrl) {
+          refreshCovers([...fresh.keys()]);
+          coverless.value = new Set([...coverless.value].filter((p) => !fresh.has(p)));
+        }
         library.value = library.value.map((t) => fresh.get(t.path) ?? t);
         const first = [...fresh.values()][0];
         noteChange(fresh.size === 1 ? `Saved tags: ${first.title}` : `Saved tags for ${fresh.size} songs`, first);
@@ -388,6 +395,34 @@ export function createStore(api: Api, storage?: FlagStorage) {
     } finally {
       writingTags.value = false;
     }
+  }
+
+  /** Checks the songs not checked yet for cover pictures. Songs added later are picked up by the next call. */
+  async function checkCovers() {
+    if (checkingCovers.value) return;
+    const todo = library.value.map((t) => t.path).filter((p) => !coverChecked.has(p));
+    if (todo.length === 0) return;
+    checkingCovers.value = true;
+    try {
+      const missing = await api.missingCovers(todo);
+      for (const p of todo) coverChecked.add(p);
+      coverless.value = new Set([...coverless.value, ...missing]);
+    } catch (e) {
+      libraryError.value = String(e);
+    } finally {
+      checkingCovers.value = false;
+    }
+  }
+
+  /** The songs of `tracks` that have no cover picture, checking them first. */
+  async function withoutCover(tracks: Track[]): Promise<Track[]> {
+    const wanted = tracks.filter((t) => !coverChecked.has(t.path)).map((t) => t.path);
+    if (wanted.length > 0) {
+      const missing = await api.missingCovers(wanted);
+      for (const p of wanted) coverChecked.add(p);
+      coverless.value = new Set([...coverless.value, ...missing]);
+    }
+    return tracks.filter((t) => coverless.value.has(t.path));
   }
 
   /**
@@ -579,6 +614,10 @@ export function createStore(api: Api, storage?: FlagStorage) {
     writeTags,
     tagResults,
     writingTags,
+    coverless,
+    checkingCovers,
+    checkCovers,
+    withoutCover,
     trashDuplicates,
     cleanupReport,
     cleaningUp,

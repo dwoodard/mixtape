@@ -127,6 +127,7 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
     },
     restoreRemoved: () => soft(() => store.restoreRemoved()),
     removeFromLibrary: (tracks) => soft(() => store.removeFromLibrary(tracks)),
+    withoutCover: (tracks) => store.withoutCover(tracks),
     inspectFile: (track) => store.inspectFile(track),
     readLyrics: (track) => api.readLyrics(track.path),
     fixLength: (track, lengthMs) => store.fixLength(track, lengthMs),

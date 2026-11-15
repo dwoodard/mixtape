@@ -359,6 +359,23 @@ async fn write_tags(
     .map_err(|e| e.to_string())?
 }
 
+/// Which of these songs have no cover picture, in their tags or in their folder. Checked in parallel.
+#[tauri::command]
+async fn missing_covers(paths: Vec<String>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use rayon::prelude::*;
+        paths
+            .into_par_iter()
+            .filter(|p| {
+                let path = std::path::Path::new(p);
+                path.is_absolute() && track::is_audio_file(path) && !cover::has_cover(path)
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolStatus {
@@ -968,6 +985,7 @@ pub fn run() {
             import_undo,
             import_remove,
             write_tags,
+            missing_covers,
             trash_duplicates,
             removed_count,
             restore_removed,

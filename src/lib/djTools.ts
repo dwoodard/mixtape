@@ -1,7 +1,7 @@
 import type { DjTool, ToolContext, ToolOutcome } from "./dj";
 import { MAX_LYRICS_CHARS, type Lyrics } from "./lyrics";
 import { ACCENTS, THEMES } from "./themes";
-import { changedFields, type TagEditPayload } from "./tagEdit";
+import { changedFields, COVER_SOURCE_ERROR, isCoverSource, type TagEditPayload } from "./tagEdit";
 import type { ImportItem, TagsPatch, Track } from "./types";
 
 const MAX_SEARCH = 100;
@@ -128,7 +128,7 @@ function named(tracks: Track[]): string {
 
 const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
-function search(args: Args, { host, session }: ToolContext): ToolOutcome {
+function search(args: Args, { host, session }: ToolContext, only: (t: Track) => boolean = () => true): ToolOutcome {
   const plays = host.plays();
   const [minPlays, maxPlays] = [num(args.min_plays), num(args.max_plays)];
   const playsOf = (t: Track) => plays[t.path]?.count ?? 0;
@@ -142,6 +142,7 @@ function search(args: Args, { host, session }: ToolContext): ToolOutcome {
 
   const found = host.library().filter((t) => {
     const hay = [t.title, t.artist, t.albumArtist, t.album, t.genre].map(squash).join(" ");
+    if (!only(t)) return false;
     if (!words.every((w) => hay.includes(w))) return false;
     if (artist && !squash(`${t.artist} ${t.albumArtist}`).includes(artist)) return false;
     if (album && !squash(t.album).includes(album)) return false;
@@ -222,7 +223,7 @@ function tagEdit(args: Args): TagEditPayload | string {
     if (value === undefined || value === null) continue;
     const text = String(value).trim();
     if (["track", "disc", "year"].includes(arg) && text !== "" && !/^\d+$/.test(text)) return `${arg} must be a whole number.`;
-    if (arg === "cover_url" && text !== "" && !/^https:\/\/\S+$/i.test(text)) return "cover_url must be a full https:// link to a picture.";
+    if (arg === "cover_url" && text !== "" && !isCoverSource(text)) return `cover_url: ${COVER_SOURCE_ERROR}`;
     if (arg === "cover_url" && text === "") continue;
     edit[field] = text;
   }
@@ -272,9 +273,15 @@ export const TOOLS_TABLE: DjTool[] = [
       min_plays: int({ description: "Only songs played at least this many times." }),
       max_plays: int({ description: "Only songs played at most this many times. 0 means never played." }),
       limit: int({ description: `How many songs to return. Default ${DEFAULT_SEARCH}, at most ${MAX_SEARCH}.` }),
+      has_cover: { type: "boolean", description: "false: only songs with no cover art (no picture in the file or its folder). true: only songs that have one." },
     },
     [],
-    async (args, ctx) => search(args, ctx),
+    async (args, ctx) => {
+      // Looking for pictures reads every file, so it only happens when asked for.
+      if (typeof args.has_cover !== "boolean") return search(args, ctx);
+      const missing = new Set((await ctx.host.withoutCover(ctx.host.library())).map((t) => t.path));
+      return search(args, ctx, (t) => missing.has(t.path) === !args.has_cover);
+    },
   ),
 
   // The queue and playback
@@ -455,8 +462,8 @@ export const TOOLS_TABLE: DjTool[] = [
   ),
   define(
     "edit_tags",
-    "Change tags in the files of these songs. Only the fields you give change; an empty string clears a field. cover_url sets the cover art: give an https link to a picture and it is downloaded and embedded in each song (all the songs get the same picture).",
-    { ids: ids(), title: str(), artist: str(), album: str(), album_artist: str(), track: str(), disc: str(), year: str(), genre: str(), cover_url: str("https link to a cover picture") },
+    "Change tags in the files of these songs. Only the fields you give change; an empty string clears a field. cover_url sets the cover art: give an http(s) link to a picture, or the path of a picture file on this computer, and it is embedded in each song (all the songs get the same picture).",
+    { ids: ids(), title: str(), artist: str(), album: str(), album_artist: str(), track: str(), disc: str(), year: str(), genre: str(), cover_url: str("http(s) link or file path of a cover picture") },
     ["ids"],
     async (args, ctx) => {
       const picked = pick(args, ctx);

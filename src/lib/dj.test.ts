@@ -47,6 +47,7 @@ function fakeHost(player: Partial<PlayerState> = {}, queue: Track[] = [], extra:
     restoreRemoved: ok(),
     removeFromLibrary: ok(),
     readLyrics: vi.fn(async () => null as string | null),
+    withoutCover: vi.fn(async (tracks: Track[]) => tracks.filter((t) => t.path === "/m/3.mp3")),
     inspectFile: vi.fn(async () => ({ path: "/m/3.mp3", sizeBytes: 6_094_087, storedMs: 180_000, realMs: 180_000, codec: "mp3", bitrateKbps: 192, sampleRate: 44100, impliedKbps: 271, verdict: "ok", notes: [] }) as FileCheck),
     fixLength: ok(),
     trashDuplicates: vi.fn(async () => ({ report: null as CleanupReport | null, problem: null as string | null })),
@@ -371,7 +372,7 @@ describe("whole-app tools", () => {
     expect(out.result).toHaveProperty("error");
   });
 
-  it("sets cover art from an https link after asking, and refuses any other link before asking", async () => {
+  it("sets cover art from a link or a file path after asking, and refuses anything else before asking", async () => {
     const session = new DjSession();
     const id = await idOf(session, "halo");
     const url = "https://example.com/cover.webp";
@@ -382,7 +383,11 @@ describe("whole-app tools", () => {
     expect(host.writeTags).toHaveBeenCalledWith([library[2]], { coverUrl: url });
     expect(asked[0]).toContain("cover art");
 
-    for (const bad of ["http://example.com/c.jpg", "file:///tmp/c.jpg", "not a link"]) {
+    const local = fakeHost();
+    await runTool("edit_tags", { ids: [id], cover_url: "/Users/me/Pictures/c.png" }, local, session, async () => true);
+    expect(local.writeTags).toHaveBeenCalledWith([library[2]], { coverUrl: "/Users/me/Pictures/c.png" });
+
+    for (const bad of ["ftp://example.com/c.jpg", "relative/c.jpg", "not a link"]) {
       const refused = fakeHost();
       const prompt = vi.fn(async () => true);
       const out = await runTool("edit_tags", { ids: [id], cover_url: bad }, refused, session, prompt);
@@ -833,6 +838,19 @@ describe("a song tool given no id", () => {
         expect(out.result, `${tool} with id ${JSON.stringify(id)}`).not.toHaveProperty("error");
       }
     }
+  });
+
+  it("filters a search by whether songs have cover art, and only looks at files when asked", async () => {
+    const host = fakeHost();
+    const none = await runTool("search_library", { has_cover: false, limit: 100 }, host, new DjSession());
+    expect((none.result as { songs: { title: string }[] }).songs.map((s) => s.title)).toEqual(["Halo"]);
+    const have = await runTool("search_library", { has_cover: true, limit: 100 }, host, new DjSession());
+    expect((have.result as { songs: { title: string }[] }).songs.map((s) => s.title)).not.toContain("Halo");
+    expect(host.withoutCover).toHaveBeenCalledTimes(2);
+
+    const plain = fakeHost();
+    await runTool("search_library", { query: "halo" }, plain, new DjSession());
+    expect(plain.withoutCover).not.toHaveBeenCalled();
   });
 
   it("finds a named song by its words instead of using the one playing", async () => {

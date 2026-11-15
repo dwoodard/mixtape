@@ -13,24 +13,57 @@ const MAX_DOWNLOAD_BYTES: u64 = 15 * 1024 * 1024;
 const MAX_SIDE: u32 = 1500;
 const JPEG_QUALITY: u8 = 90;
 
-/// Only https addresses are fetched, so nothing travels or redirects over plain http.
-pub fn check_url(url: &str) -> Result<(), String> {
-    let lower = url.trim().to_ascii_lowercase();
-    if !lower.starts_with("https://") || lower.len() <= "https://".len() || lower.contains(char::is_whitespace) {
-        return Err("The cover art address must be a full https:// link.".into());
-    }
-    Ok(())
+/// Where a cover picture can come from: an http(s) link, or an image file on this computer
+/// (an absolute path, `~/…`, or a `file://` link).
+pub fn check_source(source: &str) -> Result<(), String> {
+    let text = source.trim();
+    let lower = text.to_ascii_lowercase();
+    let web = ["http://", "https://"].iter().find(|p| lower.starts_with(**p));
+    let ok = match web {
+        Some(prefix) => lower.len() > prefix.len() && !lower.contains(char::is_whitespace),
+        None => local_path(text).is_some(),
+    };
+    if ok { Ok(()) } else { Err("The cover art must be an http(s) link or the path of a picture on this computer.".into()) }
 }
 
-/// Downloads the picture at `url` and returns it as JPEG bytes ready for a tag.
-/// A JPEG that is small enough is kept exactly as served; anything else (WebP, PNG) is converted.
-pub fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    check_url(url)?;
+/// The file a local source points at, or `None` when it is not a local source.
+fn local_path(text: &str) -> Option<std::path::PathBuf> {
+    let path = if let Some(rest) = text.strip_prefix("file://") {
+        let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+        std::path::PathBuf::from(percent_encoding::percent_decode_str(rest).decode_utf8().ok()?.into_owned())
+    } else if let Some(rest) = text.strip_prefix("~/") {
+        std::path::PathBuf::from(std::env::var("HOME").ok()?).join(rest)
+    } else {
+        std::path::PathBuf::from(text)
+    };
+    path.is_absolute().then_some(path)
+}
+
+/// Loads the picture at `source` and returns it as JPEG bytes ready for a tag.
+/// A JPEG that is small enough is kept exactly as it is; anything else (WebP, PNG) is converted.
+pub fn fetch(source: &str) -> Result<Vec<u8>, String> {
+    check_source(source)?;
+    let text = source.trim();
+    if text.to_ascii_lowercase().starts_with("http") {
+        return download(text);
+    }
+    let path = local_path(text).ok_or("The cover art must be an http(s) link or the path of a picture on this computer.")?;
+    let meta = std::fs::metadata(&path).map_err(|e| format!("Couldn't open the picture file: {e}"))?;
+    if !meta.is_file() {
+        return Err("That path is not a file.".into());
+    }
+    if meta.len() > MAX_DOWNLOAD_BYTES {
+        return Err("The picture is too large (over 15 MB).".into());
+    }
+    to_jpeg(&std::fs::read(&path).map_err(|e| format!("Couldn't read the picture file: {e}"))?)
+}
+
+fn download(url: &str) -> Result<Vec<u8>, String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
         .redirect(Policy::custom(|attempt| {
-            if attempt.url().scheme() != "https" {
-                attempt.error("redirected away from https")
+            if attempt.url().scheme() != "https" && attempt.url().scheme() != "http" {
+                attempt.error("redirected to an unsupported address")
             } else if attempt.previous().len() >= 5 {
                 attempt.error("too many redirects")
             } else {
@@ -40,7 +73,7 @@ pub fn fetch(url: &str) -> Result<Vec<u8>, String> {
         .user_agent("Mixtape")
         .build()
         .map_err(|e| e.to_string())?;
-    let response = client.get(url.trim()).send().map_err(|e| format!("Couldn't download the picture: {e}"))?;
+    let response = client.get(url).send().map_err(|e| format!("Couldn't download the picture: {e}"))?;
     if !response.status().is_success() {
         return Err(format!("The picture's server answered {}.", response.status()));
     }
@@ -83,11 +116,26 @@ mod tests {
     }
 
     #[test]
-    fn only_full_https_links_are_accepted() {
-        assert!(check_url("https://example.com/a.jpg").is_ok());
-        for bad in ["http://example.com/a.jpg", "ftp://x/y", "file:///etc/passwd", "https://", "example.com/a.jpg", "https://a b/c"] {
-            assert!(check_url(bad).is_err(), "{bad}");
+    fn accepts_web_links_and_absolute_file_paths_only() {
+        for good in ["https://example.com/a.jpg", "http://example.com/a.jpg", "/Users/me/Pictures/my cover.png", "file:///Users/me/a%20b.jpg", "~/Pictures/a.jpg"] {
+            assert!(check_source(good).is_ok(), "{good}");
         }
+        for bad in ["ftp://x/y", "https://", "http://a b/c", "example.com/a.jpg", "relative/a.jpg", "", "   "] {
+            assert!(check_source(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn loads_a_local_picture_by_path_or_file_link_and_converts_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("my cover.png");
+        std::fs::write(&file, png(30, 30)).unwrap();
+        let by_path = fetch(file.to_str().unwrap()).unwrap();
+        assert_eq!(image::guess_format(&by_path).unwrap(), ImageFormat::Jpeg);
+        let link = format!("file://{}", file.to_str().unwrap().replace(' ', "%20"));
+        assert_eq!(fetch(&link).unwrap(), by_path);
+        assert!(fetch(dir.path().to_str().unwrap()).unwrap_err().contains("not a file"));
+        assert!(fetch(dir.path().join("missing.png").to_str().unwrap()).is_err());
     }
 
     #[test]

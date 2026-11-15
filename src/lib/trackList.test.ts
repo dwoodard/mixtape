@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterTracks, shuffleTracks, sortTracks } from "./trackList";
+import { filterTracks, shuffleTracks, sortTracks, wantsNoCover } from "./trackList";
 import { makeTrack } from "./testing";
 
 const tracks = [
@@ -21,6 +21,22 @@ describe("filterTracks", () => {
   it("requires every word to match", () => {
     expect(filterTracks(tracks, "letters beta").map((t) => t.path)).toEqual(["3"]);
     expect(filterTracks(tracks, "letters nothing")).toEqual([]);
+  });
+});
+
+describe("filterTracks by cover art", () => {
+  const coverless = new Set(["2", "3"]);
+
+  it("keeps only songs without a cover for nocover or no:cover, and combines with other words", () => {
+    expect(filterTracks(tracks, "nocover", coverless).map((t) => t.path)).toEqual(["2", "3"]);
+    expect(filterTracks(tracks, "No:Cover", coverless).map((t) => t.path)).toEqual(["2", "3"]);
+    expect(filterTracks(tracks, "nocover jazz", coverless).map((t) => t.path)).toEqual(["3"]);
+    expect(filterTracks(tracks, "nocover", new Set())).toEqual([]);
+  });
+
+  it("recognizes the word so the files get checked", () => {
+    expect(wantsNoCover("rock NoCover")).toBe(true);
+    expect(wantsNoCover("cover")).toBe(false);
   });
 });
 

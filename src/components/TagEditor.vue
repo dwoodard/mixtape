@@ -44,6 +44,14 @@ const results = computed(() => store.tagResults.value);
 const failed = computed(() => results.value?.filter((r) => r.error) ?? []);
 const written = computed(() => results.value?.filter((r) => r.track).length ?? 0);
 
+async function chooseCover() {
+  const picked = await tauriApi.pickImage().catch(() => null);
+  if (picked) {
+    coverUrl.value = picked;
+    reviewing.value = false;
+  }
+}
+
 function revert() {
   draft.value = draftFor(props.tracks);
   coverUrl.value = "";
@@ -82,18 +90,21 @@ async function write() {
         />
       </label>
 
-      <label class="row">
-        <span class="label">Cover art</span>
-        <input
-          v-model="coverUrl"
-          class="field"
-          type="url"
-          inputmode="url"
-          placeholder="https:// link to a picture"
-          :disabled="store.writingTags.value"
-          @input="reviewing = false"
-        />
-      </label>
+      <div class="row">
+        <label class="label" for="cover-source">Cover art</label>
+        <span class="cover-input">
+          <input
+            id="cover-source"
+            v-model="coverUrl"
+            class="field"
+            inputmode="url"
+            placeholder="http(s) link or file path"
+            :disabled="store.writingTags.value"
+            @input="reviewing = false"
+          />
+          <button type="button" :disabled="store.writingTags.value" @click="chooseCover()">Choose…</button>
+        </span>
+      </div>
 
       <details v-if="lyrics" class="lyrics">
         <summary>Lyrics</summary>
@@ -157,6 +168,8 @@ async function write() {
 .what { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .row { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 8px; }
 .label { color: var(--muted); }
+.cover-input { display: flex; gap: 6px; min-width: 0; }
+.cover-input .field { flex: 1; min-width: 0; }
 .lyrics { margin-top: 4px; }
 .lyrics summary { color: var(--muted); cursor: default; padding: 2px 0; }
 .lyrics pre {

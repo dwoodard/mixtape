@@ -47,6 +47,8 @@ export interface DjHost {
   loadSavedFolder(): Promise<Problem>;
   restoreRemoved(): Promise<Problem>;
   removeFromLibrary(tracks: Track[]): Promise<Problem>;
+  /** The songs of `tracks` that have no cover picture, in their tags or in their folder. */
+  withoutCover(tracks: Track[]): Promise<Track[]>;
   /** Compares a song's file with the length the library holds for it. */
   inspectFile(track: Track): Promise<FileCheck>;
   /** The lyrics saved in the song's own tags, or null when it has none. */
