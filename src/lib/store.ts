@@ -1,9 +1,14 @@
 import { computed, ref } from "vue";
 import { tauriApi, type Api } from "./api";
 import type { TagEditPayload } from "./tagEdit";
+import { changedTracks, queueReplacements } from "./changes";
+import { panelWantedHeight } from "./thinBar";
+import { applyFolderRefresh, insertSorted } from "./librarySort";
+import { dirName } from "./format";
+import { createImports } from "./imports";
 import { findDuplicates, newDuplicateGroups, withoutIgnored } from "./duplicates";
 import { persistedSet, type FlagStorage } from "./ui";
-import type { CleanupReport, DuplicatePair, PlayerState, TagWriteResult, PlaylistSummary, Repeat, ScanProgress, Track, WindowMode } from "./types";
+import type { CleanupReport, DuplicatePair, PlayerState, TagWriteResult, Repeat, ScanProgress, Track, WindowMode } from "./types";
 
 /** What the backend returns when a scan was cancelled. */
 const SCAN_CANCELLED = "cancelled";
@@ -46,6 +51,14 @@ export function createStore(api: Api, storage?: FlagStorage) {
     withoutIgnored(findDuplicates(library.value), ignoredDuplicates.items.value),
   );
 
+  /** The latest change to a song in the library, for a notice with a "Show" button. */
+  const lastChange = ref<{ message: string; track: Track } | null>(null);
+
+  /** Folders of songs sent to Picard, with when: re-checked when the user comes back to the app. */
+  const picardFolders = ref<Record<string, number>>({});
+  /** How long after sending a song to Picard its folder is still re-checked. */
+  const PICARD_WINDOW_MS = 30 * 60 * 1000;
+
   /** What the last tag write did, per file, for the editor to show. */
   const tagResults = ref<TagWriteResult[] | null>(null);
   const writingTags = ref(false);
@@ -55,9 +68,9 @@ export function createStore(api: Api, storage?: FlagStorage) {
   /** What the last "move extra copies to Trash" did, for the Duplicates tab to show. */
   const cleanupReport = ref<CleanupReport | null>(null);
   const scanProgress = ref<ScanProgress | null>(null);
-  const playlists = ref<PlaylistSummary[]>([]);
-  /** Why the last playlist action failed, if it did. */
-  const playlistError = ref<string | null>(null);
+  /** The thin bar's queue panel: closed, or open on a side at a height (from the window). Not saved. */
+  const thinPanel = ref<{ side: "down" | "up"; height: number } | null>(null);
+  const thinPanelOpen = computed(() => thinPanel.value !== null);
   /** Identifies the latest scan so a cancelled older one cannot clobber its state. */
   let scanId = 0;
   /** Unknown (null) until the backend says which window mode this launch is in. */
@@ -74,7 +87,11 @@ export function createStore(api: Api, storage?: FlagStorage) {
       api.onState((state) => (player.value = state)),
       api.onQueue((tracks) => (queue.value = tracks)),
       api.onPosition((ms) => (player.value = { ...player.value, positionMs: ms })),
-      api.onWindowMode((m) => (mode.value = m)),
+      api.onWindowMode((m) => {
+        mode.value = m;
+        // The window closes the panel itself when the mode changes.
+        thinPanel.value = null;
+      }),
       api.onScanProgress((p) => (scanProgress.value = p)),
     ]);
     // Subscribe first, then read the snapshot, so no update is missed in between.
@@ -84,7 +101,6 @@ export function createStore(api: Api, storage?: FlagStorage) {
     // Nice-to-have data: a failure here is logged and must not break startup.
     await Promise.all([
       api.musicFolder().then((f) => (configuredFolder.value = f)),
-      api.listPlaylists().then((p) => (playlists.value = p)),
       api.removedCount().then((n) => (removedCount.value = n)),
       api.cachedLibrary().then((cached) => {
         // Show the saved library right away; a refresh is up to the user.
@@ -140,43 +156,40 @@ export function createStore(api: Api, storage?: FlagStorage) {
     await scan(path, () => api.scanFolder(path));
   }
 
-  async function refreshPlaylists() {
-    playlists.value = await api.listPlaylists();
+  /**
+   * Plays one song when nothing is playing. An empty queue becomes just that song;
+   * otherwise the song goes on the end of the queue and starts, and the queue stays.
+   */
+  async function playSong(track: Track) {
+    const at = queue.value.length;
+    if (at === 0) return api.playTracks([track], 0);
+    await api.enqueue([track]);
+    return api.playIndex(at);
   }
 
-  /** Saves the current queue under `name` (replacing a playlist of the same name). */
-  async function saveQueueAsPlaylist(name: string): Promise<boolean> {
-    playlistError.value = null;
-    try {
-      await api.savePlaylist(name, queue.value);
-      await refreshPlaylists();
-      return true;
-    } catch (e) {
-      playlistError.value = String(e);
-      return false;
-    }
+  /**
+   * Starts one song now. While one is loaded it goes right after the current song, which stays directly
+   * above it in the queue, and the rest of the queue is untouched.
+   */
+  async function playNow(track: Track) {
+    // With nothing loaded there is no current song to go after.
+    if (player.value.status === "stopped") return playSong(track);
+    const current = player.value.currentIndex;
+    const at = current === null ? queue.value.length : current + 1;
+    await api.enqueueNext([track]);
+    return api.playIndex(at);
   }
 
-  async function deletePlaylist(id: string) {
-    playlistError.value = null;
-    try {
-      await api.deletePlaylist(id);
-      await refreshPlaylists();
-    } catch (e) {
-      playlistError.value = String(e);
-    }
+  /** Opens the thin bar's queue panel (the window grows to fit it), or closes it if it is open. */
+  async function toggleThinPanel() {
+    if (thinPanel.value) return closeThinPanel();
+    thinPanel.value = await api.openThinPanel(panelWantedHeight(queue.value.length));
   }
 
-  /** The tracks of a saved playlist, or an empty list (with playlistError set) if it is gone. */
-  async function playlistTracks(id: string): Promise<Track[]> {
-    playlistError.value = null;
-    try {
-      return await api.loadPlaylist(id);
-    } catch (e) {
-      playlistError.value = String(e);
-      await refreshPlaylists();
-      return [];
-    }
+  async function closeThinPanel() {
+    if (!thinPanel.value) return;
+    thinPanel.value = null;
+    await api.closeThinPanel();
   }
 
   /** Takes songs out of the library. Their files stay on disk and are not re-added by a refresh. */
@@ -260,11 +273,94 @@ export function createStore(api: Api, storage?: FlagStorage) {
       const results = await api.writeTags(tracks.map((t) => t.path), edit);
       tagResults.value = results;
       const fresh = new Map(results.flatMap((r) => (r.track ? [[r.path, r.track] as const] : [])));
-      if (fresh.size > 0) library.value = library.value.map((t) => fresh.get(t.path) ?? t);
+      if (fresh.size > 0) {
+        library.value = library.value.map((t) => fresh.get(t.path) ?? t);
+        const first = [...fresh.values()][0];
+        noteChange(fresh.size === 1 ? `Saved tags: ${first.title}` : `Saved tags for ${fresh.size} songs`, first);
+        void reconcileQueue([...fresh.values()]);
+      }
     } catch (e) {
       libraryError.value = String(e);
     } finally {
       writingTags.value = false;
+    }
+  }
+
+  /**
+   * Makes the play queue follow songs that were just added or retagged: entries
+   * for them get the fresh tags, and entries for a file that is gone (undone,
+   * renamed, re-added elsewhere) are pointed at the same recording. What is
+   * playing keeps playing.
+   */
+  async function reconcileQueue(changed: Track[]) {
+    const replacements = queueReplacements(queue.value, library.value, changed);
+    if (replacements.length === 0) return;
+    try {
+      await api.replaceQueueTracks(replacements);
+    } catch (e) {
+      console.error("could not update the queue:", e);
+    }
+  }
+
+  function noteChange(message: string, track: Track) {
+    lastChange.value = { message, track };
+  }
+
+  /** A song that was just added to the library on disk (by an import): shows it in scan order. */
+  function addToLibrary(track: Track) {
+    library.value = insertSorted(library.value, track);
+    noteChange(`Added: ${track.artist ? `${track.artist} – ` : ""}${track.title}`, track);
+    void reconcileQueue([track]);
+  }
+
+  /** A song whose file was removed (an undone import): drops it from the list. */
+  function dropFromLibrary(path: string) {
+    library.value = library.value.filter((t) => t.path !== path);
+  }
+
+  /**
+   * Sends library songs to MusicBrainz Picard. Picard saves tags in place and
+   * may rename the files, so their folders are re-checked each time the user
+   * returns to the app (see refreshPicardFolders).
+   */
+  async function openInPicard(tracks: Pick<Track, "path">[]) {
+    if (tracks.length === 0) return;
+    libraryError.value = null;
+    try {
+      await api.picardOpenFiles(tracks.map((t) => t.path));
+    } catch (e) {
+      libraryError.value = String(e);
+      return;
+    }
+    const now = Date.now();
+    const next = { ...picardFolders.value };
+    for (const t of tracks) next[dirName(t.path)] = now;
+    picardFolders.value = next;
+  }
+
+  /**
+   * Re-checks the folders of songs sent to Picard and updates the library with
+   * what changed there (cheap: only changed files are re-read). Forgets
+   * folders that were sent long ago.
+   */
+  async function refreshPicardFolders(now = Date.now()) {
+    const fresh = Object.entries(picardFolders.value).filter(([, at]) => now - at <= PICARD_WINDOW_MS);
+    picardFolders.value = Object.fromEntries(fresh);
+    if (fresh.length === 0) return;
+    try {
+      const results = await api.refreshFolders(fresh.map(([dir]) => dir));
+      const before = library.value;
+      library.value = applyFolderRefresh(before, results);
+      const changed = changedTracks(before, library.value);
+      if (changed.length > 0) {
+        noteChange(
+          changed.length === 1 ? `Updated from Picard: ${changed[0].title}` : `Updated ${changed.length} songs from Picard`,
+          changed[0],
+        );
+        void reconcileQueue(changed);
+      }
+    } catch (e) {
+      libraryError.value = String(e);
     }
   }
 
@@ -327,8 +423,6 @@ export function createStore(api: Api, storage?: FlagStorage) {
     ignoreDuplicate: (key: string) => ignoredDuplicates.add(key),
     resetIgnoredDuplicates: () => ignoredDuplicates.clear(),
     dismissDuplicateNotice: () => (duplicateNotice.value = 0),
-    playlists,
-    playlistError,
     scanning,
     scanError,
     scanProgress,
@@ -338,6 +432,8 @@ export function createStore(api: Api, storage?: FlagStorage) {
     importLibrary,
     refresh,
     removeFromLibrary,
+    addToLibrary,
+    dropFromLibrary,
     writeTags,
     tagResults,
     writingTags,
@@ -347,15 +443,18 @@ export function createStore(api: Api, storage?: FlagStorage) {
     removeUnplayable,
     dismissError: () => api.dismissError(),
     revealInFinder,
+    lastChange,
+    dismissChange: () => (lastChange.value = null),
+    openInPicard,
+    refreshPicardFolders,
+    picardFolders,
     restoreRemoved,
-    refreshPlaylists,
-    saveQueueAsPlaylist,
-    deletePlaylist,
-    playlistTracks,
     cancelScan,
     toggleMode,
     /** Replaces the queue with `tracks` and starts at `index`. */
     playTracks: (tracks: Track[], index: number) => api.playTracks(tracks, index),
+    playSong,
+    playNow,
     enqueue: (tracks: Track[]) => api.enqueue(tracks),
     enqueueNext: (tracks: Track[]) => api.enqueueNext(tracks),
     stop: () => api.stop(),
@@ -373,11 +472,27 @@ export function createStore(api: Api, storage?: FlagStorage) {
     seek: (ms: number) => api.seek(ms),
     setVolume: (v: number) => api.setVolume(v),
     removeFromQueue: (index: number) => api.removeFromQueue(index),
+    /** Removes a queue row and every row below it (the play order). Stops playback if the playing song goes. */
+    removeFromQueueDown: (index: number) => api.removeFromQueueDown(index),
+    /** Moves a queue entry so it ends up at `to`. */
+    moveQueueTrack: (from: number, to: number) => api.moveQueueTrack(from, to),
     clearQueue: () => api.clearQueue(),
     quit: () => api.quit(),
+    resizeThin: (width: number) => api.resizeThin(width),
+    /** The thin bar's drop-down queue panel. */
+    thinPanel,
+    thinPanelOpen,
+    toggleThinPanel,
+    closeThinPanel,
   };
 }
 
 export type Store = ReturnType<typeof createStore>;
 
 export const store = createStore(tauriApi);
+
+export const imports = createImports(tauriApi, {
+  library: () => store.library.value,
+  onAdded: store.addToLibrary,
+  onRemoved: store.dropFromLibrary,
+});

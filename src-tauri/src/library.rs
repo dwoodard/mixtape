@@ -99,12 +99,23 @@ pub fn scan_folder_with(
                 return None;
             }
             let key = path.to_string_lossy();
-            let reused = known
-                .get(key.as_ref())
-                .filter(|c| c.modified_ms == *modified_ms && c.size == *size)
-                .cloned();
+            let previous = known.get(key.as_ref());
+            let reused = previous.filter(|c| c.modified_ms == *modified_ms && c.size == *size).cloned();
             let cached = reused.or_else(|| {
-                read_track(path).map(|track| CachedTrack { modified_ms: *modified_ms, size: *size, track })
+                read_track(path).map(|mut track| {
+                    // A retagged file keeps the date it was first added.
+                    if let Some(p) = previous.filter(|p| p.track.added_ms > 0) {
+                        track.added_ms = p.track.added_ms;
+                    }
+                    CachedTrack { modified_ms: *modified_ms, size: *size, track }
+                })
+            });
+            // Libraries cached before dates existed get theirs from the file.
+            let cached = cached.map(|mut c| {
+                if c.track.added_ms == 0 {
+                    c.track.added_ms = crate::track::added_ms(path);
+                }
+                c
             });
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n % PROGRESS_EVERY == 0 || n == total {
@@ -127,6 +138,20 @@ fn modified_ms(meta: &std::fs::Metadata) -> u64 {
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// Replaces everything in `cache` under `dir` with `scanned` (a fresh scan of
+/// that folder): songs that were renamed, retagged or deleted there are
+/// updated or dropped, new ones are added, and the rest of the library is untouched.
+pub fn merge_folder(cache: &mut Vec<CachedTrack>, dir: &Path, scanned: Vec<CachedTrack>) {
+    cache.retain(|c| !Path::new(&c.track.path).starts_with(dir));
+    cache.extend(scanned);
+    sort_cached(cache);
+}
+
+/// Puts cached tracks in the order a scan produces: artist, album, disc, track, path.
+pub fn sort_cached(tracks: &mut [CachedTrack]) {
+    tracks.sort_by(|a, b| sort_key(&a.track).cmp(&sort_key(&b.track)));
 }
 
 fn sort_key(t: &Track) -> (String, String, u32, u32, String) {
@@ -248,7 +273,7 @@ mod tests {
         // poisoned title survives. Then change the other file on disk.
         known.get_mut(dir.path().join("keep.wav").to_str().unwrap()).unwrap().track.title =
             "FROM CACHE".into();
-        tagged_wav(&dir.path().join("edit.wav"), "New", "A", 2);
+        tagged_wav(&dir.path().join("edit.wav"), "Newer", "A", 2); // longer, so the size changes even if the clock does not
         std::fs::write(dir.path().join("added.wav"), b"").unwrap();
         write_wav(&dir.path().join("added.wav"), 0.5);
 
@@ -256,7 +281,7 @@ mod tests {
 
         let by_name = |n: &str| second.iter().find(|c| c.track.path.ends_with(n)).unwrap();
         assert_eq!(by_name("keep.wav").track.title, "FROM CACHE");
-        assert_eq!(by_name("edit.wav").track.artist, "New");
+        assert_eq!(by_name("edit.wav").track.artist, "Newer");
         assert_eq!(second.len(), 3);
     }
 
@@ -302,6 +327,29 @@ mod tests {
 
         assert_eq!(second.len(), 1);
         assert!(second[0].track.path.ends_with("a.wav"));
+    }
+
+    #[test]
+    fn merging_a_rescanned_folder_updates_renames_and_deletions_only_there() {
+        let entry = |path: &str, title: &str| CachedTrack {
+            modified_ms: 1,
+            size: 1,
+            track: Track { path: path.into(), title: title.into(), artist: "A".into(), album: "B".into(), album_artist: String::new(), track_number: None, disc_number: None, year: None, genre: String::new(), duration_ms: 1, added_ms: 0 },
+        };
+        let mut cache = vec![
+            entry("/lib/A/B/old name.mp3", "Old"),
+            entry("/lib/A/B/stays.mp3", "Stays"),
+            entry("/lib/A/B/gone.mp3", "Gone"),
+            entry("/lib/Other/C/x.mp3", "Elsewhere"),
+            entry("/lib/A/Bonus/y.mp3", "Prefix lookalike"),
+        ];
+
+        // After Picard: "old name" was renamed and retagged, "gone" is gone, "stays" unchanged, one new.
+        merge_folder(&mut cache, Path::new("/lib/A/B"), vec![entry("/lib/A/B/1-01 New Name.mp3", "New"), entry("/lib/A/B/stays.mp3", "Stays")]);
+
+        let mut paths: Vec<_> = cache.iter().map(|c| c.track.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(paths, vec!["/lib/A/B/1-01 New Name.mp3", "/lib/A/B/stays.mp3", "/lib/A/Bonus/y.mp3", "/lib/Other/C/x.mp3"]);
     }
 
     #[test]

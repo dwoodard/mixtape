@@ -2,11 +2,12 @@
 import { computed } from "vue";
 import { describePlaybackError } from "../lib/format";
 import { store } from "../lib/store";
-import { appMode } from "../lib/ui";
+import { appMode, tagEditPaths } from "../lib/ui";
 import DiscoverySlot from "../prototype/DiscoverySlot.vue"; // PROTOTYPE (discovery-import)
 import LibraryPanel from "./LibraryPanel.vue";
 import PlayerDeck from "./PlayerDeck.vue";
 import QueueList from "./QueueList.vue";
+import TagEditDialog from "./TagEditDialog.vue";
 import TagPanel from "./TagPanel.vue";
 
 const problem = computed(() => {
@@ -20,7 +21,7 @@ const problem = computed(() => {
     <PlayerDeck />
     <div v-if="problem" class="error" role="alert">
       <span class="text">{{ problem.text }}</span>
-      <button title="Take it out of the library and the playlist" @click="store.removeUnplayable(problem.path)">
+      <button title="Take it out of the library and the queue" @click="store.removeUnplayable(problem.path)">
         Remove from library
       </button>
       <button
@@ -42,6 +43,7 @@ const problem = computed(() => {
         <TagPanel :track="store.player.value.currentTrack" />
       </aside>
     </main>
+    <TagEditDialog v-if="tagEditPaths.length > 0" />
   </div>
 </template>
 

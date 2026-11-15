@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describePlaybackError, fileName, formatAgo, formatClock, formatTime, isMissingFileError, trackLabel } from "./format";
+import { describePlaybackError, dirName, fileName, formatAgo, formatClock, formatTime, isMissingFileError, trackLabel } from "./format";
 import { makeTrack } from "./testing";
 
 describe("formatTime", () => {
@@ -74,5 +74,13 @@ describe("playback error wording", () => {
       "Can't find “a.wav”. It may have been moved, renamed or deleted, or its drive isn't mounted.",
     );
     expect(describePlaybackError("/m/a.wav", "unsupported codec")).toBe("Can't play “a.wav”: unsupported codec");
+  });
+});
+
+describe("dirName", () => {
+  it("is the containing folder", () => {
+    expect(dirName("/Volumes/music/Korn/Follow the Leader/03 Got the Life.mp3")).toBe("/Volumes/music/Korn/Follow the Leader");
+    expect(dirName("/song.mp3")).toBe("");
+    expect(dirName("song.mp3")).toBe("");
   });
 });

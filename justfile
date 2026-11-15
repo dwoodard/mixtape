@@ -24,5 +24,11 @@ test-ui:
 test-rust:
     cargo test --manifest-path src-tauri/Cargo.toml
 
+# Every bundle Tauri can make (.app and .dmg)
 build:
     npm run tauri build
+
+# Quick installer: builds the .dmg (Apple Silicon, unsigned) and shows it in Finder
+dmg: install
+    npm run tauri build -- --bundles dmg
+    open -R "$(ls -t src-tauri/target/release/bundle/dmg/*.dmg | head -1)"

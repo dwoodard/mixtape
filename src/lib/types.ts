@@ -9,6 +9,8 @@ export interface Track {
   year: number | null;
   genre: string;
   durationMs: number;
+  /** When the file arrived in the library (ms since the epoch), 0 if unknown. */
+  addedMs: number;
 }
 
 export type PlaybackStatus = "stopped" | "playing" | "paused";
@@ -49,14 +51,6 @@ export interface CachedLibrary {
   scannedAtMs: number;
 }
 
-export interface PlaylistSummary {
-  id: string;
-  name: string;
-  trackCount: number;
-  durationMs: number;
-  updatedAtMs: number;
-}
-
 export interface DuplicatePair {
   keep: string;
   extra: string;
@@ -80,4 +74,64 @@ export interface TagWriteResult {
   /** The track as re-read from disk after a successful write. */
   track: Track | null;
   error: string | null;
+}
+
+export type ImportStage = "queued" | "probing" | "fetching" | "converting" | "ready" | "added" | "failed";
+
+export type ImportField = "title" | "artist" | "album" | "albumArtist" | "year" | "track" | "genre";
+
+export interface ImportProposal {
+  title: string;
+  artist: string;
+  album: string;
+  albumArtist: string;
+  year: string;
+  track: string;
+  genre: string;
+  /** Disc of a multi-disc release and how many there are (from Picard); they only shape the file name. */
+  disc: string;
+  discTotal: string;
+}
+
+export interface ImportItem {
+  id: number;
+  url: string;
+  stage: ImportStage;
+  /** 0 to 1 while fetching. */
+  progress: number;
+  error: string | null;
+  videoTitle: string;
+  channel: string;
+  durationSecs: number | null;
+  proposal: ImportProposal;
+  /** Field -> where its value came from, in words. */
+  sources: Record<string, string>;
+  /** Field -> other values worth offering. */
+  alternatives: Record<string, string[]>;
+  notes: string[];
+  /** 0 to 1: how sure we are of the artist and title. */
+  confidence: number;
+  format: string;
+  /** Where it will go, relative to the library folder. */
+  destination: string | null;
+  addedPath: string | null;
+  /** none: not sent to Picard. waiting: open there. saved: tags are Picard's (read-only here). */
+  picard: "none" | "waiting" | "saved";
+}
+
+export type ImportEvent = { kind: "item"; value: ImportItem } | { kind: "removed"; value: number };
+
+export interface ToolStatus {
+  ytDlp: string | null;
+  ffmpeg: string | null;
+  /** Where MusicBrainz Picard is installed, if it is. */
+  picard: string | null;
+}
+
+export type TagsPatch = Partial<Omit<ImportProposal, "disc" | "discTotal">>;
+
+/** A folder of the library as it is now, after it was re-checked. */
+export interface FolderRefresh {
+  dir: string;
+  tracks: Track[];
 }

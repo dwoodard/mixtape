@@ -6,7 +6,7 @@ import { persistedFlag } from "../lib/ui";
 
 const props = defineProps<{ track: Track | null }>();
 
-// Collapsed by default so the playlist keeps the room; the choice is remembered.
+// Collapsed by default so the queue keeps the room; the choice is remembered.
 const { flag: open, toggle } = persistedFlag("mixtape.tagsOpen", false);
 
 const rows = computed(() => {

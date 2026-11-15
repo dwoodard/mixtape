@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { formatTime } from "../lib/format";
+import { formatDate, formatTime } from "../lib/format";
 import type { SortDirection, SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
 
@@ -22,6 +22,7 @@ const columns: { key: SortKey; label: string }[] = [
   { key: "title", label: "Title" },
   { key: "artist", label: "Artist" },
   { key: "album", label: "Album" },
+  { key: "addedMs", label: "Date Added" },
   { key: "durationMs", label: "Time" },
 ];
 </script>
@@ -51,14 +52,16 @@ const columns: { key: SortKey; label: string }[] = [
         role="row"
         :data-index="i"
         :aria-selected="selected.has(t.path)"
+        @mousedown="$event.altKey && $event.preventDefault()"
         @click="emit('rowClick', i, $event)"
-        @dblclick="emit('play', i)"
+        @dblclick="!$event.altKey && emit('play', i)"
         @contextmenu.prevent="emit('rowMenu', i, $event)"
       >
         <span class="num">{{ i + 1 }}.</span>
         <span class="cell ellipsis">{{ t.title }}</span>
         <span class="cell ellipsis muted">{{ t.artist }}</span>
         <span class="cell ellipsis muted">{{ t.album }}</span>
+        <span class="cell ellipsis muted">{{ formatDate(t.addedMs) }}</span>
         <span class="cell time">{{ formatTime(t.durationMs) }}</span>
         <button class="add" aria-label="Add to queue" title="Add to queue" @click.stop="emit('enqueue', t)">+</button>
       </div>
@@ -70,7 +73,7 @@ const columns: { key: SortKey; label: string }[] = [
 <style scoped>
 .table { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .body { flex: 1; overflow-y: auto; }
-.row { display: grid; grid-template-columns: 34px 3fr 2fr 2fr 52px 24px; align-items: center; gap: 8px; padding: 0 10px; }
+.row { display: grid; grid-template-columns: 34px 3fr 2fr 2fr 96px 52px 24px; align-items: center; gap: 8px; padding: 0 10px; }
 .head { border-bottom: 1px solid var(--line); }
 .head-cell { background: none; border: none; border-radius: 0; text-align: left; color: var(--muted); padding: 5px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
 .head-cell.durationMs { text-align: right; }

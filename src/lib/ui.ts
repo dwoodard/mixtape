@@ -1,8 +1,9 @@
 import { ref } from "vue";
+import type { Track } from "./types";
 
-export type LibraryView = "tracks" | "albums" | "artists" | "playlists" | "duplicates";
+export type LibraryView = "tracks" | "albums" | "artists" | "random" | "duplicates";
 
-/** Which library view is showing. Shared so the queue panel's "Load" can open playlists. */
+/** Which library view is showing. */
 export const libraryView = ref<LibraryView>("tracks");
 
 /** The few storage methods we need, so tests can pass a fake. */
@@ -108,3 +109,38 @@ const appModeChoice = persistedChoice<AppMode>("mixtape.appMode", "player", ["pl
 /** Which workspace the large window shows: playing music, or discovering and fixing it. */
 export const appMode = appModeChoice.choice;
 export const setAppMode = appModeChoice.set;
+
+/** Paths of the library songs whose tags are being edited in the dialog (empty: closed). */
+export const tagEditPaths = ref<string[]>([]);
+
+/** The library filter box, shared so other parts of the app can set it ("Show in library"). */
+export const libraryQuery = ref("");
+
+/** A song to select and scroll to the next time the song list shows. */
+export const revealPath = ref<string | null>(null);
+
+/** Switches to Player mode's Tracks view filtered to the song, and selects it. */
+export function showInLibrary(track: { path: string; title: string }) {
+  setAppMode("player");
+  libraryView.value = "tracks";
+  libraryQuery.value = track.title;
+  revealPath.value = track.path;
+}
+
+/** Songs picked in the song list that is showing, so shortcuts and the command palette can act on them. */
+export const selectedSongs = ref<Track[]>([]);
+let selectionOwner: symbol | null = null;
+/** A song list publishes its selection. The last list to publish owns it. */
+export function publishSelection(owner: symbol, songs: Track[]) {
+  selectionOwner = owner;
+  selectedSongs.value = songs;
+}
+/** A song list going away withdraws its selection, unless another list has taken over. */
+export function withdrawSelection(owner: symbol) {
+  if (selectionOwner !== owner) return;
+  selectionOwner = null;
+  selectedSongs.value = [];
+}
+
+export const paletteOpen = ref(false);
+export const helpOpen = ref(false);

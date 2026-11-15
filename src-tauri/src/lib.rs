@@ -3,10 +3,12 @@ pub mod cache;
 pub mod cleanup;
 pub mod config;
 pub mod cover;
+pub mod fsutil;
+pub mod importer;
+pub mod imports;
 pub mod library;
 pub mod media;
 pub mod player;
-pub mod playlists;
 pub mod queue;
 pub mod reveal;
 pub mod session;
@@ -21,7 +23,6 @@ use config::Config;
 use cover::CoverCache;
 use media::{MediaCommand, MediaSession};
 use player::{Player, PlayerEvent, PlayerState};
-use playlists::{PlaylistStore, PlaylistSummary};
 use queue::Repeat;
 use session::{SessionStore, SessionWriter};
 use serde::Serialize;
@@ -43,6 +44,36 @@ struct CoverService {
 /// Set while a duplicate clean-up runs, so only one can run at a time.
 #[derive(Default)]
 struct CleanupBusy(Arc<AtomicBool>);
+
+struct ImportsHandle(imports::Imports);
+
+/// Locates yt-dlp on every call, so installing it while the app is open just works.
+struct LazyYtDlp;
+
+impl imports::Runner for LazyYtDlp {
+    fn picard(&self) -> Option<String> {
+        importer::find_picard().map(|p| p.display().to_string())
+    }
+    fn open_in_picard(&self, file: &std::path::Path) -> Result<(), String> {
+        let app = importer::find_picard()
+            .ok_or("MusicBrainz Picard isn't installed. In a terminal: brew install --cask musicbrainz-picard")?;
+        importer::open_in_picard(&app, file)
+    }
+    fn close_in_picard(&self, file: &std::path::Path) {
+        if let Some(app) = importer::find_picard() {
+            importer::remove_from_picard(&app, file);
+        }
+    }
+    fn probe(&self, url: &str) -> Result<String, String> {
+        imports::YtDlp::locate()?.probe(url)
+    }
+    fn playlist(&self, url: &str) -> Result<String, String> {
+        imports::YtDlp::locate()?.playlist(url)
+    }
+    fn fetch(&self, url: &str, format: &str, dir: &std::path::Path, line: &mut dyn FnMut(&str), kill: &imports::KillSwitch) -> Result<(), String> {
+        imports::YtDlp::locate()?.fetch(url, format, dir, line, kill)
+    }
+}
 
 struct PlayerHandle(Arc<Mutex<Player>>);
 
@@ -257,6 +288,191 @@ async fn write_tags(
     .map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolStatus {
+    yt_dlp: Option<String>,
+    ffmpeg: Option<String>,
+    picard: Option<String>,
+}
+
+/// Whether the tools the import pipeline needs are installed.
+#[tauri::command]
+fn import_tools() -> ToolStatus {
+    let found = |n: &str| importer::find_tool(n).map(|p| p.display().to_string());
+    ToolStatus { yt_dlp: found("yt-dlp"), ffmpeg: found("ffmpeg"), picard: importer::find_picard().map(|p| p.display().to_string()) }
+}
+
+#[tauri::command]
+fn import_list(imports: State<ImportsHandle>) -> Vec<imports::ImportItem> {
+    imports.0.list()
+}
+
+#[tauri::command]
+fn import_add_link(imports: State<ImportsHandle>, text: String, format: String) -> Result<(), String> {
+    imports.0.add_link(&text, &format)
+}
+
+#[tauri::command]
+fn import_set_tags(
+    imports: State<ImportsHandle>,
+    id: u64,
+    patch: imports::TagsPatch,
+) -> Result<imports::ImportItem, String> {
+    imports.0.set_tags(id, patch)
+}
+
+/// Opens the song in MusicBrainz Picard; its tags are read back once it is saved there.
+#[tauri::command]
+fn import_open_in_picard(imports: State<ImportsHandle>, id: u64) -> Result<(), String> {
+    imports.0.open_in_picard(id)
+}
+
+/// Stops waiting for Picard and takes the song out of it.
+#[tauri::command]
+fn import_cancel_picard(imports: State<ImportsHandle>, id: u64) -> Result<(), String> {
+    imports.0.cancel_picard(id)
+}
+
+#[tauri::command]
+fn import_remove(imports: State<ImportsHandle>, id: u64) {
+    imports.0.remove(id);
+}
+
+fn library_root(cache: &CacheDir, config: &Config) -> Result<PathBuf, String> {
+    cache
+        .last_root()
+        .or_else(|| config.music_folder.clone())
+        .ok_or_else(|| "Open or import a library folder first, so there is somewhere to add songs.".to_string())
+}
+
+/// Adds a ready song to the library: tags written, filed as Artist/Album/NN Title.
+#[tauri::command]
+async fn import_add(
+    imports: State<'_, ImportsHandle>,
+    cache: State<'_, CacheDir>,
+    config: State<'_, Config>,
+    id: u64,
+) -> Result<Track, String> {
+    let root = library_root(&cache, &config)?;
+    let (staged, proposal, retag) = imports.0.take_for_add(id)?;
+    let cache = cache.inner().clone();
+    let manager = imports.0.clone();
+    let root_for_job = root.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        // Follow the folders the library already has.
+        let library = cache.load(&root_for_job).map(|c| c.tracks).unwrap_or_default();
+        let added = importer::add_to_library(&staged, &proposal, &root_for_job, &library, retag)?;
+        if let Ok(meta) = std::fs::metadata(&added.path) {
+            let modified_ms = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as u64);
+            let cached = library::CachedTrack { modified_ms, size: meta.len(), track: added.track.clone() };
+            if let Err(e) = cache.add_tracks(&root_for_job, vec![cached]) {
+                eprintln!("could not update the library cache: {e}");
+            }
+        }
+        Ok::<_, String>(added)
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r);
+    match outcome {
+        Ok(added) => {
+            // The working file is no longer needed in Picard.
+            manager.release_from_picard(id);
+            manager.mark_added(id, &added.path, added.size);
+            Ok(added.track)
+        }
+        Err(e) => {
+            manager.abort_add(id);
+            Err(e)
+        }
+    }
+}
+
+/// Undoes an add: removes the file we added and forgets it in the library.
+#[tauri::command]
+async fn import_undo(
+    imports: State<'_, ImportsHandle>,
+    cache: State<'_, CacheDir>,
+    config: State<'_, Config>,
+    id: u64,
+) -> Result<String, String> {
+    let root = library_root(&cache, &config)?;
+    let (path, size) = imports.0.take_for_undo(id)?;
+    let cache = cache.inner().clone();
+    let manager = imports.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        importer::remove_added(&root, &path, size)?;
+        let shown = path.to_string_lossy().into_owned();
+        if let Err(e) = cache.forget_tracks(&root, std::slice::from_ref(&shown)) {
+            eprintln!("could not update the library cache: {e}");
+        }
+        manager.mark_undone(id);
+        Ok(shown)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Sends songs to MusicBrainz Picard (starting it if needed).
+#[tauri::command]
+async fn picard_open_files(paths: Vec<String>) -> Result<(), String> {
+    let files = importer::validate_picard_files(&paths)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let app = importer::find_picard()
+            .ok_or("MusicBrainz Picard isn't installed. In a terminal: brew install --cask musicbrainz-picard")?;
+        importer::open_files_in_picard(&app, &files)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+struct FolderRefresh {
+    dir: String,
+    tracks: Vec<Track>,
+}
+
+/// Re-checks some folders of the library (after Picard changed files in them):
+/// only changed files are re-read. Returns each folder's songs as they are now.
+#[tauri::command]
+async fn refresh_folders(
+    cache: State<'_, CacheDir>,
+    config: State<'_, Config>,
+    dirs: Vec<String>,
+) -> Result<Vec<FolderRefresh>, String> {
+    let root = library_root(&cache, &config)?;
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut saved = cache.load(&root).ok_or("The library hasn't been saved yet. Use Refresh first.")?;
+        let known = saved.known();
+        let removed = cache.removed(&root);
+        let never = AtomicBool::new(false);
+        let mut results = Vec::new();
+        for dir in dirs {
+            let dir = PathBuf::from(dir);
+            // Only folders inside the library, and only ones that exist.
+            if !dir.starts_with(&root) || !dir.is_dir() {
+                continue;
+            }
+            let scanned = library::scan_folder_with(&dir, &never, &known, &removed, |_| {}).unwrap_or_default();
+            results.push(FolderRefresh {
+                dir: dir.to_string_lossy().into_owned(),
+                tracks: scanned.iter().map(|c| c.track.clone()).collect(),
+            });
+            library::merge_folder(&mut saved.tracks, &dir, scanned);
+        }
+        cache.save(&saved).map_err(|e| e.to_string())?;
+        Ok(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Shows songs in Finder.
 #[tauri::command]
 async fn reveal_in_finder(paths: Vec<String>) -> Result<(), String> {
@@ -335,6 +551,25 @@ fn play_index(player: State<PlayerHandle>, index: usize) {
     player.with(|p| p.play_index(index));
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueReplacement {
+    old_path: String,
+    track: Track,
+}
+
+/// Updates queue entries whose files were retagged, renamed or re-added.
+#[tauri::command]
+fn replace_queue_tracks(player: State<PlayerHandle>, replacements: Vec<QueueReplacement>) {
+    player.with(|p| p.replace_tracks(replacements.into_iter().map(|r| (r.old_path, r.track)).collect()));
+}
+
+/// Moves a queue entry from one position to another.
+#[tauri::command]
+fn move_queue_track(player: State<PlayerHandle>, from: usize, to: usize) {
+    player.with(|p| p.move_track(from, to));
+}
+
 #[tauri::command]
 fn enqueue_next(player: State<PlayerHandle>, tracks: Vec<Track>) {
     player.with(|p| p.enqueue_next(tracks));
@@ -358,33 +593,6 @@ fn set_shuffle(player: State<PlayerHandle>, on: bool) {
 #[tauri::command]
 fn set_repeat(player: State<PlayerHandle>, repeat: Repeat) {
     player.with(|p| p.set_repeat(repeat));
-}
-
-#[tauri::command]
-fn list_playlists(store: State<PlaylistStore>) -> Vec<PlaylistSummary> {
-    store.list()
-}
-
-#[tauri::command]
-fn load_playlist(store: State<PlaylistStore>, id: String) -> Result<Vec<Track>, String> {
-    store
-        .get(&id)
-        .map(|p| p.tracks)
-        .ok_or_else(|| "That playlist no longer exists.".to_string())
-}
-
-#[tauri::command]
-fn save_playlist(
-    store: State<PlaylistStore>,
-    name: String,
-    tracks: Vec<Track>,
-) -> Result<PlaylistSummary, String> {
-    store.save(&name, tracks)
-}
-
-#[tauri::command]
-fn delete_playlist(store: State<PlaylistStore>, id: String) -> Result<(), String> {
-    store.delete(&id)
 }
 
 #[tauri::command]
@@ -418,6 +626,11 @@ fn remove_from_queue(player: State<PlayerHandle>, index: usize) {
 }
 
 #[tauri::command]
+fn remove_from_queue_down(player: State<PlayerHandle>, index: usize) {
+    player.with(|p| p.remove_from(index));
+}
+
+#[tauri::command]
 fn clear_queue(player: State<PlayerHandle>) {
     player.with(|p| p.clear());
 }
@@ -432,6 +645,32 @@ fn toggle_window_mode(window: WebviewWindow, store: State<WindowStore>) -> Mode 
     let mode = store.toggle(&window);
     let _ = window.emit("window-mode", mode);
     mode
+}
+
+/// Widens or narrows the thin bar. Ignored in the large window.
+#[tauri::command]
+fn resize_thin(window: WebviewWindow, store: State<WindowStore>, width: f64) {
+    if store.mode() == Mode::Thin {
+        window::resize_thin(&window, width, store.panel_height());
+    }
+}
+
+/// Where the thin bar's queue panel opened and how tall it is.
+#[derive(serde::Serialize)]
+struct PanelOpened {
+    side: window_state::PanelSide,
+    height: f64,
+}
+
+/// Opens the queue panel under or over the thin bar. `wanted` is the logical height that shows the whole queue.
+#[tauri::command]
+fn open_thin_panel(window: WebviewWindow, store: State<WindowStore>, wanted: f64) -> Option<PanelOpened> {
+    store.open_panel(&window, wanted).map(|(side, height)| PanelOpened { side, height })
+}
+
+#[tauri::command]
+fn close_thin_panel(window: WebviewWindow, store: State<WindowStore>) {
+    store.close_panel(&window);
 }
 
 #[tauri::command]
@@ -542,6 +781,25 @@ pub fn run() {
             setup_player(app);
             app.manage(ScanControl::default());
             app.manage(CleanupBusy::default());
+            {
+                let emit_handle = app.handle().clone();
+                let library_handle = app.handle().clone();
+                app.manage(ImportsHandle(imports::Imports::new(
+                    app.path().app_data_dir()?.join("imports"),
+                    Box::new(LazyYtDlp),
+                    Box::new(move || {
+                        // Read when needed, so it always reflects the library as it is now.
+                        let cache = library_handle.state::<CacheDir>();
+                        let config = library_handle.state::<Config>();
+                        let root = cache.last_root().or_else(|| config.music_folder.clone());
+                        let tracks = root.as_ref().and_then(|r| cache.load(r)).map(|c| c.tracks).unwrap_or_default();
+                        imports::LibraryView { root, tracks }
+                    }),
+                    Box::new(move |event| {
+                        let _ = emit_handle.emit("import-event", event);
+                    }),
+                )));
+            }
             app.manage(Arc::new(CoverService {
                 cache: CoverCache::new(app.path().app_cache_dir()?.join("covers")),
                 pool: rayon::ThreadPoolBuilder::new()
@@ -550,7 +808,6 @@ pub fn run() {
                     .build()
                     .expect("cover thread pool"),
             }));
-            app.manage(PlaylistStore::new(app.path().app_data_dir()?.join("playlists.json")));
             app.manage(CacheDir(app.path().app_cache_dir()?.join("library")));
             setup_config(app)?;
             setup_window(app)?;
@@ -562,7 +819,13 @@ pub fn run() {
             };
             let store = window.state::<WindowStore>();
             match event {
-                WindowEvent::Moved(_) | WindowEvent::Resized(_) => store.track(&webview),
+                WindowEvent::Moved(_) => store.track(&webview),
+                // A resize that changed the thin bar's height is undone; the undo's own event is the one saved.
+                WindowEvent::Resized(_) => {
+                    if !store.keep_thin_height(&webview) {
+                        store.track(&webview);
+                    }
+                }
                 WindowEvent::CloseRequested { .. } => {
                     store.track(&webview);
                     store.save();
@@ -576,6 +839,17 @@ pub fn run() {
             cached_library,
             remove_from_library,
             reveal_in_finder,
+            import_tools,
+            import_list,
+            import_add_link,
+            import_set_tags,
+            import_open_in_picard,
+            picard_open_files,
+            refresh_folders,
+            import_cancel_picard,
+            import_add,
+            import_undo,
+            import_remove,
             write_tags,
             trash_duplicates,
             removed_count,
@@ -586,14 +860,12 @@ pub fn run() {
             play_tracks,
             enqueue,
             enqueue_next,
+            replace_queue_tracks,
+            move_queue_track,
             stop_playback,
             dismiss_error,
             set_shuffle,
             set_repeat,
-            list_playlists,
-            load_playlist,
-            save_playlist,
-            delete_playlist,
             play_index,
             toggle_playback,
             next_track,
@@ -601,9 +873,13 @@ pub fn run() {
             seek,
             set_volume,
             remove_from_queue,
+            remove_from_queue_down,
             clear_queue,
             window_mode,
             toggle_window_mode,
+            resize_thin,
+            open_thin_panel,
+            close_thin_panel,
             quit_app,
         ])
         .build(tauri::generate_context!())

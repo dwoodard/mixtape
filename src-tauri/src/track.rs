@@ -19,6 +19,16 @@ pub struct Track {
     pub year: Option<u16>,
     pub genre: String,
     pub duration_ms: u64,
+    /// When the file arrived (ms since the epoch). 0 when unknown.
+    #[serde(default)]
+    pub added_ms: u64,
+}
+
+/// How many discs the release has, if the file says so (e.g. disc 1 of 2).
+pub fn read_disc_total(path: &Path) -> Option<u32> {
+    let tagged = lofty::read_from_path(path).ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    tag.disk_total()
 }
 
 pub fn is_audio_file(path: &Path) -> bool {
@@ -26,6 +36,17 @@ pub fn is_audio_file(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
         .unwrap_or(false)
+}
+
+/// When the file was created, falling back to its modified time.
+pub fn added_ms(path: &Path) -> u64 {
+    let to_ms = |t: std::time::SystemTime| {
+        t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+    };
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.created().or_else(|_| m.modified()).ok())
+        .map_or(0, to_ms)
 }
 
 /// Reads tags and duration from an audio file. Returns `None` when the file
@@ -76,6 +97,7 @@ pub fn read_track(path: &Path) -> Option<Track> {
         year,
         genre,
         duration_ms,
+        added_ms: added_ms(path),
     })
 }
 

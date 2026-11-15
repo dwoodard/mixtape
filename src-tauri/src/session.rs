@@ -67,13 +67,11 @@ impl SessionStore {
         write_json(&self.state_path(), state)
     }
 
-    /// The saved session, or `None` when there is no (readable) saved queue.
+    /// The saved session, or `None` when there is no (readable) saved queue file.
     pub fn load(&self) -> Option<Restore> {
         let tracks: Vec<Track> =
             serde_json::from_str(&std::fs::read_to_string(self.queue_path()).ok()?).ok()?;
-        if tracks.is_empty() {
-            return None;
-        }
+        // An empty queue still restores: shuffle, repeat and volume are settings of their own.
         let state: SessionState = std::fs::read_to_string(self.state_path())
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
@@ -122,42 +120,50 @@ impl SessionWriter {
             .name("mixtape-session".into())
             .spawn(move || {
                 let mut queue: Option<Vec<Track>> = None;
+                // The latest known state is kept after a write, so later position updates
+                // have something to update. `dirty` says it has changed since it was saved.
                 let mut state: Option<SessionState> = None;
+                let mut dirty = false;
                 let mut last_write = Instant::now() - WRITE_EVERY;
-                let write = |queue: &mut Option<Vec<Track>>, state: &mut Option<SessionState>| {
+                let write = |queue: &mut Option<Vec<Track>>, state: &Option<SessionState>, dirty: &mut bool| {
                     if let Some(q) = queue.take() {
                         if let Err(e) = store.save_queue(&q) {
                             eprintln!("could not save queue: {e}");
                         }
                     }
-                    if let Some(s) = state.take() {
-                        if let Err(e) = store.save_state(&s) {
+                    if let (Some(s), true) = (state, *dirty) {
+                        if let Err(e) = store.save_state(s) {
                             eprintln!("could not save session state: {e}");
                         }
+                        *dirty = false;
                     }
                 };
                 loop {
                     match rx.recv_timeout(WRITE_EVERY) {
                         Ok(Msg::Queue(q)) => queue = Some(q),
-                        Ok(Msg::State(s)) => state = Some(s),
+                        Ok(Msg::State(s)) => {
+                            state = Some(s);
+                            dirty = true;
+                        }
                         Ok(Msg::Position(ms)) => {
                             if let Some(s) = &mut state {
                                 s.position_ms = ms;
+                                dirty = true;
                             }
                         }
                         Ok(Msg::Flush(done)) => {
-                            write(&mut queue, &mut state);
+                            write(&mut queue, &state, &mut dirty);
                             let _ = done.send(());
                             continue;
                         }
                         Err(RecvTimeoutError::Timeout) => {}
                         Err(RecvTimeoutError::Disconnected) => {
-                            write(&mut queue, &mut state);
+                            write(&mut queue, &state, &mut dirty);
                             return;
                         }
                     }
                     if last_write.elapsed() >= WRITE_EVERY {
-                        write(&mut queue, &mut state);
+                        write(&mut queue, &state, &mut dirty);
                         last_write = Instant::now();
                     }
                 }
@@ -243,12 +249,16 @@ mod tests {
         assert!(store.load().is_none());
     }
 
+    // Changed from "an empty saved queue restores nothing": the shuffle, repeat and volume
+    // settings must survive a relaunch even when the queue is empty.
     #[test]
-    fn an_empty_saved_queue_restores_nothing() {
+    fn an_empty_saved_queue_restores_as_an_empty_queue() {
         let dir = tempfile::tempdir().unwrap();
         let store = SessionStore::new(dir.path().to_path_buf());
         store.save_queue(&[]).unwrap();
-        assert!(store.load().is_none());
+        let restored = store.load().unwrap();
+        assert!(restored.tracks.is_empty());
+        assert_eq!(restored.index, None);
     }
 
     #[test]
@@ -265,5 +275,36 @@ mod tests {
         let restored = store.load().unwrap();
         assert_eq!(restored.tracks.len(), 2);
         assert_eq!(restored.position_ms, 55_000);
+    }
+
+    // --- QA (Maya) ---
+
+    #[test]
+    fn qa_position_keeps_being_saved_while_a_song_plays() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        store.save_queue(&[test_track("a"), test_track("b")]).unwrap();
+        let writer = SessionWriter::spawn(store.clone());
+
+        writer.state_changed(&player_state(0, 0)); // a song starts
+        std::thread::sleep(Duration::from_millis(300)); // the writer saves it
+        writer.position_changed(55_000); // it plays on, then Maya quits
+        writer.flush();
+
+        assert_eq!(store.load().unwrap().position_ms, 55_000, "relaunch would resume at the start of the song");
+    }
+
+    // --- QA (Maya) ---
+
+    #[test]
+    fn qa_an_empty_queue_still_remembers_shuffle_repeat_and_volume() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        store.save_queue(&[]).unwrap();
+        store.save_state(&SessionState::from(&player_state(0, 0))).unwrap(); // shuffle on, repeat one, volume 0.5
+
+        let restored = store.load();
+
+        assert!(restored.is_some_and(|r| r.shuffle && r.volume == 0.5), "settings were dropped with the empty queue");
     }
 }

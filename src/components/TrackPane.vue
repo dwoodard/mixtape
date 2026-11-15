@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { store } from "../lib/store";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { imports, store } from "../lib/store";
 import {
   clickRow,
   emptySelection,
@@ -12,6 +12,9 @@ import {
 } from "../lib/selection";
 import { sortTracks, type SortDirection, type SortKey } from "../lib/trackList";
 import type { Track } from "../lib/types";
+import { shortcutText } from "../lib/shortcuts";
+import { enterAction, isAddClick, optionClickTargets, songChoiceItems } from "../lib/songChoice";
+import { publishSelection, revealPath, tagEditPaths, withdrawSelection } from "../lib/ui";
 import ContextMenu, { type MenuItem } from "./ContextMenu.vue";
 import TrackTable from "./TrackTable.vue";
 
@@ -21,7 +24,7 @@ const props = withDefaults(
   { sidewaysPlayback: true, removable: false, autofocus: true },
 );
 /** Left (-1) or right (1) was pressed and `sidewaysPlayback` is off, so the parent decides what it means. */
-const emit = defineEmits<{ sideways: [direction: -1 | 1]; select: [tracks: Track[]] }>();
+const emit = defineEmits<{ sideways: [direction: -1 | 1] }>();
 
 const sortKey = ref<SortKey>("default");
 const sortDirection = ref<SortDirection>("asc");
@@ -39,12 +42,28 @@ const label = computed(() =>
   chosen.value.length > 0 ? `${chosen.value.length} selected` : `All ${rows.value.length}`,
 );
 
+// Shortcuts and the command palette act on whatever is selected here.
+const owner = Symbol("track-pane");
+watch(chosen, (songs) => publishSelection(owner, songs), { immediate: true });
+onBeforeUnmount(() => withdrawSelection(owner));
+
 // Opening a view hands it the keyboard, so the arrows work without clicking a row first.
 onMounted(() => props.autofocus && nextTick(() => root.value?.focus({ preventScroll: true })));
 defineExpose({ focus: () => root.value?.focus({ preventScroll: true }) });
 
-// Lets a parent (the tag editor) work on whatever is selected.
-watch(chosen, (tracks) => emit("select", tracks), { immediate: true });
+// "Show in library": select the requested song and scroll to it once it is in this list.
+watch(
+  [revealPath, rows],
+  () => {
+    const path = revealPath.value;
+    const at = path ? order.value.indexOf(path) : -1;
+    if (at === -1) return;
+    selection.value = { paths: new Set([path!]), anchor: path, focus: path };
+    revealPath.value = null;
+    nextTick(() => root.value?.querySelector(`[data-index="${at}"]`)?.scrollIntoView({ block: "center" }));
+  },
+  { immediate: true, flush: "post" },
+);
 
 watch(order, (paths) => (selection.value = pruneSelection(selection.value, paths)));
 // Changing the selection cancels a pending removal, so it never applies to different songs.
@@ -61,7 +80,8 @@ function sortBy(key: SortKey) {
     sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
   } else {
     sortKey.value = key;
-    sortDirection.value = "asc";
+    // Newest first is what you want when sorting by date added.
+    sortDirection.value = key === "addedMs" ? "desc" : "asc";
   }
 }
 
@@ -74,13 +94,31 @@ function onRowMenu(index: number, event: MouseEvent) {
   menu.value = { x: event.clientX, y: event.clientY };
 }
 
+/** "Open in MusicBrainz Picard", greyed out (with the reason) when Picard isn't installed. */
+const picardMenuItem = (songs: Track[]): MenuItem => {
+  const missing = imports.tools.value !== null && imports.tools.value.picard === null;
+  return {
+    label: missing ? "Open in MusicBrainz Picard (not installed)" : "Open in MusicBrainz Picard",
+    action: () => store.openInPicard(songs),
+    disabled: missing,
+    shortcut: shortcutText("picard"),
+  };
+};
+
 const menuItems = computed<MenuItem[]>(() => {
   const songs = chosen.value;
   const items: MenuItem[] = [
-    { label: "Play", action: () => store.playTracks(songs, 0) },
-    { label: "Play next", action: () => store.enqueueNext(songs) },
-    { label: "Add to queue", action: () => store.enqueue(songs) },
-    { label: "Reveal in Finder", action: () => store.revealInFinder(songs), separated: true },
+    { label: "Play", action: () => store.playTracks(songs, 0), shortcut: shortcutText("play") },
+    { label: "Play next", action: () => store.enqueueNext(songs), shortcut: shortcutText("playNext") },
+    { label: "Add to queue", action: () => store.enqueue(songs), shortcut: shortcutText("enqueue") },
+    {
+      label: "Edit tags…",
+      action: () => (tagEditPaths.value = songs.map((t) => t.path)),
+      separated: true,
+      shortcut: shortcutText("editTags"),
+    },
+    picardMenuItem(songs),
+    { label: "Reveal in Finder", action: () => store.revealInFinder(songs), shortcut: shortcutText("reveal") },
   ];
   if (props.removable) {
     items.push({
@@ -88,12 +126,41 @@ const menuItems = computed<MenuItem[]>(() => {
       action: () => (confirmingRemove.value = true),
       danger: true,
       separated: true,
+      shortcut: shortcutText("remove"),
     });
   }
   return items;
 });
 
+/**
+ * One song chosen with a double-click or Enter: a small menu at its row asks what to do
+ * (play now, play next, add to queue). Never touches the other rows.
+ */
+const choice = ref<{ x: number; y: number; track: Track } | null>(null);
+const choiceItems = computed<MenuItem[]>(() => {
+  const track = choice.value?.track;
+  return track ? songChoiceItems(track, store) : [];
+});
+
+function chooseSong(index: number) {
+  const track = rows.value[index];
+  if (!track) return;
+  const row = root.value?.querySelector(`[data-index="${index}"]`)?.getBoundingClientRect();
+  const box = root.value?.getBoundingClientRect();
+  choice.value = { x: (row?.left ?? box?.left ?? 0) + 48, y: row?.bottom ?? box?.top ?? 0, track };
+}
+
+function closeChoice() {
+  choice.value = null;
+  root.value?.focus({ preventScroll: true });
+}
+
 function onRowClick(index: number, event: MouseEvent) {
+  // Option+click adds to the queue the same way the Add to queue button does, and leaves the selection alone.
+  if (isAddClick(event)) {
+    void store.enqueue(optionClickTargets(rows.value, selection.value.paths, index));
+    return;
+  }
   selection.value = clickRow(selection.value, order.value, rows.value[index].path, {
     shift: event.shiftKey,
     toggle: event.metaKey || event.ctrlKey,
@@ -101,6 +168,8 @@ function onRowClick(index: number, event: MouseEvent) {
 }
 
 function onKey(event: KeyboardEvent) {
+  // While a menu is open its keys belong to the menu, not to the list behind it.
+  if (menu.value || choice.value) return;
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     // The arrows move the selection, not the scroll bar.
     event.preventDefault();
@@ -120,8 +189,14 @@ function onKey(event: KeyboardEvent) {
     if (!props.sidewaysPlayback) emit("sideways", direction);
     else if (direction === 1) store.next();
     else store.prev();
-  } else if (event.key === "Enter" && target.value.length > 0) {
-    store.playTracks(target.value, 0);
+  } else if (event.key === "Enter") {
+    const action = enterAction(chosen.value.length);
+    if (action === "choose") {
+      event.preventDefault();
+      chooseSong(order.value.indexOf(chosen.value[0].path));
+    } else if (action === "play-selection") {
+      store.playTracks(chosen.value, 0);
+    }
   } else if ((event.key === "Delete" || event.key === "Backspace") && props.removable && chosen.value.length > 0) {
     event.preventDefault();
     confirmingRemove.value = true;
@@ -139,6 +214,20 @@ function onKey(event: KeyboardEvent) {
       <button :disabled="target.length === 0" @click="store.playTracks(target, 0)">Play</button>
       <button :disabled="target.length === 0" @click="store.enqueueNext(target)">Play next</button>
       <button :disabled="target.length === 0" @click="store.enqueue(target)">Add to queue</button>
+      <button
+        :disabled="chosen.length === 0"
+        title="Edit the tags of the selected songs"
+        @click="tagEditPaths = chosen.map((t) => t.path)"
+      >
+        Edit tags…
+      </button>
+      <button
+        :disabled="chosen.length === 0 || (imports.tools.value !== null && imports.tools.value.picard === null)"
+        title="Open the selected songs in MusicBrainz Picard"
+        @click="store.openInPicard(chosen)"
+      >
+        Picard
+      </button>
       <button
         :disabled="chosen.length === 0"
         title="Show the selected files in Finder"
@@ -172,11 +261,12 @@ function onKey(event: KeyboardEvent) {
       :sort-direction="sortDirection"
       @row-click="onRowClick"
       @row-menu="onRowMenu"
-      @play="(i) => store.playTracks(rows, i)"
+      @play="chooseSong"
       @enqueue="(t) => store.enqueue([t])"
       @sort="sortBy"
     />
   <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" :items="menuItems" @close="menu = null" />
+  <ContextMenu v-if="choice" :x="choice.x" :y="choice.y" :items="choiceItems" @close="closeChoice" />
   </div>
 </template>
 

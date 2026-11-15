@@ -70,6 +70,13 @@ pub enum PlayerEvent {
     Position(u64),
 }
 
+/// Which way to move on from a song that cannot be played.
+#[derive(Clone, Copy)]
+enum Step {
+    Forward,
+    Back,
+}
+
 pub struct Player {
     queue: Queue,
     status: Status,
@@ -127,7 +134,7 @@ impl Player {
     /// Replaces the queue and starts playing at `start`.
     pub fn play_tracks(&mut self, tracks: Vec<Track>, start: usize) {
         self.pending_seek = None;
-        self.queue.set(tracks, start);
+        self.queue.replace(tracks, start);
         self.emit_queue();
         self.start_current();
     }
@@ -168,8 +175,35 @@ impl Player {
         self.emit_state();
     }
 
+    /// Updates queue entries after their files were retagged, renamed or
+    /// re-added: each `(old path, new track)` replaces the entries for that
+    /// file in place. What is playing keeps playing (nothing is reloaded).
+    pub fn replace_tracks(&mut self, replacements: Vec<(String, Track)>) {
+        let mut replaced = 0;
+        for (old_path, track) in &replacements {
+            replaced += self.queue.replace_track(old_path, track);
+        }
+        if replaced > 0 {
+            self.emit_queue();
+            self.emit_state();
+        }
+    }
+
+    /// Moves a queue entry (by dragging it, or Move up / down). What is
+    /// playing keeps playing and keeps its marker; nothing is reloaded.
+    pub fn move_track(&mut self, from: usize, to: usize) {
+        if self.queue.move_track(from, to) {
+            self.emit_queue();
+            self.emit_state();
+        }
+    }
+
+    /// Turning shuffle on reorders the queue below the current song, so the new order is sent too.
     pub fn set_shuffle(&mut self, on: bool) {
         self.queue.set_shuffle(on);
+        if on {
+            self.emit_queue();
+        }
         self.emit_state();
     }
 
@@ -181,8 +215,8 @@ impl Player {
     /// Loads a saved session without starting playback. Pressing play resumes
     /// the track at the saved position.
     pub fn restore(&mut self, saved: Restore) {
-        self.queue.set(saved.tracks, saved.index.unwrap_or(0));
-        self.queue.set_shuffle(saved.shuffle);
+        self.queue.restore(saved.tracks, saved.index);
+        self.queue.mark_shuffle(saved.shuffle);
         self.queue.set_repeat(saved.repeat);
         self.volume = saved.volume.clamp(0.0, 1.0);
         self.backend.set_volume(self.volume);
@@ -254,7 +288,8 @@ impl Player {
             self.seek(0);
         } else if self.queue.prev().is_some() {
             self.pending_seek = None;
-            self.start_current();
+            // A song that cannot be played is skipped going back, not forward.
+            self.start_stepping(Step::Back);
         } else if self.status != Status::Stopped {
             self.seek(0);
         }
@@ -290,7 +325,9 @@ impl Player {
         let removed_current = self.queue.remove(index);
         self.emit_queue();
         if removed_current {
-            if self.queue.current().is_some() && self.status != Status::Stopped {
+            // Only a song that was playing hands over to the next one; a paused or stopped
+            // player stays quiet, with the next song ready as the current one.
+            if self.queue.current().is_some() && self.status == Status::Playing {
                 self.start_current();
             } else {
                 self.stop_playback();
@@ -299,6 +336,21 @@ impl Player {
         } else {
             self.emit_state();
         }
+    }
+
+    /// Removes the song at `index` and every song below it. If the playing song is
+    /// among them, playback stops with the last song left as the current one (so Play
+    /// starts it); otherwise playback carries on untouched.
+    pub fn remove_from(&mut self, index: usize) {
+        if index >= self.queue.tracks().len() {
+            return;
+        }
+        let removed_current = self.queue.remove_from(index);
+        self.emit_queue();
+        if removed_current {
+            self.stop_playback();
+        }
+        self.emit_state();
     }
 
     pub fn clear(&mut self) {
@@ -334,8 +386,13 @@ impl Player {
     // --- internals ---
 
     /// Loads and plays the queue's current track. Tracks that fail to load are
-    /// skipped; the last error is reported in the state.
+    /// skipped forward; the last error is reported in the state.
     fn start_current(&mut self) {
+        self.start_stepping(Step::Forward);
+    }
+
+    /// Like `start_current`, but a track that fails to load is skipped in the direction given.
+    fn start_stepping(&mut self, step: Step) {
         self.error = None;
         self.error_path = None;
         // Bounds skipping so a queue of unplayable files cannot loop forever
@@ -363,7 +420,11 @@ impl Player {
                     self.error = Some(message);
                     self.error_path = Some(path);
                     attempts -= 1;
-                    if attempts == 0 || self.queue.next(false).is_none() {
+                    let moved = match step {
+                        Step::Forward => self.queue.next(false).is_some(),
+                        Step::Back => self.queue.prev().is_some(),
+                    };
+                    if attempts == 0 || !moved {
                         self.stop_playback();
                         break;
                     }
@@ -591,6 +652,74 @@ mod tests {
     }
 
     #[test]
+    fn replacing_the_playing_track_updates_what_is_shown_without_interrupting_playback() {
+        let mut h = Harness::new();
+        h.load_abc(1);
+        let loads_before = h.loads().len();
+        let mut fresh = test_track("b-retagged");
+        fresh.path = "/music/PROF/Good Time Boy/06 b.mp3".into();
+
+        h.player.replace_tracks(vec![("/music/b.mp3".into(), fresh)]);
+
+        let state = h.player.state();
+        assert_eq!(state.status, Status::Playing);
+        assert_eq!(state.current_index, Some(1));
+        assert_eq!(state.current_track.unwrap().title, "b-retagged");
+        assert_eq!(h.loads().len(), loads_before, "nothing was reloaded");
+        let events = h.events.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(e, PlayerEvent::Queue(q) if q.iter().any(|t| t.title == "b-retagged"))));
+    }
+
+    #[test]
+    fn moving_the_playing_track_keeps_it_playing_and_updates_its_position() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        let loads_before = h.loads().len();
+
+        h.player.move_track(0, 2);
+
+        let titles: Vec<_> = h.player.queue_tracks().iter().map(|t| t.title.clone()).collect();
+        assert_eq!(titles, vec!["b", "c", "a"]);
+        let state = h.player.state();
+        assert_eq!((state.status, state.current_index), (Status::Playing, Some(2)));
+        assert_eq!(state.current_track.unwrap().title, "a");
+        assert_eq!(h.loads().len(), loads_before, "nothing was reloaded");
+        // Next now goes to what follows it in the new order (nothing: it is last).
+        h.player.next();
+        assert_eq!(h.player.state().current_index, Some(2));
+    }
+
+    #[test]
+    fn moving_another_track_past_the_playing_one_changes_where_next_goes() {
+        let mut h = Harness::new();
+        h.load_abc(0); // playing a; queue a b c
+        h.player.move_track(2, 1); // a c b
+
+        h.player.next();
+
+        assert_eq!(h.player.state().current_track.unwrap().title, "c");
+    }
+
+    #[test]
+    fn an_invalid_move_emits_nothing() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        let before = h.events.lock().unwrap().len();
+        h.player.move_track(0, 0);
+        h.player.move_track(9, 1);
+        assert_eq!(h.events.lock().unwrap().len(), before);
+    }
+
+    #[test]
+    fn replacing_nothing_known_emits_nothing() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        let before = h.events.lock().unwrap().len();
+        h.player.replace_tracks(vec![("/music/unknown.mp3".into(), test_track("x"))]);
+        assert_eq!(h.events.lock().unwrap().len(), before);
+    }
+
+    #[test]
     fn relative_seek_moves_from_current_position_and_floors_at_zero() {
         let mut h = Harness::new();
         h.load_abc(0);
@@ -804,6 +933,159 @@ mod tests {
         assert_eq!(h.player.state().current_track.unwrap().title, "x");
     }
 
+    const TWELVE: [&str; 12] = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
+
+    fn titles(h: &Harness) -> Vec<String> {
+        h.player.queue_tracks().iter().map(|t| t.title.clone()).collect()
+    }
+
+    fn playing(h: &Harness) -> String {
+        h.player.state().current_track.unwrap().title
+    }
+
+    #[test]
+    fn turning_shuffle_on_sends_the_new_order_and_next_and_track_end_follow_it() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 0);
+        h.player.set_shuffle(true);
+
+        let shown = titles(&h);
+        assert_ne!(shown, TWELVE, "the list was reordered");
+        let last_sent = h.events.lock().unwrap().iter().rev().find_map(|e| match e {
+            PlayerEvent::Queue(q) => Some(q.iter().map(|t| t.title.clone()).collect::<Vec<_>>()),
+            _ => None,
+        });
+        assert_eq!(last_sent, Some(shown.clone()), "the UI is told the order it must show");
+
+        h.player.next();
+        assert_eq!(playing(&h), shown[1]);
+        let token = h.token();
+        h.player.handle_backend_event(BackendEvent::Ended { token });
+        assert_eq!(playing(&h), shown[2]);
+        h.player.prev();
+        assert_eq!(h.player.state().current_index, Some(1));
+        assert_eq!(playing(&h), shown[1]);
+    }
+
+    #[test]
+    fn turning_shuffle_off_leaves_the_list_and_playback_alone() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 0);
+        h.player.set_shuffle(true);
+        let shown = titles(&h);
+        let loads = h.loads().len();
+
+        h.player.set_shuffle(false);
+
+        assert_eq!(titles(&h), shown);
+        assert_eq!(h.loads().len(), loads);
+        assert!(!h.player.state().shuffle);
+    }
+
+    #[test]
+    fn play_next_removal_and_moves_act_on_the_shown_order_while_shuffling() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 0);
+        h.player.set_shuffle(true);
+
+        h.player.enqueue_next(vec![test_track("x")]);
+        assert_eq!(titles(&h)[1], "x");
+        h.player.move_track(5, 1);
+        let moved = titles(&h)[1].clone();
+        h.player.next();
+        assert_eq!(playing(&h), moved);
+        let below = titles(&h)[2].clone();
+        let after = titles(&h)[3].clone();
+        h.player.remove(2);
+        assert_ne!(below, after);
+        h.player.next();
+        assert_eq!(playing(&h), after);
+    }
+
+    #[test]
+    fn playing_new_songs_while_shuffling_starts_with_the_chosen_one_and_shows_the_rest_shuffled() {
+        let mut h = Harness::new();
+        h.player.set_shuffle(true);
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 4);
+
+        assert_eq!(playing(&h), "e");
+        assert_eq!(h.player.state().current_index, Some(0));
+        assert_eq!(titles(&h)[0], "e");
+        assert_eq!(titles(&h).len(), 12);
+    }
+
+    #[test]
+    fn restoring_a_shuffled_session_shows_the_saved_order_untouched() {
+        let mut h = Harness::new();
+        let order: Vec<_> = ["k", "c", "h", "a", "l"].iter().map(|n| test_track(n)).collect();
+        h.player.restore(Restore {
+            tracks: order,
+            index: Some(2),
+            position_ms: 0,
+            volume: 1.0,
+            shuffle: true,
+            repeat: Repeat::Off,
+        });
+
+        assert_eq!(titles(&h), vec!["k", "c", "h", "a", "l"]);
+        assert!(h.player.state().shuffle);
+        assert_eq!(h.player.state().current_index, Some(2));
+        h.player.next();
+        assert_eq!(playing(&h), "a");
+    }
+
+    #[test]
+    fn remove_from_below_the_playing_song_keeps_it_playing_and_sends_the_shorter_queue_once() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 2);
+        let queue_events = |h: &Harness| h.events.lock().unwrap().iter().filter(|e| matches!(e, PlayerEvent::Queue(_))).count();
+        let before = queue_events(&h);
+        let loads = h.loads().len();
+
+        h.player.remove_from(5);
+
+        assert_eq!(titles(&h), vec!["a", "b", "c", "d", "e"]);
+        assert_eq!(playing(&h), "c");
+        assert_eq!(h.player.state().status, Status::Playing);
+        assert_eq!(h.loads().len(), loads, "playback is not restarted");
+        assert_eq!(queue_events(&h), before + 1);
+    }
+
+    #[test]
+    fn remove_from_that_includes_the_playing_song_stops_playback_and_keeps_the_songs_above() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 6);
+
+        h.player.remove_from(4);
+
+        assert_eq!(titles(&h), vec!["a", "b", "c", "d"]);
+        assert_eq!(h.player.state().status, Status::Stopped);
+        assert_eq!(h.player.state().current_index, Some(3), "the last song left is current, so Play has a target");
+        assert_eq!(playing(&h), "d");
+    }
+
+    #[test]
+    fn remove_from_acts_on_the_shown_order_with_shuffle_on() {
+        let mut h = Harness::new();
+        h.player.play_tracks(TWELVE.iter().map(|n| test_track(n)).collect(), 0);
+        h.player.set_shuffle(true);
+        let shown = titles(&h);
+
+        h.player.remove_from(7);
+
+        assert_eq!(titles(&h), shown[..7].to_vec());
+        assert_eq!(h.player.state().current_index, Some(0));
+    }
+
+    #[test]
+    fn remove_from_with_a_bad_index_emits_nothing() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        let seen = h.events.lock().unwrap().len();
+        h.player.remove_from(9);
+        assert_eq!(h.events.lock().unwrap().len(), seen);
+    }
+
     fn saved(index: Option<usize>, position_ms: u64) -> Restore {
         Restore {
             tracks: vec![test_track("a"), test_track("b"), test_track("c")],
@@ -867,5 +1149,51 @@ mod tests {
         h.player.restore(empty);
         assert_eq!(h.player.state().current_index, None);
         assert_eq!(h.player.state().position_ms, 0);
+    }
+
+    #[test]
+    fn restoring_a_queue_with_no_current_song_leaves_none_current() {
+        let mut h = Harness::new();
+        h.player.restore(saved(None, 0));
+        assert_eq!(h.player.state().current_index, None);
+        assert_eq!(h.player.queue_tracks().len(), 3);
+    }
+
+    // --- QA (Maya) ---
+
+    #[test]
+    fn qa_play_works_after_remove_from_took_the_playing_song() {
+        let mut h = Harness::new();
+        h.load_abc(1); // b playing
+        h.player.remove_from(1); // removes b and c; queue is [a] with no current song
+        assert_eq!(h.player.state().status, Status::Stopped);
+
+        h.player.toggle(); // Maya presses play / space
+
+        assert_eq!(h.player.state().status, Status::Playing, "play did nothing: queue still holds a, but nothing is current");
+    }
+
+    #[test]
+    fn qa_removing_the_current_song_while_paused_does_not_start_music() {
+        let mut h = Harness::new();
+        h.load_abc(0);
+        h.player.pause();
+        assert_eq!(h.player.state().status, Status::Paused);
+
+        h.player.remove(0); // Maya removes the paused song
+
+        assert_ne!(h.player.state().status, Status::Playing, "the next song started by itself");
+    }
+
+    #[test]
+    fn qa_previous_goes_back_past_a_song_that_cannot_be_played() {
+        let mut h = Harness::new();
+        h.fake.fail_paths.lock().unwrap().push("/music/b.mp3".into());
+        h.load_abc(2); // c playing, b (above it) is missing on disk
+
+        h.player.prev();
+
+        let title = h.player.state().current_track.map(|t| t.title);
+        assert_eq!(title, Some("a".to_string()), "previous skipped forward and replayed the current song");
     }
 }

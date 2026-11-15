@@ -87,6 +87,27 @@ impl CacheDir {
         self.save(&cache)
     }
 
+    /// Adds (or replaces, by path) tracks in the saved library, keeping scan
+    /// order. Does nothing if this library has not been saved yet, so a
+    /// partial cache is never created.
+    pub fn add_tracks(&self, root: &Path, added: Vec<CachedTrack>) -> std::io::Result<()> {
+        let Some(mut cache) = self.load(root) else { return Ok(()) };
+        for new in added {
+            cache.tracks.retain(|c| c.track.path != new.track.path);
+            cache.tracks.push(new);
+        }
+        crate::library::sort_cached(&mut cache.tracks);
+        self.save(&cache)
+    }
+
+    /// Drops tracks from the saved library without remembering them as
+    /// removed (the files are gone, not hidden).
+    pub fn forget_tracks(&self, root: &Path, paths: &[String]) -> std::io::Result<()> {
+        let Some(mut cache) = self.load(root) else { return Ok(()) };
+        cache.tracks.retain(|c| !paths.contains(&c.track.path));
+        self.save(&cache)
+    }
+
     /// Paths the user removed from this library, which scans leave out.
     pub fn removed(&self, root: &Path) -> Removed {
         std::fs::read_to_string(self.removed_path(root))
@@ -232,6 +253,38 @@ mod tests {
         assert_eq!(tracks[0].track.title, "Renamed");
         assert_eq!(tracks[0].size, 99);
         assert_eq!(tracks[1].track.title, "b");
+    }
+
+    #[test]
+    fn adding_tracks_keeps_scan_order_replaces_by_path_and_never_creates_a_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheDir(dir.path().to_path_buf());
+        let root = Path::new("/lib");
+        store.add_tracks(root, vec![cached("a")]).unwrap();
+        assert!(store.load(root).is_none(), "no cache is invented for a library that was never scanned");
+
+        store.save(&LibraryCache::new(root, vec![cached("b"), cached("d")])).unwrap();
+        let mut again = cached("d");
+        again.size = 7;
+        store.add_tracks(root, vec![cached("c"), again]).unwrap();
+
+        let tracks = store.load(root).unwrap().tracks;
+        let titles: Vec<_> = tracks.iter().map(|c| c.track.title.as_str()).collect();
+        assert_eq!(titles, vec!["b", "c", "d"]);
+        assert_eq!(tracks[2].size, 7);
+    }
+
+    #[test]
+    fn forgetting_tracks_removes_them_without_blocking_a_future_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CacheDir(dir.path().to_path_buf());
+        let root = Path::new("/lib");
+        store.save(&LibraryCache::new(root, vec![cached("a"), cached("b")])).unwrap();
+
+        store.forget_tracks(root, &["/music/a.mp3".to_string()]).unwrap();
+
+        assert_eq!(store.load(root).unwrap().tracks.len(), 1);
+        assert!(store.removed(root).is_empty());
     }
 
     #[test]

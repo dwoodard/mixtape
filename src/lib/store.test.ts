@@ -3,6 +3,7 @@ import type { Api } from "./api";
 import { createStore } from "./store";
 import type { FlagStorage } from "./ui";
 import { makePlayerState, makeTrack } from "./testing";
+import { panelWantedHeight } from "./thinBar";
 import type { CleanupReport, PlayerState, ScanProgress, Track, WindowMode } from "./types";
 
 function fakeApi(overrides: Partial<Api> = {}) {
@@ -26,6 +27,20 @@ function fakeApi(overrides: Partial<Api> = {}) {
     removeFromLibrary: vi.fn(async () => {}),
     revealInFinder: vi.fn(async () => {}),
     writeTags: vi.fn(async () => []),
+    importTools: vi.fn(async () => ({ ytDlp: "/bin/yt-dlp", ffmpeg: "/bin/ffmpeg", picard: "/Applications/MusicBrainz Picard.app" })),
+    importList: vi.fn(async () => []),
+    importAddLink: vi.fn(async () => {}),
+    importSetTags: vi.fn(async () => ({}) as never),
+    importAdd: vi.fn(async () => makeTrack()),
+    importOpenInPicard: vi.fn(async () => {}),
+    importCancelPicard: vi.fn(async () => {}),
+    replaceQueueTracks: vi.fn(async () => {}),
+    moveQueueTrack: vi.fn(async () => {}),
+    picardOpenFiles: vi.fn(async () => {}),
+    refreshFolders: vi.fn(async () => []),
+    importUndo: vi.fn(async () => ""),
+    importRemove: vi.fn(async () => {}),
+    onImportEvent: vi.fn(async () => unlisten),
     trashDuplicates: vi.fn(async () => ({ trashed: [], held: [], holdingFolder: null, missing: [], skipped: [] })),
     removedCount: vi.fn(async () => 0),
     restoreRemoved: vi.fn(async () => {}),
@@ -34,16 +49,6 @@ function fakeApi(overrides: Partial<Api> = {}) {
     dismissError: vi.fn(async () => {}),
     setShuffle: vi.fn(async () => {}),
     setRepeat: vi.fn(async () => {}),
-    listPlaylists: vi.fn(async () => []),
-    loadPlaylist: vi.fn(async () => [makeTrack({ title: "From playlist" })]),
-    savePlaylist: vi.fn(async (name: string, tracks: Track[]) => ({
-      id: name.toLowerCase(),
-      name,
-      trackCount: tracks.length,
-      durationMs: 0,
-      updatedAtMs: 0,
-    })),
-    deletePlaylist: vi.fn(async () => {}),
     playTracks: vi.fn(async () => {}),
     enqueue: vi.fn(async () => {}),
     playIndex: vi.fn(async () => {}),
@@ -53,6 +58,10 @@ function fakeApi(overrides: Partial<Api> = {}) {
     seek: vi.fn(async () => {}),
     setVolume: vi.fn(async () => {}),
     removeFromQueue: vi.fn(async () => {}),
+    removeFromQueueDown: vi.fn(async () => {}),
+    resizeThin: vi.fn(async () => {}),
+    openThinPanel: vi.fn(async () => ({ side: "down" as const, height: 200 })),
+    closeThinPanel: vi.fn(async () => {}),
     clearQueue: vi.fn(async () => {}),
     toggleWindowMode: vi.fn(async () => "thin" as WindowMode),
     quit: vi.fn(async () => {}),
@@ -207,7 +216,9 @@ describe("actions", () => {
     await store.setVolume(0.5);
     await store.removeFromQueue(1);
     await store.clearQueue();
+    await store.moveQueueTrack(3, 0);
 
+    expect(api.moveQueueTrack).toHaveBeenCalledWith(3, 0);
     expect(api.playTracks).toHaveBeenCalledWith(tracks, 0);
     expect(api.enqueue).toHaveBeenCalledWith(tracks);
     expect(api.playIndex).toHaveBeenCalledWith(2);
@@ -376,53 +387,130 @@ describe("play modes", () => {
   });
 });
 
-describe("playlists", () => {
-  it("loads the saved playlists on init", async () => {
-    const summary = { id: "mix", name: "Mix", trackCount: 3, durationMs: 1, updatedAtMs: 1 };
-    const { api } = fakeApi({ listPlaylists: vi.fn(async () => [summary]) });
+describe("thin bar", () => {
+  it("passes the dragged width to the window", async () => {
+    const { api } = fakeApi();
     const store = createStore(api);
-    await store.init();
-    expect(store.playlists.value).toEqual([summary]);
+    await store.resizeThin(640);
+    expect(api.resizeThin).toHaveBeenCalledWith(640);
   });
 
-  it("saves the current queue under a name and refreshes the list", async () => {
-    const queued = [makeTrack({ title: "Q1" }), makeTrack({ title: "Q2" })];
+  it("the drop-down panel starts closed and the toggle opens it where the window says", async () => {
+    const { api, listeners } = fakeApi({ openThinPanel: vi.fn(async () => ({ side: "up" as const, height: 150 })) });
+    const store = createStore(api);
+    await store.init();
+    listeners.queue[0]([makeTrack(), makeTrack(), makeTrack()]);
+    expect(store.thinPanelOpen.value).toBe(false);
+
+    await store.toggleThinPanel();
+
+    expect(api.openThinPanel).toHaveBeenCalledWith(panelWantedHeight(3));
+    expect(store.thinPanelOpen.value).toBe(true);
+    expect(store.thinPanel.value).toEqual({ side: "up", height: 150 });
+  });
+
+  it("toggling again closes it", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.toggleThinPanel();
+    await store.toggleThinPanel();
+    expect(api.closeThinPanel).toHaveBeenCalledTimes(1);
+    expect(store.thinPanelOpen.value).toBe(false);
+    expect(store.thinPanel.value).toBeNull();
+  });
+
+  it("stays closed when the window had no room to open it", async () => {
+    const { api } = fakeApi({ openThinPanel: vi.fn(async () => null) });
+    const store = createStore(api);
+    await store.toggleThinPanel();
+    expect(store.thinPanelOpen.value).toBe(false);
+  });
+
+  it("closing a panel that is not open does nothing", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.closeThinPanel();
+    expect(api.closeThinPanel).not.toHaveBeenCalled();
+  });
+
+  it("switching window mode closes the panel in the app (the window closes it itself)", async () => {
     const { api, listeners } = fakeApi();
     const store = createStore(api);
     await store.init();
+    await store.toggleThinPanel();
+    listeners.mode[0]("large");
+    expect(store.thinPanelOpen.value).toBe(false);
+  });
+});
+
+describe("remove from here down", () => {
+  it("asks the backend to drop that queue row and everything below it, once", async () => {
+    const { api } = fakeApi();
+    const store = createStore(api);
+    await store.removeFromQueueDown(3);
+    expect(api.removeFromQueueDown).toHaveBeenCalledTimes(1);
+    expect(api.removeFromQueueDown).toHaveBeenCalledWith(3);
+    expect(api.removeFromQueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("playing one song from a list", () => {
+  const song = makeTrack({ path: "/m/one.mp3", title: "One" });
+  const queued = [makeTrack({ path: "/m/a.mp3", title: "A" }), makeTrack({ path: "/m/b.mp3", title: "B" })];
+
+  async function storeWith(state: Partial<PlayerState>, queue: Track[]) {
+    const { api, listeners } = fakeApi();
+    const store = createStore(api);
+    await store.init();
+    listeners.state[0](makePlayerState(state));
+    listeners.queue[0](queue);
+    return { api, store };
+  }
+
+  it("play now with nothing loaded plays the song without disturbing the queue", async () => {
+    const { api, store } = await storeWith({ status: "stopped", currentIndex: 0 }, queued);
+    await store.playNow(song);
+    expect(api.enqueue).toHaveBeenCalledWith([song]);
+    expect(api.playIndex).toHaveBeenCalledWith(2);
+    expect(api.enqueueNext).not.toHaveBeenCalled();
+  });
+
+  it("with nothing playing and an empty queue, the song becomes the queue and plays", async () => {
+    const { api, store } = await storeWith({ status: "stopped" }, []);
+    await store.playSong(song);
+    expect(api.playTracks).toHaveBeenCalledWith([song], 0);
+    expect(api.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("with nothing playing and a queue, the song goes on the end and plays, and the queue stays", async () => {
+    const { api, store } = await storeWith({ status: "stopped", currentIndex: 0 }, queued);
+    await store.playSong(song);
+    expect(api.enqueue).toHaveBeenCalledWith([song]);
+    expect(api.playIndex).toHaveBeenCalledWith(2);
+    expect(api.playTracks).not.toHaveBeenCalled();
+  });
+
+  it("play now puts the song right after the current one and starts it, keeping the rest", async () => {
+    const { api, store } = await storeWith({ status: "playing", currentIndex: 0 }, queued);
+    await store.playNow(song);
+    expect(api.enqueueNext).toHaveBeenCalledWith([song]);
+    expect(api.playIndex).toHaveBeenCalledWith(1);
+    expect(api.playTracks).not.toHaveBeenCalled();
+  });
+
+  it("play now waits for the insert before starting, so the index is the new song", async () => {
+    const calls: string[] = [];
+    const { api, listeners } = fakeApi({
+      enqueueNext: vi.fn(async () => void calls.push("insert")),
+      playIndex: vi.fn(async () => void calls.push("play")),
+    });
+    const store = createStore(api);
+    await store.init();
+    listeners.state[0](makePlayerState({ status: "paused", currentIndex: 1 }));
     listeners.queue[0](queued);
-
-    const ok = await store.saveQueueAsPlaylist("Road Trip");
-
-    expect(ok).toBe(true);
-    expect(api.savePlaylist).toHaveBeenCalledWith("Road Trip", queued);
-    expect(api.listPlaylists).toHaveBeenCalledTimes(2);
-  });
-
-  it("reports a failed save and keeps going", async () => {
-    const { api } = fakeApi({ savePlaylist: vi.fn(async () => Promise.reject("Give the playlist a name.")) });
-    const store = createStore(api);
-
-    expect(await store.saveQueueAsPlaylist(" ")).toBe(false);
-    expect(store.playlistError.value).toBe("Give the playlist a name.");
-  });
-
-  it("returns a playlist's tracks, or nothing plus an error when it is gone", async () => {
-    const { api } = fakeApi();
-    const store = createStore(api);
-    expect((await store.playlistTracks("mix"))[0].title).toBe("From playlist");
-
-    (api.loadPlaylist as ReturnType<typeof vi.fn>).mockRejectedValueOnce("gone");
-    expect(await store.playlistTracks("mix")).toEqual([]);
-    expect(store.playlistError.value).toBe("gone");
-  });
-
-  it("deletes and refreshes", async () => {
-    const { api } = fakeApi();
-    const store = createStore(api);
-    await store.deletePlaylist("mix");
-    expect(api.deletePlaylist).toHaveBeenCalledWith("mix");
-    expect(api.listPlaylists).toHaveBeenCalled();
+    await store.playNow(song);
+    expect(calls).toEqual(["insert", "play"]);
+    expect(api.playIndex).toHaveBeenCalledWith(2);
   });
 });
 
@@ -444,7 +532,6 @@ describe("startup", () => {
     const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
     const { api } = fakeApi({
       windowMode: vi.fn(async () => "thin" as WindowMode),
-      listPlaylists: vi.fn(async () => Promise.reject("no such command")),
       cachedLibrary: vi.fn(async () => Promise.reject("cache unreadable")),
     });
     const store = createStore(api);
@@ -452,7 +539,7 @@ describe("startup", () => {
     await store.init();
 
     expect(store.mode.value).toBe("thin");
-    expect(quiet).toHaveBeenCalledTimes(2);
+    expect(quiet).toHaveBeenCalledTimes(1);
     quiet.mockRestore();
   });
 });
@@ -793,5 +880,137 @@ describe("writing tags", () => {
     expect(store.libraryError.value).toBe("boom");
     expect(store.library.value.map((t) => t.title)).toEqual(["Old A", "Old B"]);
     expect(store.writingTags.value).toBe(false);
+  });
+});
+
+describe("library songs in Picard", () => {
+  const a = makeTrack({ path: "/m/Korn/Follow/old.mp3", title: "Old", artist: "Korn", album: "Follow" });
+  const b = makeTrack({ path: "/m/Korn/Follow/other.mp3", title: "Other", artist: "Korn", album: "Follow" });
+  const c = makeTrack({ path: "/m/PROF/Unknown/Dynamite.mp3", title: "Dynamite", artist: "PROF" });
+
+  async function loaded(overrides: Partial<Api> = {}) {
+    const fake = fakeApi({ cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: [a, b, c], scannedAtMs: 1 })), ...overrides });
+    const store = createStore(fake.api);
+    await store.init();
+    return { ...fake, store };
+  }
+
+  it("sends the songs to Picard and remembers their folders", async () => {
+    const { api, store } = await loaded();
+    await store.openInPicard([a, b, c]);
+    expect(api.picardOpenFiles).toHaveBeenCalledWith([a.path, b.path, c.path]);
+    expect(Object.keys(store.picardFolders.value).sort()).toEqual(["/m/Korn/Follow", "/m/PROF/Unknown"]);
+  });
+
+  it("shows why Picard could not be opened and remembers nothing", async () => {
+    const { store } = await loaded({ picardOpenFiles: vi.fn(async () => Promise.reject("Picard isn't installed.")) });
+    await store.openInPicard([a]);
+    expect(store.libraryError.value).toContain("isn't installed");
+    expect(store.picardFolders.value).toEqual({});
+  });
+
+  it("does nothing for no songs", async () => {
+    const { api, store } = await loaded();
+    await store.openInPicard([]);
+    expect(api.picardOpenFiles).not.toHaveBeenCalled();
+  });
+
+  it("when the user comes back, re-checks those folders and applies what Picard changed", async () => {
+    const renamed = makeTrack({ path: "/m/Korn/Follow/1-03 Got the Life.mp3", title: "Got the Life", artist: "Korn", album: "Follow" });
+    const { api, store } = await loaded({ refreshFolders: vi.fn(async () => [{ dir: "/m/Korn/Follow", tracks: [renamed, b] }]) });
+    await store.openInPicard([a]);
+
+    await store.refreshPicardFolders();
+
+    expect(api.refreshFolders).toHaveBeenCalledWith(["/m/Korn/Follow"]);
+    expect(store.library.value.map((t) => t.path).sort()).toEqual([renamed.path, b.path, c.path].sort());
+    // Still being watched: the user may save in Picard later.
+    expect(Object.keys(store.picardFolders.value)).toEqual(["/m/Korn/Follow"]);
+  });
+
+  it("does nothing when no songs were sent, and forgets folders sent long ago", async () => {
+    const { api, store } = await loaded();
+    await store.refreshPicardFolders();
+    expect(api.refreshFolders).not.toHaveBeenCalled();
+
+    await store.openInPicard([a]);
+    await store.refreshPicardFolders(Date.now() + 31 * 60 * 1000);
+    expect(api.refreshFolders).not.toHaveBeenCalled();
+    expect(store.picardFolders.value).toEqual({});
+  });
+
+  it("keeps the library as it was if the re-check fails", async () => {
+    const { store } = await loaded({ refreshFolders: vi.fn(async () => Promise.reject("not mounted")) });
+    await store.openInPicard([a]);
+    await store.refreshPicardFolders();
+    expect(store.library.value).toHaveLength(3);
+    expect(store.libraryError.value).toBe("not mounted");
+  });
+});
+
+describe("updates reach the queue and are easy to find", () => {
+  const stale = makeTrack({ path: "/m/PROF/Unknown Album/Dynamite.mp3", title: "Dynamite", artist: "PROF", durationMs: 165_000 });
+  const readded = makeTrack({ path: "/m/PROF/Good Time Boy/06 Dynamite.mp3", title: "Dynamite", artist: "Prof", album: "Good Time Boy", durationMs: 165_100 });
+
+  async function withQueue(queue: Track[], library: Track[], overrides: Partial<Api> = {}) {
+    const fake = fakeApi({ cachedLibrary: vi.fn(async () => ({ folder: "/m", tracks: library, scannedAtMs: 1 })), ...overrides });
+    const store = createStore(fake.api);
+    await store.init();
+    fake.listeners.queue[0](queue);
+    return { ...fake, store };
+  }
+
+  it("a song added to the library points a stale queue entry at it and raises a notice", async () => {
+    const { api, store } = await withQueue([stale], [makeTrack({ path: "/m/other.mp3", title: "Other" })]);
+
+    store.addToLibrary(readded);
+
+    expect(api.replaceQueueTracks).toHaveBeenCalledWith([{ oldPath: stale.path, track: readded }]);
+    expect(store.lastChange.value).toEqual({ message: "Added: Prof – Dynamite", track: readded });
+    expect(store.library.value.map((t) => t.path)).toContain(readded.path);
+  });
+
+  it("an add that matches nothing in the queue leaves the queue alone but still raises a notice", async () => {
+    const { api, store } = await withQueue([makeTrack({ path: "/m/x.mp3", title: "Something else" })], []);
+    store.addToLibrary(readded);
+    expect(api.replaceQueueTracks).not.toHaveBeenCalled();
+    expect(store.lastChange.value?.message).toContain("Dynamite");
+  });
+
+  it("a folder re-check that retagged a song updates the queue and says so", async () => {
+    const fresh = { ...stale, album: "Good Time Boy" };
+    const { api, store } = await withQueue([stale], [stale], { refreshFolders: vi.fn(async () => [{ dir: "/m/PROF/Unknown Album", tracks: [fresh] }]) });
+    await store.openInPicard([stale]);
+
+    await store.refreshPicardFolders();
+
+    expect(api.replaceQueueTracks).toHaveBeenCalledWith([{ oldPath: stale.path, track: fresh }]);
+    expect(store.lastChange.value?.message).toBe("Updated from Picard: Dynamite");
+  });
+
+  it("a re-check that found nothing new raises no notice", async () => {
+    const { store } = await withQueue([stale], [stale], { refreshFolders: vi.fn(async () => [{ dir: "/m/PROF/Unknown Album", tracks: [stale] }]) });
+    await store.openInPicard([stale]);
+    await store.refreshPicardFolders();
+    expect(store.lastChange.value).toBeNull();
+  });
+
+  it("saving tags in the editor updates the queue entry for that file", async () => {
+    const edited = { ...stale, album: "Edited" };
+    const { api, store } = await withQueue([stale], [stale], {
+      writeTags: vi.fn(async () => [{ path: stale.path, track: edited, error: null }]),
+    });
+
+    await store.writeTags([stale], { album: "Edited" });
+
+    expect(api.replaceQueueTracks).toHaveBeenCalledWith([{ oldPath: stale.path, track: edited }]);
+    expect(store.lastChange.value?.message).toBe("Saved tags: Dynamite");
+  });
+
+  it("the notice can be dismissed", async () => {
+    const { store } = await withQueue([], []);
+    store.addToLibrary(readded);
+    store.dismissChange();
+    expect(store.lastChange.value).toBeNull();
   });
 });

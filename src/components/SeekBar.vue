@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { tip } from "../lib/shortcuts";
 
 const props = defineProps<{ positionMs: number; durationMs: number }>();
 const emit = defineEmits<{ seek: [ms: number] }>();
@@ -25,6 +26,7 @@ function onChange(event: Event) {
   <input
     type="range"
     aria-label="Seek"
+    :title="tip('Seek', 'seekBack', 'seekForward')"
     min="0"
     :max="durationMs"
     step="250"

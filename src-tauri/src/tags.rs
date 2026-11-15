@@ -132,7 +132,7 @@ pub fn write_tags(path: &Path, edit: &TagEdit) -> Result<Track, String> {
 
     let temp = temp_path(path);
     let result = (|| -> Result<(), String> {
-        std::fs::copy(path, &temp).map_err(|e| format!("Couldn't make a working copy: {e}"))?;
+        crate::fsutil::copy_data(path, &temp).map_err(|e| format!("Couldn't make a working copy: {e}"))?;
         let tagged = lofty::read_from_path(&temp).map_err(|e| e.to_string())?;
         let file_type: FileType = tagged.file_type();
         let mut tag = tagged
@@ -156,7 +156,10 @@ pub fn write_tags(path: &Path, edit: &TagEdit) -> Result<Track, String> {
         let _ = std::fs::remove_file(&temp);
         return Err(e);
     }
-    read_track(path).ok_or_else(|| "Saved, but the file could not be read back.".to_string())
+    let mut track = read_track(path).ok_or_else(|| "Saved, but the file could not be read back.".to_string())?;
+    // The swap gave the file a new creation time; it was added when the original was.
+    track.added_ms = before.added_ms;
+    Ok(track)
 }
 
 #[cfg(test)]
@@ -202,6 +205,27 @@ mod tests {
             // The file on disk really has them, not just the returned value.
             assert_eq!(read_track(&path).unwrap().artist, "New Artist", "{ext}");
         }
+    }
+
+    /// Edits tags in place in a real folder given by `MIXTAPE_TEST_LIBRARY`
+    /// (for example a scratch folder on a network share), to prove the working
+    /// copy and swap work there. Run with
+    /// `MIXTAPE_TEST_LIBRARY=/Volumes/x/scratch cargo test -- --ignored real_folder`.
+    #[test]
+    #[ignore]
+    fn real_folder_accepts_an_in_place_tag_edit() {
+        let root = PathBuf::from(std::env::var_os("MIXTAPE_TEST_LIBRARY").expect("set MIXTAPE_TEST_LIBRARY"));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = fixture(&root, "mp3");
+
+        let result = write_tags(&path, &edit());
+        let leftovers: Vec<_> = std::fs::read_dir(&root).unwrap().filter_map(Result::ok).map(|e| e.file_name()).collect();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&root);
+
+        let track = result.expect("edit on the real folder");
+        assert_eq!(track.artist, "New Artist");
+        assert_eq!(leftovers, vec![std::ffi::OsString::from("song.mp3")], "no working copy left behind");
     }
 
     #[test]
