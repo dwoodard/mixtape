@@ -1,5 +1,6 @@
 use crate::player::{Backend, BackendEvent};
 use crate::spectrum::{Shared, Tap};
+use rodio::cpal::BufferSize;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer};
 use std::fs::File;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -9,6 +10,21 @@ use std::time::Duration;
 
 /// How often the audio thread reports position and checks for track end.
 const TICK: Duration = Duration::from_millis(250);
+
+/// Frames per output buffer. Decoding runs inside the output callback, so a
+/// bigger buffer absorbs slow decodes instead of underrunning (heard as pops).
+/// rodio's default is 2048 (~46 ms at 44.1 kHz); this doubles it, which still
+/// keeps pause and volume changes under ~100 ms.
+const OUTPUT_BUFFER_FRAMES: u32 = 4096;
+
+fn open_device() -> Result<MixerDeviceSink, String> {
+    let sized = DeviceSinkBuilder::from_default_device()
+        .and_then(|b| b.with_buffer_size(BufferSize::Fixed(OUTPUT_BUFFER_FRAMES)).open_stream());
+    // Some devices reject a fixed size: fall back to rodio's own defaults.
+    sized
+        .or_else(|_| DeviceSinkBuilder::open_default_sink())
+        .map_err(|e| format!("no audio output: {e}"))
+}
 
 enum Command {
     Load { path: String, token: u64, reply: Sender<Result<(), String>> },
@@ -142,8 +158,7 @@ impl AudioThread {
         let file = File::open(path).map_err(|e| e.to_string())?;
         let source = Decoder::try_from(file).map_err(|e| e.to_string())?;
         if self.device.is_none() {
-            let mut device = DeviceSinkBuilder::open_default_sink()
-                .map_err(|e| format!("no audio output: {e}"))?;
+            let mut device = open_device()?;
             device.log_on_drop(false);
             self.device = Some(device);
         }
