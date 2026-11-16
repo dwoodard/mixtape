@@ -2,6 +2,7 @@ import type { DjTool, ToolContext, ToolOutcome } from "./dj";
 import { MAX_LYRICS_CHARS, type Lyrics } from "./lyrics";
 import { ACCENTS, THEMES } from "./themes";
 import { changedFields, COVER_SOURCE_ERROR, isCoverSource, type TagEditPayload } from "./tagEdit";
+import { EVENT_LABELS, EVENT_NAMES } from "./playbackEvents";
 import type { ImportItem, TagsPatch, Track } from "./types";
 
 const MAX_SEARCH = 100;
@@ -906,6 +907,45 @@ export const TOOLS_TABLE: DjTool[] = [
       return done(`Window: ${mode}`);
     },
     (args) => (args.mode === "thin" ? "Switch to the thin bar? This chat will disappear until you switch back." : null),
+  ),
+  define(
+    "manage_events",
+    "Events are rules that have you act when something happens to the queue. Each rule is: when an event happens, you get a request. Events: 'queue-ended' (the last song finished and nothing is left) and 'queue-emptied' (the queue was cleared). Use this when the user talks about events or rules. 'show' opens the Events view, 'list' reads the rules (numbered from 1), 'add' makes a rule, 'enable', 'disable' and 'remove' change one by its number, and 'attach' or 'detach' turns all rules on or off.",
+    {
+      action: str(undefined, { enum: ["show", "list", "add", "enable", "disable", "remove", "attach", "detach"] }),
+      event: str("For add.", { enum: [...EVENT_NAMES] }),
+      prompt: str("For add: the request you will be given when the event happens."),
+      rule: int({ description: "For enable, disable and remove: the rule's number from list, starting at 1." }),
+    },
+    ["action"],
+    async (args, { host }) => {
+      const action = oneOf(args.action, ["show", "list", "add", "enable", "disable", "remove", "attach", "detach"] as const);
+      if (!action) return fail("Give an action: show, list, add, enable, disable, remove, attach or detach.");
+      const { attached, rules } = host.eventRules();
+      const listing = () => ({ attached, rules: rules.map((r, i) => ({ rule: i + 1, when: EVENT_LABELS[r.event as keyof typeof EVENT_LABELS] ?? r.event, event: r.event, prompt: r.prompt, enabled: r.enabled })) });
+      if (action === "show") {
+        host.showEvents();
+        return done("Showing events", listing());
+      }
+      if (action === "list") return done(`${rules.length} event rule${rules.length === 1 ? "" : "s"}, ${attached ? "attached" : "not attached"}`, listing());
+      if (action === "attach" || action === "detach") {
+        host.setEventsAttached(action === "attach");
+        return done(action === "attach" ? "Attached the DJ to events" : "Detached the DJ from events");
+      }
+      if (action === "add") {
+        const event = oneOf(args.event, EVENT_NAMES);
+        const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+        if (!event || !prompt) return fail(`Give an event (${EVENT_NAMES.join(", ")}) and a prompt.`);
+        host.addEventRule(event, prompt);
+        return done(`Added a rule: ${EVENT_LABELS[event]}`);
+      }
+      const n = num(args.rule);
+      if (n === null || !Number.isInteger(n) || n < 1 || n > rules.length) return fail(`Give a rule number from 1 to ${rules.length}.`);
+      if (action === "remove") host.removeEventRule(n - 1);
+      else host.setEventRuleEnabled(n - 1, action === "enable");
+      return done(`${action === "remove" ? "Removed" : action === "enable" ? "Switched on" : "Switched off"} rule ${n}`);
+    },
+    (args) => (args.action === "add" || args.action === "attach" ? "Let the DJ act by itself when queue events happen?" : null),
   ),
   define("quit_app", "Quit Mixtape.", {}, [], async (_a, { host }) => {
     await host.quit();

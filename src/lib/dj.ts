@@ -83,6 +83,15 @@ export interface DjHost {
   /** Starts fetching songs held back from a playlist: these ids, or all of them when null. */
   fetchImports(ids: number[] | null): Promise<{ started: number; problem: Problem }>;
   setImportOptions(options: { format?: string; autoAdd?: boolean; threshold?: string }): void;
+  // Events: rules that have the DJ act when something happens to the queue.
+  eventRules(): { attached: boolean; rules: { event: string; prompt: string; enabled: boolean }[] };
+  /** Opens the DJ panel on its Events view. */
+  showEvents(): void;
+  addEventRule(event: string, prompt: string): void;
+  /** `index` counts from 0. */
+  setEventRuleEnabled(index: number, enabled: boolean): void;
+  removeEventRule(index: number): void;
+  setEventsAttached(on: boolean): void;
   // The app itself.
   setTheme(theme: string): void;
   setAccent(accent: string): void;

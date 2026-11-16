@@ -70,6 +70,12 @@ function fakeHost(player: Partial<PlayerState> = {}, queue: Track[] = [], extra:
     removeImport: ok(),
     fetchImports: vi.fn(async () => ({ started: 1, problem: null as string | null })),
     setImportOptions: vi.fn(),
+    eventRules: () => ({ attached: false, rules: [{ event: "queue-ended", prompt: "More please", enabled: true }] }),
+    showEvents: vi.fn(),
+    addEventRule: vi.fn(),
+    setEventRuleEnabled: vi.fn(),
+    removeEventRule: vi.fn(),
+    setEventsAttached: vi.fn(),
     setTheme: vi.fn(),
     setAccent: vi.fn(),
     showTab: vi.fn(),
@@ -224,6 +230,45 @@ describe("playback and modes", () => {
     await runTool("clear_queue", {}, host, new DjSession());
     expect(host.clearQueue).toHaveBeenCalledOnce();
     expect((await runTool("dance", {}, host, new DjSession())).result).toHaveProperty("error");
+  });
+});
+
+describe("manage_events", () => {
+  it("opens the Events view and lists the rules, numbered from 1", async () => {
+    const host = fakeHost();
+    const out = await runTool("manage_events", { action: "show" }, host, new DjSession());
+    expect(host.showEvents).toHaveBeenCalledOnce();
+    expect(out.result).toMatchObject({ attached: false, rules: [{ rule: 1, event: "queue-ended", prompt: "More please", enabled: true }] });
+  });
+
+  it("adds, switches and removes rules, and attaches", async () => {
+    const host = fakeHost();
+    const run = (args: Record<string, unknown>) => runTool("manage_events", args, host, new DjSession(), async () => true);
+    await run({ action: "add", event: "queue-emptied", prompt: " Play something calm " });
+    expect(host.addEventRule).toHaveBeenCalledWith("queue-emptied", "Play something calm");
+    await run({ action: "disable", rule: 1 });
+    expect(host.setEventRuleEnabled).toHaveBeenCalledWith(0, false);
+    await run({ action: "remove", rule: 1 });
+    expect(host.removeEventRule).toHaveBeenCalledWith(0);
+    await run({ action: "attach" });
+    expect(host.setEventsAttached).toHaveBeenCalledWith(true);
+  });
+
+  it("changes nothing when the person says no to adding or attaching", async () => {
+    const host = fakeHost();
+    await runTool("manage_events", { action: "attach" }, host, new DjSession(), async () => false);
+    await runTool("manage_events", { action: "add", event: "queue-ended", prompt: "x" }, host, new DjSession(), async () => false);
+    expect(host.setEventsAttached).not.toHaveBeenCalled();
+    expect(host.addEventRule).not.toHaveBeenCalled();
+  });
+
+  it("rejects a bad rule number, a bad event and an empty prompt", async () => {
+    const host = fakeHost();
+    const run = (args: Record<string, unknown>) => runTool("manage_events", args, host, new DjSession());
+    expect((await run({ action: "remove", rule: 5 })).result).toHaveProperty("error");
+    expect((await run({ action: "add", event: "nope", prompt: "x" })).result).toHaveProperty("error");
+    expect((await run({ action: "add", event: "queue-ended", prompt: "  " })).result).toHaveProperty("error");
+    expect(host.addEventRule).not.toHaveBeenCalled();
   });
 });
 

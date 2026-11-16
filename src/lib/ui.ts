@@ -127,6 +127,8 @@ export const djPanelOpen = djPanel.flag;
 export const toggleDjPanel = djPanel.toggle;
 export const openDjPanel = () => djPanel.set(true);
 export const closeDjPanel = () => djPanel.set(false);
+/** What the DJ panel shows: the conversation, or the rules for events. */
+export const djPanelTab = ref<"chat" | "events">("chat");
 
 export type AppMode = "player" | "discovery" | "settings";
 const appModeChoice = persistedChoice<AppMode>("mixtape.appMode", "player", ["player", "discovery", "settings"]);

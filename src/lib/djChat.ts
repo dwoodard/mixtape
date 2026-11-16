@@ -6,11 +6,13 @@ import { fetchLyrics } from "./lyrics";
 import { createGenreFill } from "./genreFill";
 import { fetchRelease, lookupTags } from "./musicbrainz";
 import { THRESHOLDS, type Imports } from "./imports";
+import { createDjEvents } from "./djEvents";
+import { createPlaybackEvents, watchPlayback, type PlaybackEventName } from "./playbackEvents";
 import type { Track } from "./types";
 import { imports as appImports, store as appStore, type Store } from "./store";
 import { setAccent, setTheme } from "./themes";
 import type { TagWriteResult } from "./types";
-import { appMode, libraryQuery, libraryView, openDjPanel, persistedFlag, selectedSongs, setAppMode, showInLibrary, type AppMode, type LibraryView } from "./ui";
+import { appMode, libraryQuery, libraryView, djPanelTab, openDjPanel, persistedFlag, selectedSongs, setAppMode, showInLibrary, type AppMode, type LibraryView } from "./ui";
 
 /** What the chat window shows: the person's words, the DJ's words, and each thing the DJ did. */
 export interface ChatLine {
@@ -175,6 +177,21 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
       if (autoAdd !== undefined) imports.setAutoAdd(autoAdd);
       if (threshold !== undefined && (THRESHOLDS as readonly string[]).includes(threshold)) imports.setThreshold(threshold as (typeof THRESHOLDS)[number]);
     },
+    eventRules: () => ({ attached: djEvents.attached.value, rules: djEvents.rules.value.map(({ event, prompt, enabled }) => ({ event, prompt, enabled })) }),
+    showEvents: () => {
+      openDjPanel();
+      djPanelTab.value = "events";
+    },
+    addEventRule: (event, prompt) => djEvents.add(event as PlaybackEventName, prompt),
+    setEventRuleEnabled: (index, enabled) => {
+      const rule = djEvents.rules.value[index];
+      if (rule && rule.enabled !== enabled) djEvents.toggle(rule.id);
+    },
+    removeEventRule: (index) => {
+      const rule = djEvents.rules.value[index];
+      if (rule) djEvents.remove(rule.id);
+    },
+    setEventsAttached: (on) => (on ? djEvents.attach() : djEvents.detach()),
     setTheme,
     setAccent,
     showTab: (tab, view) => {
@@ -272,6 +289,13 @@ export function createDjChat(host: DjHost, makeClient: (endpoint: () => string) 
 }
 
 export const djChat = createDjChat(hostFor(appStore, tauriApi, appImports), (endpoint) => createLmClient(endpoint));
+
+/** Queue events for the whole app: "queue-ended" and "queue-emptied". */
+export const playbackEvents = createPlaybackEvents();
+watchPlayback(playbackEvents, appStore);
+
+/** Rules that have the DJ act when an event happens. `attach()` and `detach()` turn them all on and off. */
+export const djEvents = createDjEvents(playbackEvents, djChat);
 
 /** Opens the DJ panel and puts a request to the DJ in the chat, as if it had been typed there. */
 export function askDj(prompt: string) {

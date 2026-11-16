@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { djChat as chat } from "../lib/djChat";
+import { djChat as chat, djEvents } from "../lib/djChat";
 import { suggestionsFor } from "../lib/djSuggestions";
+import { djPanelTab } from "../lib/ui";
+import DjEvents from "./DjEvents.vue";
 import DjViews from "./DjViews.vue";
 import MarkdownText from "./MarkdownText.vue";
 
 /** The DJ conversation: model, messages with their views, the confirm prompt and the message box. Used by the large window's slide-out and the thin bar's panel. */
 const emit = defineEmits<{ close: [] }>();
 
+const tab = djPanelTab;
 const draft = ref("");
 const log = ref<HTMLElement | null>(null);
 const input = ref<HTMLTextAreaElement | null>(null);
@@ -71,12 +74,16 @@ function onKey(event: KeyboardEvent) {
         <option v-for="m in chat.models.value" :key="m" :value="m">{{ m }}</option>
       </select>
       <button title="Look for models in LM Studio again" @click="chat.loadModels()">↻</button>
+      <button :class="{ on: tab === 'events' }" :aria-pressed="tab === 'events'" title="Rules that have the DJ act when the queue runs out" @click="tab = tab === 'events' ? 'chat' : 'events'">Events</button>
       <button title="Start a new chat" :disabled="chat.lines.value.length === 0" @click="chat.reset()">New</button>
       <button class="close" aria-label="Close the DJ" title="Close (Esc)" @click="emit('close')">×</button>
     </header>
 
     <p v-if="chat.modelsError.value" class="problem" role="status">{{ chat.modelsError.value }}</p>
 
+    <DjEvents v-if="tab === 'events'" />
+
+    <template v-else>
     <div ref="log" class="log" role="log" aria-live="polite">
       <p v-if="chat.lines.value.length === 0" class="hint">
         Ask the DJ to build a queue, add songs, fix tags, find duplicates, bring in a link or change the look.
@@ -105,10 +112,15 @@ function onKey(event: KeyboardEvent) {
     </div>
 
     <footer>
+      <div class="options">
+      <button class="chip" :class="{ on: djEvents.attached.value }" :aria-pressed="djEvents.attached.value" title="When on, the DJ acts by itself on events such as the queue running out. Set the rules under Events." @click="djEvents.toggleAttached()">
+        {{ djEvents.attached.value ? "✓ " : "" }}DJ events
+      </button>
       <label class="confirm" title="When off, the DJ changes and deletes files without asking">
         <input type="checkbox" :checked="chat.confirmRisky.value" @change="chat.setConfirmRisky(($event.target as HTMLInputElement).checked)" />
         Ask before risky actions
       </label>
+      </div>
       <div class="compose">
         <textarea
           ref="input"
@@ -121,6 +133,7 @@ function onKey(event: KeyboardEvent) {
         <button class="on" :disabled="chat.busy.value || !draft.trim()" @click="submit">Send</button>
       </div>
     </footer>
+    </template>
   </section>
 </template>
 
@@ -149,6 +162,8 @@ header .close { font-size: 16px; line-height: 1; padding: 0 8px; }
 .ask p { margin-bottom: 8px; }
 .ask .buttons { display: flex; gap: 6px; }
 footer { border-top: 1px solid var(--line); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.options { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chip.on { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
 .confirm { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .compose { display: flex; gap: 6px; align-items: flex-end; }
 textarea { flex: 1; resize: none; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
