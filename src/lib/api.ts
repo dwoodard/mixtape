@@ -115,6 +115,8 @@ export interface Api {
   onScanProgress(cb: (progress: ScanProgress) => void): Promise<Unlisten>;
   /** Songs the running scan has read so far, in batches and in no particular order. */
   onScanTracks(cb: (tracks: Track[]) => void): Promise<Unlisten>;
+  /** Files or folders dropped onto the window, as full paths. */
+  onFilesDropped(cb: (paths: string[]) => void): Promise<Unlisten>;
   /** A song has been listened to long enough to count as played. */
   onPlayed(cb: (played: { path: string } & PlayStat) => void): Promise<Unlisten>;
 }
@@ -210,5 +212,6 @@ export const tauriApi: Api = {
   onSpectrum: (cb) => listen<SpectrumFrame>("spectrum", (e) => cb(e.payload)),
   onScanProgress: (cb) => listen<ScanProgress>("scan-progress", (e) => cb(e.payload)),
   onScanTracks: (cb) => listen<Track[]>("scan-tracks", (e) => cb(e.payload)),
+  onFilesDropped: (cb) => listen<{ paths: string[] }>("tauri://drag-drop", (e) => cb(e.payload.paths)),
   onPlayed: (cb) => listen<{ path: string } & PlayStat>("song-played", (e) => cb(e.payload)),
 };

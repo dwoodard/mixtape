@@ -15,6 +15,9 @@ import type { CleanupReport, MoveSongsResult, DuplicatePair, FileCheck, PlayerSt
 /** What the backend returns when a scan was cancelled. */
 const SCAN_CANCELLED = "cancelled";
 
+/** A path that names an audio file rather than a folder. */
+const AUDIO_FILE = /\.(mp3|flac|m4a|aac|ogg|wav)$/i;
+
 const emptyState = (): PlayerState => ({
   status: "stopped",
   currentIndex: null,
@@ -104,6 +107,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
       }),
       api.onScanProgress((p) => (scanProgress.value = p)),
       api.onScanTracks(receiveScanned),
+      api.onFilesDropped((paths) => void addDropped(paths)),
       api.onPlayed(({ path, count, lastPlayedMs }) => (plays.value = { ...plays.value, [path]: { count, lastPlayedMs } })),
     ]);
     // Subscribe first, then read the snapshot, so no update is missed in between.
@@ -511,8 +515,8 @@ export function createStore(api: Api, storage?: FlagStorage) {
    * Re-checks just these folders of the library (never the whole of it) and updates the list with what changed there:
    * songs that are new, renamed or gone. Cheap: only changed files are re-read. The words for the change come from `say`.
    */
-  async function refreshDirs(dirs: string[], say: (changed: Track[]) => string) {
-    if (dirs.length === 0) return;
+  async function refreshDirs(dirs: string[], say: (changed: Track[]) => string): Promise<number> {
+    if (dirs.length === 0) return 0;
     try {
       const results = await api.refreshFolders(dirs);
       const before = library.value;
@@ -524,8 +528,41 @@ export function createStore(api: Api, storage?: FlagStorage) {
       }
       // A copy found next to the original is worth saying so, as it is after a full scan.
       announceDuplicates();
+      return changed.length;
     } catch (e) {
       libraryError.value = String(e);
+      return 0;
+    }
+  }
+
+  /**
+   * Songs or folders dropped onto the window. They are added where they are, nothing is copied or moved: the folder (or a
+   * dropped file's folder) is re-checked, and only songs the library does not already have show up as new.
+   * Only inside the library folder, which is what a rescan covers.
+   */
+  async function addDropped(paths: string[]) {
+    libraryError.value = null;
+    const root = folder.value?.replace(/\/+$/, "");
+    if (!root) {
+      libraryError.value = "Open a library folder first, so there is somewhere to add songs.";
+      return;
+    }
+    const dirs = new Set<string>();
+    let outside = 0;
+    for (const raw of paths) {
+      const path = raw.replace(/\/+$/, "");
+      const dir = AUDIO_FILE.test(path) ? dirName(path) : path;
+      if (!path.startsWith(`${root}/`) || dir === root) outside++;
+      else dirs.add(dir);
+    }
+    const nested = [...dirs].filter((d) => ![...dirs].some((o) => o !== d && d.startsWith(`${o}/`))).sort();
+    const added = await refreshDirs(nested, (changed) =>
+      changed.length === 1 ? `Added: ${changed[0].title}` : `Added ${changed.length} songs`,
+    );
+    if (outside > 0) {
+      libraryError.value = `${outside === 1 ? "One item is" : `${outside} items are`} not inside the library folder (${root}) and was not added.`;
+    } else if (added === 0) {
+      libraryError.value = "Those songs are already in the library.";
     }
   }
 
@@ -740,6 +777,7 @@ export function createStore(api: Api, storage?: FlagStorage) {
     dismissChange: () => (lastChange.value = null),
     openInPicard,
     refreshPicardFolders,
+    addDropped,
     refreshAround,
     picardFolders,
     restoreRemoved,

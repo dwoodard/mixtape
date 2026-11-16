@@ -55,6 +55,7 @@ function fakeApi(overrides: Partial<Api> = {}) {
     importUndo: vi.fn(async () => ""),
     importRemove: vi.fn(async () => {}),
     onImportEvent: vi.fn(async () => unlisten),
+    onFilesDropped: vi.fn(async () => unlisten),
     trashDuplicates: vi.fn(async () => ({ trashed: [], held: [], holdingFolder: null, missing: [], skipped: [] })),
     moveSongs: vi.fn(async () => ({ moved: [], failed: [] })),
     removedCount: vi.fn(async () => 0),
@@ -138,7 +139,7 @@ describe("init", () => {
     const { api, unlisten } = fakeApi();
     const cleanup = await createStore(api).init();
     cleanup();
-    expect(unlisten).toHaveBeenCalledTimes(7);
+    expect(unlisten).toHaveBeenCalledTimes(8);
   });
 });
 
@@ -1038,6 +1039,43 @@ describe("library songs in Picard", () => {
     await store.openInPicard([a]);
     expect(store.libraryError.value).toContain("isn't installed");
     expect(store.picardFolders.value).toEqual({});
+  });
+
+  describe("dropping songs and folders", () => {
+    const fresh = makeTrack({ path: "/m/Primus/Pork Soda/02 My Name Is Mud.mp3", title: "My Name Is Mud", artist: "Primus", album: "Pork Soda" });
+
+    it("adds a dropped folder in place by re-checking just that folder", async () => {
+      const { api, store } = await loaded({ refreshFolders: vi.fn(async () => [{ dir: "/m/Primus", tracks: [fresh] }]) });
+      await store.addDropped(["/m/Primus"]);
+      expect(api.refreshFolders).toHaveBeenCalledWith(["/m/Primus"]);
+      expect(store.library.value.map((t) => t.path)).toContain(fresh.path);
+      expect(store.libraryError.value).toBeNull();
+    });
+
+    it("re-checks the folder of a dropped file", async () => {
+      const { api, store } = await loaded({ refreshFolders: vi.fn(async () => [{ dir: "/m/Primus/Pork Soda", tracks: [fresh] }]) });
+      await store.addDropped([fresh.path]);
+      expect(api.refreshFolders).toHaveBeenCalledWith(["/m/Primus/Pork Soda"]);
+    });
+
+    it("checks a folder once when it and a file inside it are dropped", async () => {
+      const { api, store } = await loaded();
+      await store.addDropped(["/m/Primus", fresh.path]);
+      expect(api.refreshFolders).toHaveBeenCalledWith(["/m/Primus"]);
+    });
+
+    it("says so when everything dropped is already in the library", async () => {
+      const { store } = await loaded({ refreshFolders: vi.fn(async () => [{ dir: "/m/Korn", tracks: [a, b] }]) });
+      await store.addDropped(["/m/Korn"]);
+      expect(store.libraryError.value).toBe("Those songs are already in the library.");
+    });
+
+    it("refuses anything outside the library folder", async () => {
+      const { api, store } = await loaded();
+      await store.addDropped(["/elsewhere/Primus"]);
+      expect(api.refreshFolders).not.toHaveBeenCalled();
+      expect(store.libraryError.value).toContain("not inside the library folder");
+    });
   });
 
   it("does nothing for no songs", async () => {

@@ -1,6 +1,7 @@
 use crate::player::{Backend, BackendEvent};
 use crate::spectrum::{Shared, Tap};
-use rodio::cpal::BufferSize;
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
+use rodio::cpal::{BufferSize, SupportedBufferSize};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer};
 use std::fs::File;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -17,10 +18,32 @@ const TICK: Duration = Duration::from_millis(250);
 /// keeps pause and volume changes under ~100 ms.
 const OUTPUT_BUFFER_FRAMES: u32 = 4096;
 
+/// The buffer size to request: ours, clamped to what the device supports.
+/// Bluetooth outputs (AirPods) cap at 960 frames and reject anything larger,
+/// including rodio's own 2048 default.
+fn buffer_size_for(range: &SupportedBufferSize) -> BufferSize {
+    match range {
+        SupportedBufferSize::Range { min, max } => {
+            BufferSize::Fixed(OUTPUT_BUFFER_FRAMES.clamp(*min, *max))
+        }
+        SupportedBufferSize::Unknown => BufferSize::Default,
+    }
+}
+
 fn open_device() -> Result<MixerDeviceSink, String> {
-    let sized = DeviceSinkBuilder::from_default_device()
-        .and_then(|b| b.with_buffer_size(BufferSize::Fixed(OUTPUT_BUFFER_FRAMES)).open_stream());
-    // Some devices reject a fixed size: fall back to rodio's own defaults.
+    let sized = rodio::cpal::default_host()
+        .default_output_device()
+        .ok_or_else(|| "no default output device".to_string())
+        .and_then(|device| {
+            let size = device
+                .default_output_config()
+                .map(|c| buffer_size_for(c.buffer_size()))
+                .unwrap_or(BufferSize::Default);
+            DeviceSinkBuilder::from_device(device)
+                .and_then(|b| b.with_buffer_size(size).open_stream())
+                .map_err(|e| e.to_string())
+        });
+    // Last resort: rodio's own defaults.
     sized
         .or_else(|_| DeviceSinkBuilder::open_default_sink())
         .map_err(|e| format!("no audio output: {e}"))
