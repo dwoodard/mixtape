@@ -129,7 +129,8 @@ function named(tracks: Track[]): string {
 
 const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
-function search(args: Args, { host, session }: ToolContext, only: (t: Track) => boolean = () => true): ToolOutcome {
+/** The library songs that pass the search filters, plus `only`. */
+function filterLibrary(args: Args, host: ToolContext["host"], only: (t: Track) => boolean = () => true): Track[] {
   const plays = host.plays();
   const [minPlays, maxPlays] = [num(args.min_plays), num(args.max_plays)];
   const playsOf = (t: Track) => plays[t.path]?.count ?? 0;
@@ -141,7 +142,7 @@ function search(args: Args, { host, session }: ToolContext, only: (t: Track) => 
   const words = decade.words.map(squash).filter(Boolean);
   const [artist, album, genre] = [squash(text("artist")), squash(text("album")), squash(text("genre"))];
 
-  const found = host.library().filter((t) => {
+  return host.library().filter((t) => {
     const hay = [t.title, t.artist, t.albumArtist, t.album, t.genre].map(squash).join(" ");
     if (!only(t)) return false;
     if (!words.every((w) => hay.includes(w))) return false;
@@ -154,7 +155,12 @@ function search(args: Args, { host, session }: ToolContext, only: (t: Track) => 
     if (maxPlays !== null && playsOf(t) > maxPlays) return false;
     return true;
   });
+}
 
+function search(args: Args, { host, session }: ToolContext, only: (t: Track) => boolean = () => true): ToolOutcome {
+  const plays = host.plays();
+  const playsOf = (t: Track) => plays[t.path]?.count ?? 0;
+  const found = filterLibrary(args, host, only);
   const ordered = [...found];
   const sort = typeof args.sort === "string" ? args.sort : "random";
   if (sort === "newest_added") ordered.sort((a, b) => b.addedMs - a.addedMs);
@@ -275,15 +281,24 @@ export const TOOLS_TABLE: DjTool[] = [
       max_plays: int({ description: "Only songs played at most this many times. 0 means never played." }),
       limit: int({ description: `How many songs to return. Default ${DEFAULT_SEARCH}, at most ${MAX_SEARCH}.` }),
       has_lyrics: { type: "boolean", description: "false: only songs with no lyrics saved in their tags. true: only songs that have them." },
+      lyrics_contain: str("Words that must each appear in the song's lyrics saved in its tags (any letter case), for 'songs with ocean in the lyrics'. Only songs with saved lyrics can match. Combine with other filters to read fewer files."),
       has_cover: { type: "boolean", description: "false: only songs with no cover art (no picture in the file or its folder). true: only songs that have one." },
     },
     [],
     async (args, ctx) => {
       // Looking for pictures reads every file, so it only happens when asked for.
       const lyrics = typeof args.has_lyrics === "boolean" ? (t: Track) => t.hasLyrics === args.has_lyrics : () => true;
-      if (typeof args.has_cover !== "boolean") return search(args, ctx, lyrics);
+      const lyricWords = typeof args.lyrics_contain === "string" ? args.lyrics_contain.toLowerCase().split(/\s+/).filter(Boolean) : [];
+      // Reading lyrics opens files, so only the songs the other filters keep are read.
+      let said = (_: Track) => true;
+      if (lyricWords.length > 0) {
+        const candidates = filterLibrary(args, ctx.host, (t) => t.hasLyrics);
+        const hits = new Set((await ctx.host.withLyricsContaining(candidates, lyricWords)).map((t) => t.path));
+        said = (t) => hits.has(t.path);
+      }
+      if (typeof args.has_cover !== "boolean") return search(args, ctx, (t) => lyrics(t) && said(t));
       const missing = new Set((await ctx.host.withoutCover(ctx.host.library())).map((t) => t.path));
-      return search(args, ctx, (t) => lyrics(t) && missing.has(t.path) === !args.has_cover);
+      return search(args, ctx, (t) => lyrics(t) && said(t) && missing.has(t.path) === !args.has_cover);
     },
   ),
 

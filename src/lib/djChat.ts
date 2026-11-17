@@ -132,6 +132,10 @@ export function hostFor(store: Store, api: Api, imports: Imports): DjHost {
     withoutCover: (tracks) => store.withoutCover(tracks),
     inspectFile: (track) => store.inspectFile(track),
     readLyrics: (track) => api.readLyrics(track.path),
+    withLyricsContaining: async (tracks, words) => {
+      const hits = new Set(await api.lyricsContaining(tracks.filter((t) => t.hasLyrics).map((t) => t.path), words));
+      return tracks.filter((t) => hits.has(t.path));
+    },
     fixLength: (track, lengthMs) => store.fixLength(track, lengthMs),
     trashDuplicates: async (extras) => {
       const keepers = new Map(store.duplicateGroups.value.flatMap((g) => g.extras.map((t) => [t.path, g.keep.path] as const)));

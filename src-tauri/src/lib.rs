@@ -427,6 +427,32 @@ async fn missing_covers(paths: Vec<String>) -> Result<Vec<String>, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Which of these songs have saved lyrics containing every one of `words` (any letter case). Checked in parallel.
+#[tauri::command]
+async fn lyrics_containing(paths: Vec<String>, words: Vec<String>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use rayon::prelude::*;
+        let words: Vec<String> = words.iter().map(|w| w.to_lowercase()).filter(|w| !w.is_empty()).collect();
+        if words.is_empty() {
+            return Vec::new();
+        }
+        paths
+            .into_par_iter()
+            .filter(|p| {
+                let path = std::path::Path::new(p);
+                path.is_absolute()
+                    && track::is_audio_file(path)
+                    && tags::read_lyrics(path).is_some_and(|text| {
+                        let text = text.to_lowercase();
+                        words.iter().all(|w| text.contains(w))
+                    })
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolStatus {
@@ -1155,6 +1181,7 @@ pub fn run() {
             import_remove,
             write_tags,
             missing_covers,
+            lyrics_containing,
             trash_duplicates,
             move_songs,
             removed_count,

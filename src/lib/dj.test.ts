@@ -47,6 +47,7 @@ function fakeHost(player: Partial<PlayerState> = {}, queue: Track[] = [], extra:
     restoreRemoved: ok(),
     removeFromLibrary: ok(),
     readLyrics: vi.fn(async () => null as string | null),
+    withLyricsContaining: vi.fn(async (tracks: Track[], _words: string[]) => tracks.filter((t) => t.path === "/m/3.mp3")),
     withoutCover: vi.fn(async (tracks: Track[]) => tracks.filter((t) => t.path === "/m/3.mp3")),
     inspectFile: vi.fn(async () => ({ path: "/m/3.mp3", sizeBytes: 6_094_087, storedMs: 180_000, realMs: 180_000, codec: "mp3", bitrateKbps: 192, sampleRate: 44100, impliedKbps: 271, verdict: "ok", notes: [] }) as FileCheck),
     fixLength: ok(),
@@ -883,6 +884,19 @@ describe("a song tool given no id", () => {
         expect(out.result, `${tool} with id ${JSON.stringify(id)}`).not.toHaveProperty("error");
       }
     }
+  });
+
+  it("finds songs by words in their saved lyrics, reading only songs that have lyrics and pass the other filters", async () => {
+    const host = fakeHost();
+    const out = await runTool("search_library", { lyrics_contain: "Ocean river", limit: 100 }, host, new DjSession());
+    expect((out.result as { songs: { title: string }[] }).songs.map((s) => s.title)).toEqual(["Halo"]);
+    const [read, words] = (host.withLyricsContaining as unknown as { mock: { calls: [Track[], string[]][] } }).mock.calls[0];
+    expect(words).toEqual(["ocean", "river"]);
+    expect(read.every((t) => t.hasLyrics)).toBe(true);
+
+    const none = fakeHost();
+    await runTool("search_library", { query: "halo" }, none, new DjSession());
+    expect(none.withLyricsContaining).not.toHaveBeenCalled();
   });
 
   it("filters a search by whether songs have cover art, and only looks at files when asked", async () => {

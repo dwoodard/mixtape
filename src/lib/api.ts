@@ -47,6 +47,8 @@ export interface Api {
   pickImage(): Promise<string | null>;
   /** Which of these songs have no cover picture, in their tags or in their folder. */
   missingCovers(paths: string[]): Promise<string[]>;
+  /** Which of these songs have saved lyrics containing every one of the words, in any letter case. */
+  lyricsContaining(paths: string[], words: string[]): Promise<string[]>;
   importTools(): Promise<ToolStatus>;
   picardOpenFiles(paths: string[]): Promise<void>;
   refreshFolders(dirs: string[]): Promise<FolderRefresh[]>;
@@ -149,6 +151,7 @@ export const tauriApi: Api = {
     return typeof picked === "string" ? picked : null;
   },
   missingCovers: (paths) => invoke("missing_covers", { paths }),
+  lyricsContaining: (paths, words) => invoke("lyrics_containing", { paths, words }),
   importTools: () => invoke("import_tools"),
   picardOpenFiles: (paths) => invoke("picard_open_files", { paths }),
   refreshFolders: (dirs) => invoke("refresh_folders", { dirs }),

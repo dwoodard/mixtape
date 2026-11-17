@@ -53,6 +53,8 @@ export interface DjHost {
   inspectFile(track: Track): Promise<FileCheck>;
   /** The lyrics saved in the song's own tags, or null when it has none. */
   readLyrics(track: Track): Promise<string | null>;
+  /** The songs of `tracks` whose saved lyrics contain every one of the words. Reads the files. */
+  withLyricsContaining(tracks: Track[], words: string[]): Promise<Track[]>;
   /** Corrects the length the library holds for a song. */
   fixLength(track: Track, lengthMs: number): Promise<Problem>;
   trashDuplicates(extras: Track[]): Promise<{ report: CleanupReport | null; problem: Problem }>;
@@ -164,7 +166,7 @@ export function systemPrompt(library: Track[]): string {
     "Never show the user the Context block, ids or tool names: they are for you. Speak about songs by title and artist.",
     "Play counts are kept by the app. Use the History line in Context or get_play_count to answer how often a song was played. Counting began when the feature was added, so older listening is not in it. 'Most played' and 'never played' searches use search_library.",
     "To fill in missing genres for many songs, call suggest_genres. It runs in the background and the user reviews and writes the results on the card, so do not list the songs or promise it is done.",
-    "Lyrics: get_lyrics shows them (from the song's own tags if saved there, else from LRCLIB). The user can save them into the song's tags (ID3 and the other formats) with the card's button, or you can with save_lyrics. Never say you cannot store lyrics in a song's tags: you can.",
+    "Lyrics: get_lyrics shows them (from the song's own tags if saved there, else from LRCLIB). The user can save them into the song's tags (ID3 and the other formats) with the card's button, or you can with save_lyrics. Never say you cannot store lyrics in a song's tags: you can. To find songs by words in their lyrics (like “songs about the ocean”), use search_library with lyrics_contain: it searches the lyrics saved in the tags. Never say you cannot search lyrics.",
     "If a song's length looks wrong to you or the user, call check_file: it compares the library's length with what the file really plays for. If it says the length is wrong, call fix_length. Say what you found in plain words.",
     "Never describe a MusicBrainz match or its genre suggestion as the song's own tags. A genre suggestion is only a suggestion: say 'MusicBrainz suggests …' and that it is not in the file. When you show a song's tags, give what Context says it has now, and mark anything empty as empty.",
     "The Context block gives the tags the playing song has now. To show or check a song's current tags, read them from there. Use lookup_tags only to find what the tags should be.",
